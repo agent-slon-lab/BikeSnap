@@ -57,6 +57,7 @@ import {
   type CalibrationResult,
 } from "@/lib/bike-calibration-helper";
 import type { BikeMeasurements } from "@/lib/bike-calculations";
+import { findWheelSize } from "@/lib/bike-perspective";
 import { useBikeStore } from "@/lib/bike-store";
 import { validateBikeMeasurements } from "@/lib/bike-validation";
 import {
@@ -446,9 +447,18 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         ...prev,
         ``,
         `  Авто-калибровка (новая логика):`,
-        `    Primary параметр: ${autoCalib.primaryParam}`,
+        `    Primary параметр: ${autoCalib.primaryParam} (knownKey=${knownKey} используется только как справочный якорь)`,
         `    scale = ${autoCalib.scalePxToMm.toFixed(4)} мм/пикс`,
         `    tiltAngleRad = ${autoCalib.tiltAngleRad.toFixed(4)} рад (${(autoCalib.tiltAngleRad * 180 / Math.PI).toFixed(2)}°)`,
+        ...(autoCalib.candidates && autoCalib.candidates.length > 1
+          ? [
+              `    Кандидаты масштаба:`,
+              ...autoCalib.candidates.map(
+                (c) =>
+                  `      ${c.type}: ${c.scale.toFixed(4)} мм/пикс${c.isPrimary ? "  [primary]" : `  (откл. ${c.deviationPct > 0 ? "+" : ""}${c.deviationPct.toFixed(1)}%)`}`
+              ),
+            ]
+          : []),
         autoCalib.validationWarning
           ? `    ⚠ Валидация: ${autoCalib.validationWarning}`
           : `    ✓ Валидация пройдена (расхождение <12%)`,
@@ -458,10 +468,12 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
       // вместо user-selected knownKey. Это даёт минимальную погрешность.
       const finalScale = autoCalib.scalePxToMm > 0 ? autoCalib.scalePxToMm : scale;
 
-      // Логируем какой масштаб использован
+      // Логируем какой масштаб использован (правильные единицы: мм/пикс,
+      // т.к. calculateAutoFitCalibration считает в пикселях через imgSize)
       setDebugLog((prev) => [
         ...prev,
-        `  finalScale = ${finalScale.toFixed(2)} мм/норм.ед. (источник: ${autoCalib.scalePxToMm > 0 ? autoCalib.primaryParam + " (авто)" : knownKey + " (fallback)"})`,
+        `  РАБОЧИЙ масштаб: finalScale = ${finalScale.toFixed(4)} мм/пикс (источник: ${autoCalib.scalePxToMm > 0 ? autoCalib.primaryParam + " (авто)" : knownKey + " (fallback)"})`,
+        `    Справочно: якорь knownKey=${knownKey} даёт ${scale != null ? scale.toFixed(2) : "—"} мм/норм.ед. — в расчёте НЕ участвует при автовыборе`,
       ]);
 
       if (!finalScale || finalScale <= 0) {
@@ -485,8 +497,9 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         ...prev,
         ``,
         `  ✓ Калибровка успешна:`,
-        `    scale = ${scale.toFixed(2)} мм/норм.ед.`,
-        `    pxDistance (норм. ед.) = ${diag.pxDistanceRaw?.toFixed(4)}`,
+        `    Рабочий масштаб = ${finalScale.toFixed(4)} мм/пикс (primary: ${autoCalib.primaryParam})`,
+        `    Справочный якорь (knownKey=${knownKey}): scale = ${scale.toFixed(2)} мм/норм.ед.`,
+        `    pxDistance якоря (норм. ед.) = ${diag.pxDistanceRaw?.toFixed(4)}`,
         `    pointA = ${diag.pointA?.label}: x=${diag.pointA?.x?.toFixed(4)}, y=${diag.pointA?.y?.toFixed(4)}`,
         `    pointB = ${diag.pointB?.label}: x=${diag.pointB?.x?.toFixed(4)}, y=${diag.pointB?.y?.toFixed(4)}`,
       ]);
@@ -499,7 +512,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         ``,
         `  Вычисленные параметры (из фото):`,
         `    SH (BB→седло) = ${params.saddleHeight ?? "null"} мм`,
-        `    ETT (горизонталь ST→HT) = ${params.ett ?? "null"} мм`,
+        `    ETT (формула Reach+Stack/tan(STA)) = ${params.ett ?? "null"} мм`,
+        `    ETT прямой (горизонталь ST→HT) = ${params.ettDirect ?? "null"} мм`,
         `    Reach (горизонталь BB→HT) = ${params.reach ?? "null"} мм`,
         `    Stack (вертикаль BB→HT) = ${params.stack ?? "null"} мм`,
         `    WB (rear→front ось) = ${params.wheelbase ?? "null"} мм`,
@@ -523,7 +537,19 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
       setComparisons(cmp);
 
       // === DUAL SCALE (компенсация перспективы по двум колёсам) ===
-      const wheelHeightMm = getCalibValue("wheelHeight" as any) ?? measured.wheelHeight ?? null;
+      // WH берём из ввода; если не введён — фолбэк на радиус из типоразмера
+      // колеса (wheelSizeId из стора, напр. 26" → 334 мм). Это позволяет
+      // dual scale работать сразу после разметки верхов колёс, без ручного WH.
+      const wheelHeightInput = getCalibValue("wheelHeight" as any) ?? measured.wheelHeight ?? null;
+      let wheelHeightMm = wheelHeightInput;
+      let wheelHeightSource = wheelHeightInput ? "ввод" : null;
+      if (!wheelHeightMm) {
+        const ws = findWheelSize(useBikeStore.getState().wheelSizeId);
+        if (ws) {
+          wheelHeightMm = ws.radiusMm;
+          wheelHeightSource = `типоразмер ${ws.label} (R≈${ws.radiusMm} мм)`;
+        }
+      }
       let computedDualScale: DualScale | null = null;
       if (imgSize && wheelHeightMm && wheelHeightMm > 0) {
         computedDualScale = calculateDualScale(pts, wheelHeightMm, {
@@ -537,7 +563,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
           ...prev,
           ``,
           `  Dual scale (по двум колёсам):`,
-          `    WheelHeight (мм) = ${wheelHeightMm}`,
+          `    WheelHeight (мм) = ${wheelHeightMm} [${wheelHeightSource}]`,
           `    Front px radius = ${computedDualScale.frontPxRadius.toFixed(1)}`,
           `    Rear px radius = ${computedDualScale.rearPxRadius.toFixed(1)}`,
           `    scaleFront = ${computedDualScale.scaleFront.toFixed(2)} мм/пикс`,
@@ -545,21 +571,36 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
           `    Средний масштаб = ${computedDualScale.scaleAvg.toFixed(2)} мм/пикс`,
           `    Perspective severity = ${(computedDualScale.perspectiveSeverity * 100).toFixed(1)}%`,
           `    ${computedDualScale.description}`,
+          `    ⓘ Радиус из типоразмера — предположение. Реальная покрышка может отличаться на ±5-10 мм.`,
         ]);
       } else {
-        // WheelTop точки не размечены — проверим, есть ли подозрение на перспективу
-        if (perspectiveInfo && perspectiveInfo.needsCorrection) {
+        // Диагностируем, ЧЕГО именно не хватает для dual scale
+        const hasWheelTops = !!(pts.rearWheelTop && pts.frontWheelTop &&
+          pts.rearWheelTop.x != null && pts.frontWheelTop.x != null);
+        if (!hasWheelTops) {
+          if (perspective && perspective.needsCorrection) {
+            setDebugLog((prev) => [
+              ...prev,
+              ``,
+              `  ⚠ Перспектива ${perspective.severity}, но точки верха колёс не размечены.`,
+              `    Отметь rearWheelTop + frontWheelTop для dual scale (компенсации).`,
+            ]);
+          }
+        } else if (!wheelHeightMm) {
           setDebugLog((prev) => [
             ...prev,
             ``,
-            `  ⚠ Перспектива подозрительная, но точки верха колёс не размечены.`,
-            `    Отметь rearWheelTop + frontWheelTop для dual scale (компенсации).`,
+            `  ⚠ Точки верха колёс размечены, но радиус колеса неизвестен`,
+            `    (нет WH в форме и не определён типоразмер) — dual scale недоступен.`,
           ]);
         }
       }
 
       // === CONFIDENCE SCORE (вместо null-валидации) ===
-      const photoDistorted = !!(perspectiveInfo && perspectiveInfo.needsCorrection && !computedDualScale);
+      // ВАЖНО: используем СВЕЖУЮ перспективу из этой же итерации (локальная
+      // переменная perspective), а не perspectiveInfo из стейта — тот на один
+      // рендер отстаёт и на первом прогоне всегда null.
+      const photoDistorted = !!(perspective && perspective.needsCorrection && !computedDualScale);
       const assessment = assessConfidence(
         params,
         bikeType ?? undefined,
@@ -754,7 +795,20 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
       const delta = Math.round(params.ett - measured.ett);
       const pct = Math.round((Math.abs(delta) / measured.ett) * 100);
       if (pct > 5) {
-        const suspect = pct > 15 ? "калибровка (масштаб по SH)" : "точки ST/HT";
+        // Умная диагностика: сравниваем формульный ETT (Reach + Stack/tan(STA))
+        // с прямым горизонтальным ST→HT. Если прямой совпадает с измеренным —
+        // расхождение даёт формула, чувствительная к точке stTop.
+        let suspect: string;
+        if (params.ettDirect != null) {
+          const directPct = (Math.abs(params.ettDirect - measured.ett) / measured.ett) * 100;
+          if (directPct < 3) {
+            suspect = `формула ETT (прямой ST→HT по фото = ${Math.round(params.ettDirect)} мм ≈ измеренному; слагаемое Stack/tan(STA) добавляет ${Math.round(params.ett - params.ettDirect)} мм — проверьте точку stTop)`;
+          } else {
+            suspect = "точки ST/HT";
+          }
+        } else {
+          suspect = pct > 15 ? "калибровка (масштаб по SH)" : "точки ST/HT";
+        }
         extraChecks.push(`    ⚠️ ETT: измерено ${measured.ett}, по фото ${params.ett} (Δ ${delta > 0 ? "+" : ""}${delta}, ${pct}%) — [подозрение: ${suspect}]`);
       }
     }

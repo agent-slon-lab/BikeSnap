@@ -69,6 +69,8 @@ export interface ComputedBikeParams {
   saddleHeight: number | null;
   /** Эффективная верхняя труба (горизонталь ST→HT), мм */
   ett: number | null;
+  /** ETT по прямой горизонтали ST→HT (без формулы Reach + Stack/tan(STA)) — для диагностики, мм */
+  ettDirect: number | null;
   /** Reach (горизонталь BB→HT), мм */
   reach: number | null;
   /** Stack (вертикаль BB→HT), мм */
@@ -568,7 +570,7 @@ export function computeParamsFromPhoto(
 ): ComputedBikeParams {
   if (!imgSize) {
     return {
-      saddleHeight: null, ett: null, reach: null, stack: null, stem: null,
+      saddleHeight: null, ett: null, ettDirect: null, reach: null, stack: null, stem: null,
       wheelbase: null, wheelHeight: null, bbHeight: null, bbDrop: null,
       rearCenter: null, frontCenter: null, stackReachRatio: null, setback: null,
       seatTubeLength: null, forkLength: null, headTubeLength: null, forkOffset: null,
@@ -582,6 +584,7 @@ export function computeParamsFromPhoto(
   return {
     saddleHeight: rigorous.saddleHeight,
     ett: rigorous.ett,
+    ettDirect: rigorous.ettDirect,
     reach: rigorous.reach,
     stack: rigorous.stack,
     stem: rigorous.stem,

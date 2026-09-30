@@ -29,6 +29,17 @@ export interface KnownPoints {
   htTop?: Point2D;
 }
 
+export interface CalibrationCandidateInfo {
+  /** Какой параметр */
+  type: "WB" | "SH" | "ETT";
+  /** Масштаб кандидата (мм/пикс) */
+  scale: number;
+  /** Отклонение от primary (%, + = масштаб кандидата больше) */
+  deviationPct: number;
+  /** Это primary? */
+  isPrimary: boolean;
+}
+
 export interface CalibrationResult {
   /** Итоговый масштаб (мм в 1 пикселе) */
   scalePxToMm: number;
@@ -38,6 +49,8 @@ export interface CalibrationResult {
   tiltAngleRad: number;
   /** Предупреждение о некорректно расставленных точках (если есть) */
   validationWarning?: string;
+  /** Все кандидаты калибровки с отклонениями — для диагностики/UI */
+  candidates?: CalibrationCandidateInfo[];
 }
 
 /** Вспомогательная функция расчёта расстояния между точками в ПИКСЕЛЯХ (с учётом imgSize) */
@@ -121,6 +134,7 @@ export function calculateAutoFitCalibration(
       primaryParam: "WB",
       tiltAngleRad: 0,
       validationWarning: "Не введены физические размеры для калибровки.",
+      candidates: [],
     };
   }
 
@@ -155,6 +169,13 @@ export function calculateAutoFitCalibration(
     primaryParam: primary.type,
     tiltAngleRad,
     validationWarning,
+    candidates: candidates.map((c) => ({
+      type: c.type,
+      scale: c.scale,
+      deviationPct:
+        ((c.scale - primary.scale) / primary.scale) * 100,
+      isPrimary: c.type === primary.type,
+    })),
   };
 }
 

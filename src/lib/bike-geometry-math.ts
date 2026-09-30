@@ -313,6 +313,8 @@ export function computeHTA(
 export interface RigorousBikeParams {
   saddleHeight: number | null;
   ett: number | null;
+  /** ETT по прямой горизонтали ST→HT — для диагностики расхождения с формульным ETT */
+  ettDirect: number | null;
   reach: number | null;
   stack: number | null;
   stem: number | null;
@@ -354,7 +356,7 @@ export function computeRigorousBikeParams(
   const safeScale = Number.isFinite(scaleMmPerPx) && scaleMmPerPx > 0 ? scaleMmPerPx : 0;
   if (safeScale === 0) {
     return {
-      saddleHeight: null, ett: null, reach: null, stack: null, stem: null,
+      saddleHeight: null, ett: null, ettDirect: null, reach: null, stack: null, stem: null,
       wheelbase: null, wheelHeight: null, bbHeight: null, bbDrop: null,
       rearCenter: null, frontCenter: null, stackReachRatio: null, setback: null,
       seatTubeLength: null, forkLength: null, headTubeLength: null, forkOffset: null,
@@ -416,6 +418,11 @@ export function computeRigorousBikeParams(
     ett = pxH(points.stTop, points.htTop);
   }
 
+  // ETT по прямой горизонтали ST→HT — справочное значение для диагностики:
+  // если прямой ETT совпадает с измеренным, а формульный нет — причина
+  // в положении точки stTop (чувствительность слагаемого Stack/tan(STA)).
+  const ettDirect = pxH(points.stTop, points.htTop);
+
   // === 4. FORK OFFSET — ИСПРАВЛЕННАЯ ФОРМУЛА ===
   // Перпендикуляр от frontAxle до оси рулевой трубы (htTop → htBottom)
   const forkOffset = pxPerp(points.frontAxle, points.htTop, points.htBottom);
@@ -445,6 +452,7 @@ export function computeRigorousBikeParams(
   return {
     saddleHeight: saddleHeight != null && saddleHeight > 0 ? Math.round(saddleHeight) : null,
     ett: ett != null ? Math.round(ett) : null,
+    ettDirect: ettDirect != null ? Math.round(ettDirect) : null,
     reach: reach != null ? Math.round(reach) : null,
     stack: stack != null ? Math.round(stack) : null,
     stem: null,
