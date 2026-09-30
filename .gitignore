@@ -66,3 +66,4 @@ server.log
 
 # Sandbox tool artifacts
 /tool-results
+/STATE.md

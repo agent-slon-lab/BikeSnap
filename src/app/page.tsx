@@ -366,7 +366,7 @@ function Footer() {
               BikeSnap · образовательный инструмент для велосипедистов
             </span>
             <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground">
-              v1.2.6
+              v1.2.7
             </Badge>
           </div>
           <p className="text-xs text-muted-foreground text-center sm:text-right max-w-md">

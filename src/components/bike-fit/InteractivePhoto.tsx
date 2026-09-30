@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Move } from "lucide-react";
 import type { BikeKeyPoints, NullablePoint, PixelPoint } from "@/lib/bike-photo-scale";
+import { pointFullLabel } from "@/lib/point-labels";
 
 interface InteractivePhotoProps {
   photoUrl: string;
@@ -28,61 +29,61 @@ const POINT_CONFIG: Array<{
 }> = [
   {
     key: "bb",
-    label: "BB",
+    label: "Каретка",
     color: "#ef4444",
     hint: "Центр каретки — точка, где ось шатунов проходит через раму. Видно как центр вала между шатунами.",
     antiHint: "Не ставь на шатун или педаль — именно на ось в раме.",
   },
   {
     key: "stTop",
-    label: "ST верх",
+    label: "Верх подседельной трубы",
     color: "#f97316",
     hint: "Верх подседельной трубы РАМЫ — где подседельный штырь входит в трубу. Обычно там зажимной хомут (QR или болт).",
     antiHint: "Не путай с штырём или седлом — точка на стыке штыря и рамы.",
   },
   {
     key: "saddleMount",
-    label: "седло (крепл.)",
+    label: "Зажим рельсов седла",
     color: "#eab308",
     hint: "Точка крепления седла к подседельному штырю — где хомут/болт фиксирует рельсы седла. Это не нос седла!",
     antiHint: "Не нос и не зад седла — именно центр хомута, который держит седло.",
   },
   {
     key: "htTop",
-    label: "HT верх",
+    label: "Верх рулевого стакана",
     color: "#22c55e",
     hint: "Верх рулевой трубы РАМЫ — где вынос крепится к рулевой. Это стык: вынос → крышка рулевой → труба рамы. Точка на верхней кромке стакана рамы.",
     antiHint: "НЕ ставь на руль, на тормозную ручку, на сам вынос. Точка на стыке выноса с рамой.",
   },
   {
     key: "htBottom",
-    label: "HT низ (корона)",
+    label: "Низ рулевого стакана",
     color: "#3b82f6",
     hint: "НИЗ стакана РАМЫ = КОРОНА ВИЛКИ. Это стык: рулевая труба рамы → нижний подшипник → корона вилки. На фото сбоку — точка стыка короны вилки с низом стакана рамы.",
     antiHint: "Не опускай точку на перья вилки или на ось — только на стык короны вилки с рамой.",
   },
   {
     key: "htTopCap",
-    label: "Top cap (крышка)",
+    label: "Крышка рулевой",
     color: "#10b981",
     hint: "TOP CAP — верхняя крышка рулевой колонки с болтом star-nut. Это самая верхняя точка рулевой трубы (над выносом). Нужна для расчёта посадки райдера — определяет, куда водитель тянется к рулю.",
     antiHint: "Это отдельная точка от HT верх. HT верх — на стыке выноса с рамой (ниже), а top cap — выше, на самой верхней кромке крышки с болтом.",
   },
   {
     key: "rearAxle",
-    label: "зад. ось",
+    label: "Ось заднего колеса",
     color: "#a855f7",
     hint: "Центр оси заднего колеса — точно по центру втулки. Если ось/сквозная — точка на видимой торцевой гайке.",
   },
   {
     key: "frontAxle",
-    label: "пер. ось",
+    label: "Ось переднего колеса",
     color: "#ec4899",
     hint: "Центр оси переднего колеса — точно по центру втулки. Если ось/сквозная — точка на видимой торцевой гайке.",
   },
   {
     key: "rearWheelTop",
-    label: "верх зад. колеса",
+    label: "Верх заднего колеса",
     color: "#7c3aed",
     hint: "ОПЦИОНАЛЬНО: видимая верхняя точка покрышки заднего колеса — самая верхняя кромка резины над осью. Нужна для dual scale (компенсация перспективы по двум колёсам).",
     antiHint: "Не ставь на седло или раму — только на верх покрышки.",
@@ -90,7 +91,7 @@ const POINT_CONFIG: Array<{
   },
   {
     key: "frontWheelTop",
-    label: "верх пер. колеса",
+    label: "Верх переднего колеса",
     color: "#be185d",
     hint: "ОПЦИОНАЛЬНО: видимая верхняя точка покрышки переднего колеса — самая верхняя кромка резины над осью. Нужна для dual scale.",
     antiHint: "Не ставь на тормозной диск или крыло — только на верх покрышки.",
@@ -255,7 +256,7 @@ export function InteractivePhoto({
                 }}
               />
               <span className="text-sm font-bold">
-                {stepIdx}/{POINT_CONFIG.length}. {cfg.label}
+                {stepIdx}/{POINT_CONFIG.length}. {pointFullLabel(cfg.key)}
               </span>
             </div>
             <p className="text-xs text-foreground leading-relaxed">{cfg.hint}</p>
@@ -377,8 +378,8 @@ export function InteractivePhoto({
                     onPointerUp={handlePointerUp}
                     onPointerCancel={handlePointerUp}
                   >
-                    {/* Нативный tooltip при наведении (показывает описание точки) */}
-                    <title>{`${label}\n\n${hint}${antiHint ? "\n\n⚠ " + antiHint : ""}`}</title>
+                    {/* Нативный tooltip при наведении (полное название + описание точки) */}
+                    <title>{`${pointFullLabel(key)}\n\n${hint}${antiHint ? "\n\n⚠ " + antiHint : ""}`}</title>
                     {/* Пульсирующее кольцо для активной точки в режиме разметки */}
                     {isPlacementTarget && (
                       <circle

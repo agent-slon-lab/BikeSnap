@@ -56,14 +56,14 @@ def get_bbox():
 def main():
     # Кнопки точек в панели разметки — клик по кнопке выбирает точку
     btn_map = {
-        "bb": "BB (каретка)",
-        "stTop": "Верх ST",
-        "saddleMount": "Крепление седла",
-        "htTop": "Верх HT",
-        "htBottom": "Низ HT",
-        "htTopCap": "Top cap",
-        "rearAxle": "Задняя ось",
-        "frontAxle": "Передняя ось",
+        "bb": "Каретка",
+        "stTop": "Верх подседельной трубы",
+        "saddleMount": "Зажим рельсов седла",
+        "htTop": "Верх рулевого стакана",
+        "htBottom": "Низ рулевого стакана",
+        "htTopCap": "Крышка рулевой",
+        "rearAxle": "Ось заднего колеса",
+        "frontAxle": "Ось переднего колеса",
     }
     for name, px, py in POINTS:
         # 1) выбрать точку кнопкой (гарантирует placementPointKey)

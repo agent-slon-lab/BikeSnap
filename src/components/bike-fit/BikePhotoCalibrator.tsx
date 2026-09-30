@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PhotoUploader } from "@/components/bike-fit/PhotoUploader";
 import { cn } from "@/lib/utils";
+import { pointFullLabel } from "@/lib/point-labels";
 import { InteractivePhoto } from "./InteractivePhoto";
 import {
   compareMeasuredVsComputed,
@@ -67,6 +68,14 @@ import {
   applySuggestion,
   type PointSuggestion,
 } from "@/lib/bike-point-suggestions";
+
+/** Человекопонятные названия источников калибровки (для перекрёстной проверки) */
+const CALIB_SOURCE_HUMAN: Record<string, string> = {
+  saddleHeight: "высоте седла",
+  ett: "ETT (горизонталь седло→руль)",
+  wheelbase: "колёсной базе",
+  wheelDiameter: "диаметру колеса",
+};
 
 interface BikePhotoCalibratorProps {
   /** Текущие измеренные параметры из формы */
@@ -1101,18 +1110,18 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                   Кликай по фото, чтобы разместить выбранную точку. После клика автоматически
                   переключается к следующей.
                 </p>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
                   {([
-                    { key: "bb", label: "BB (каретка)", color: "#ef4444", hint: "Центр вала между шатунами", optional: false },
-                    { key: "stTop", label: "Верх ST", color: "#f97316", hint: "Где штырь входит в раму (хомут)", optional: false },
-                    { key: "saddleMount", label: "Крепление седла", color: "#eab308", hint: "Хомут седла к штырю (не нос!)", optional: false },
-                    { key: "htTop", label: "Верх HT", color: "#22c55e", hint: "Верх стакана рамы (где вынос крепится к трубе)", optional: false },
-                    { key: "htBottom", label: "Низ HT", color: "#3b82f6", hint: "Низ стакана = корона вилки (стык вилки с рамой)", optional: false },
-                    { key: "htTopCap", label: "Top cap", color: "#10b981", hint: "Верхняя крышка рулевой с болтом (для посадки)", optional: false },
-                    { key: "rearAxle", label: "Задняя ось", color: "#a855f7", hint: "Центр оси заднего колеса", optional: false },
-                    { key: "frontAxle", label: "Передняя ось", color: "#ec4899", hint: "Центр оси переднего колеса", optional: false },
-                    { key: "rearWheelTop", label: "Верх зад. колеса", color: "#7c3aed", hint: "ОПЦИОНАЛЬНО: верх покрышки заднего колеса (для dual scale)", optional: true },
-                    { key: "frontWheelTop", label: "Верх пер. колеса", color: "#be185d", hint: "ОПЦИОНАЛЬНО: верх покрышки переднего колеса (для dual scale)", optional: true },
+                    { key: "bb", label: "Каретка", color: "#ef4444", hint: "Центр каретки (ось педалей) — центр вала между шатунами", optional: false },
+                    { key: "stTop", label: "Верх подседельной трубы", color: "#f97316", hint: "Верх подседельной трубы (хомут) — где штырь входит в раму", optional: false },
+                    { key: "saddleMount", label: "Зажим рельсов седла", color: "#eab308", hint: "Зажим рамок (рельсов) под седлом — центр хомута, не нос седла", optional: false },
+                    { key: "htTop", label: "Верх рулевого стакана", color: "#22c55e", hint: "Верх рулевого стакана рамы — стык выноса с рамой", optional: false },
+                    { key: "htBottom", label: "Низ рулевого стакана", color: "#3b82f6", hint: "Низ рулевого стакана = корона вилки (стык вилки с рамой)", optional: false },
+                    { key: "htTopCap", label: "Крышка рулевой", color: "#10b981", hint: "Верхняя крышка рулевой колонки с болтом (для расчёта посадки)", optional: false },
+                    { key: "rearAxle", label: "Ось заднего колеса", color: "#a855f7", hint: "Центр оси заднего колеса", optional: false },
+                    { key: "frontAxle", label: "Ось переднего колеса", color: "#ec4899", hint: "Центр оси переднего колеса", optional: false },
+                    { key: "rearWheelTop", label: "Верх заднего колеса", color: "#7c3aed", hint: "ОПЦИОНАЛЬНО: верх покрышки заднего колеса (для dual scale)", optional: true },
+                    { key: "frontWheelTop", label: "Верх переднего колеса", color: "#be185d", hint: "ОПЦИОНАЛЬНО: верх покрышки переднего колеса (для dual scale)", optional: true },
                   ] as const).map(({ key, label, color, hint, optional }) => {
                     const pt = keyPoints[key as keyof BikeKeyPoints] as NullablePoint | undefined;
                     const isPlaced = pt && pt.x != null && pt.y != null;
@@ -1137,7 +1146,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                             background: isPlaced ? color : "transparent",
                           }}
                         />
-                        <span className="flex-1 truncate">{label}</span>
+                        <span className="flex-1 whitespace-normal leading-tight">{label}</span>
                         {isPlaced && (
                           <span className="text-emerald-600 dark:text-emerald-400 text-[10px]">✓</span>
                         )}
@@ -1166,9 +1175,9 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                 <div className="space-y-1">
                   <div>{error}</div>
                   {pointsMissing.length > 0 && (
-                    <div className="text-[11px] font-mono text-rose-600/80 dark:text-rose-400/70 border-t border-rose-200/50 dark:border-rose-900/50 pt-1 mt-1">
-                      <div>Обязательные точки ядра (7): rearAxle, frontAxle, bb, stTop, saddleMount, htBottom, htTop</div>
-                      <div>Отсутствуют: <b>{pointsMissing.join(", ")}</b></div>
+                    <div className="text-[11px] text-rose-600/80 dark:text-rose-400/70 border-t border-rose-200/50 dark:border-rose-900/50 pt-1 mt-1">
+                      <div>Обязательные точки (7): обе оси колёс, каретка, верх подседельной трубы, зажим седла, верх и низ рулевого стакана</div>
+                      <div>Отсутствуют: <b>{pointsMissing.map((k) => pointFullLabel(k)).join(", ")}</b></div>
                     </div>
                   )}
                 </div>
@@ -1195,7 +1204,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                   <div className="flex items-start gap-2 rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
                     <AlertCircle className="size-4 mt-0.5 shrink-0" />
                     <span>
-                      Не удалось определить точки: {pointsMissing.join(", ")}
+                      Не удалось определить точки: {pointsMissing.map((k) => pointFullLabel(k)).join(", ")}
                     </span>
                   </div>
                 )}
@@ -1212,10 +1221,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                         <p className="text-xs text-muted-foreground leading-relaxed">
                           {dualScale.description}
                         </p>
-                        <div className="text-[11px] font-mono text-muted-foreground mt-1 space-y-0.5">
-                          <div>scaleFront = <b>{dualScale.scaleFront.toFixed(2)}</b> мм/пикс (по переднему колесу)</div>
-                          <div>scaleRear = <b>{dualScale.scaleRear.toFixed(2)}</b> мм/пикс (по заднему колесу)</div>
-                          <div>Перспектива: <b>{(dualScale.perspectiveSeverity * 100).toFixed(1)}%</b> (0%=нет, &gt;15%=сильно)</div>
+                        <div className="text-[11px] text-muted-foreground mt-1">
+                          Перспектива: <b>{(dualScale.perspectiveSeverity * 100).toFixed(1)}%</b> — масштаб подстраивается под каждое колесо отдельно
                         </div>
                       </div>
                     </div>
@@ -1339,8 +1346,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                           )}
                         >
                           <div className="flex items-start justify-between gap-2">
-                            <span className="text-xs font-bold uppercase tracking-wide">
-                              {String(s.pointKey)}
+                            <span className="text-xs font-bold">
+                              {pointFullLabel(String(s.pointKey))}
                               {s.severity === "major" && (
                                 <span className="ml-1 text-rose-600 dark:text-rose-400 text-[10px]">срочно</span>
                               )}
@@ -1360,9 +1367,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                           <p className="text-[11px] text-amber-700 dark:text-amber-400">
                             → {s.action}
                           </p>
-                          <p className="text-[10px] text-muted-foreground/60 font-mono">
-                            текущее: ({s.current.x?.toFixed(3) ?? "—"}, {s.current.y?.toFixed(3) ?? "—"})
-                            → цель: ({s.suggested.x.toFixed(3)}, {s.suggested.y.toFixed(3)})
+                          <p className="text-[10px] text-muted-foreground/70">
+                            Смещение от текущего положения: {Math.round(s.distance)} мм
                           </p>
                         </div>
                       ))}
@@ -1506,22 +1512,17 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                       <div className="flex items-start gap-2">
                         <div className="flex-1">
                           <p className="text-xs font-semibold text-violet-700 dark:text-violet-400">
-                            Калибровка масштаба (ядро v2 — rotation-first)
+                            Как считается масштаб
                           </p>
                           <p className="text-[10px] text-muted-foreground mt-0.5">
-                            Рабочий масштаб считается СТРОГО по выбранному вами primary-параметру.
-                            Все проекции (Stack/Reach/ETT) считаются после поворота кадра по оси колёс.
+                            Рабочий масштаб — строго по вашему primary-размеру.
+                            Все проекции (Stack/Reach/ETT) считаются после авто-выравнивания кадра.
                           </p>
                         </div>
                       </div>
-                      <div className="text-[10px] font-mono space-y-0.5">
+                      <div className="text-[10px] space-y-0.5">
                         <div className="text-violet-700 dark:text-violet-400">
-                          Масштаб: <b>{scaleSourceInfo.scaleMmPerPx.toFixed(4)} мм/пикс</b>
-                        </div>
-                        <div className="text-muted-foreground">Источник: {scaleSourceInfo.source}</div>
-                        <div className="text-muted-foreground">
-                          Поворот кадра: {scaleSourceInfo.tiltDeg.toFixed(2)}° (применён до расчётов)
-                          {" · "}{scaleSourceInfo.facingRight ? "смотрит вправо" : "смотрит влево → нормализовано"}
+                          Рабочий масштаб: <b>{scaleSourceInfo.source.startsWith("USER_OVERRIDE") ? "строго по вашему вводу" : "по колёсной базе (fallback)"}</b>
                         </div>
                       </div>
                       {autoCalibration?.candidates && autoCalibration.candidates.length > 1 && (
@@ -1529,8 +1530,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                           <div className="text-muted-foreground">Перекрёстная проверка (справочно):</div>
                           {autoCalibration.candidates.map((c) => (
                             <div key={c.type} className="text-muted-foreground">
-                              {c.type}: {c.scale.toFixed(4)} мм/пикс
-                              {c.isPrimary ? "  [база]" : `  (откл. ${c.deviationPct > 0 ? "+" : ""}${c.deviationPct.toFixed(1)}%)`}
+                              по {CALIB_SOURCE_HUMAN[c.type] ?? c.type}
+                              {c.isPrimary ? " — рабочий" : ` — откл. ${c.deviationPct > 0 ? "+" : ""}${c.deviationPct.toFixed(1)}%`}
                             </div>
                           ))}
                         </div>
@@ -1603,9 +1604,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
 
                     {computed && (
                       <div className="text-xs text-muted-foreground bg-muted/30 rounded-md p-2">
-                        Масштаб: {computed.scale.toFixed(3)} мм/пикс ·
-                        Калибровка по: {KNOWN_DIM_OPTIONS.find((o) => o.key === computed.calibratedBy)?.label}
-                        {scaleSourceInfo?.source.includes("USER_OVERRIDE") ? " (СТРОГО, ручной ввод)" : " (fallback WB)"}
+                        Масштаб по фото: {KNOWN_DIM_OPTIONS.find((o) => o.key === computed.calibratedBy)?.label}
+                        {scaleSourceInfo?.source.includes("USER_OVERRIDE") ? " — строго, по вашему вводу" : " — по колёсной базе (fallback)"}
                       </div>
                     )}
 
