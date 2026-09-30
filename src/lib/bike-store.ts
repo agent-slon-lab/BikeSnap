@@ -105,10 +105,6 @@ interface AppState {
   // Хранится отдельно, т.к. используется и в форме параметров, и в калибраторе
   wheelSizeId: string;
 
-  // Заблокированные поля (пользователь зафиксировал замком)
-  // Эти значения — константы, не меняются автоматически
-  lockedFields: string[];
-
   // Действия общие
   setMode: (mode: "fit" | "select" | null) => void;
   resetMode: () => void;
@@ -121,8 +117,6 @@ interface AppState {
   setBody: (b: Partial<BodyMeasurements>) => void;
   setBike: (b: Partial<BikeMeasurements>) => void;
   setWheelSizeId: (id: string) => void;
-  toggleLock: (field: string) => void;
-  isLocked: (field: string) => boolean;
   reset: () => void;
 
   // Получить цель райдера
@@ -165,7 +159,6 @@ export const useBikeStore = create<AppState>()(
       body: initialBody,
       bike: initialBike,
       wheelSizeId: "26",
-      lockedFields: [],
 
       setMode: (mode) => set({ mode }),
       resetMode: () => set({ mode: null, step: "context" }),
@@ -197,18 +190,6 @@ export const useBikeStore = create<AppState>()(
 
       setWheelSizeId: (id) => set({ wheelSizeId: id }),
 
-      toggleLock: (field) =>
-        set((state) => {
-          const exists = state.lockedFields.includes(field);
-          return {
-            lockedFields: exists
-              ? state.lockedFields.filter((f) => f !== field)
-              : [...state.lockedFields, field],
-          };
-        }),
-
-      isLocked: (field) => get().lockedFields.includes(field),
-
       reset: () =>
         set({
           step: "context",
@@ -217,7 +198,6 @@ export const useBikeStore = create<AppState>()(
           complaints: [],
           body: initialBody,
           bike: initialBike,
-          lockedFields: [],
         }),
 
       getRiderGoal: () => {
@@ -229,13 +209,14 @@ export const useBikeStore = create<AppState>()(
     {
       name: "bikefit-storage",
       // сохраняем только данные, не UI-состояние
+      // wheelSizeId — параметр колеса из шага 3, нужен на сводке и в калибраторе
       partialize: (state) => ({
         bikeType: state.bikeType,
         goal: state.goal,
         complaints: state.complaints,
         body: state.body,
         bike: state.bike,
-        lockedFields: state.lockedFields,
+        wheelSizeId: state.wheelSizeId,
       }),
     }
   )

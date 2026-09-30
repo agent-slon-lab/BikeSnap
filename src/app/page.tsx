@@ -80,13 +80,15 @@ function isStepAccessible(
   if (step === "body")
     return !!state.bikeType && !!state.goal;
   if (step === "bike") return state.body.height > 0 && state.body.inseam > 0;
-  // Для summary/analysis нужно ТОЛЬКО 2 обязательных поля:
-  // - saddleHeight (SH) — для проверки положения ног
-  // - wheelbase (WB) — для масштаба фото (пиксели → мм)
+  // Для summary/analysis нужно 3 обязательных поля (без любого из них «Далее» неактивен):
+  // - saddleHeight (SH) — строгий primary масштаб (userOverride) + проверка положения ног
+  // - wheelbase (WB) — fallback масштаба фото (пиксели → мм)
+  // - wheelHeight (WH) — dual scale (компенсация перспективы по двум колёсам)
   // Остальные (ETT, Stem, α, CR, BBH) — опциональны, алгоритм высчитает по фото
   const requiredBikeFields =
     !!state.bike.saddleHeight &&
-    !!state.bike.wheelbase;
+    !!state.bike.wheelbase &&
+    !!state.bike.wheelHeight;
   if (step === "summary") return requiredBikeFields;
   if (step === "analysis") return requiredBikeFields;
   return false;
@@ -364,7 +366,7 @@ function Footer() {
               BikeSnap · образовательный инструмент для велосипедистов
             </span>
             <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground">
-              v1.1.0
+              v1.2.6
             </Badge>
           </div>
           <p className="text-xs text-muted-foreground text-center sm:text-right max-w-md">

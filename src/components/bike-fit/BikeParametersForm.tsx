@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { Bike, Plus, Trash2, Save, Lock, LockOpen, Info } from "lucide-react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Bike, Plus, Trash2, Save, Info } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -48,9 +48,10 @@ interface ParamField {
   required?: boolean;
 }
 
-// ТОЛЬКО 2 обязательных поля: SH (Высота седла) + WB (Колёсная база).
+// Обязательные поля (без них «Далее» неактивен): SH, WB, WH.
 // Остальные (ETT, Stem, α, CR, BBH) — опциональны, алгоритм высчитает сам по фото.
-// Поле WH (Радиус колеса) убрано — радиус берётся из dropdown типоразмера ниже.
+// Колесо — ОДНО поле в виде выпадающего списка типоразмеров (26″…700c): выбор
+// подставляет точный радиус WH; отдельного ручного ввода радиуса больше нет.
 const PARAM_FIELDS: ParamField[] = [
   {
     key: "saddleHeight", label: "Высота седла", abbr: "SH", unit: "мм", placeholder: "730", color: "#ef4444", icon: "🚲",
@@ -63,6 +64,12 @@ const PARAM_FIELDS: ParamField[] = [
     required: true,
     tooltip: "Колёсная база. Расстояние между центрами осей заднего и переднего колёс. Зачем: идеальный масштаб для алгоритма — зная реальную WB, программа переводит пиксели с фото в точные миллиметры всех остальных размеров (ETT, Reach, Stack, углы).",
     howToMeasure: "Измерь рулеткой от центра оси заднего колеса до центра оси переднего колеса. Можно измерять по прямой (не обязательно горизонтально). Обычно указана в спецификации велосипеда. Типичные значения: 970-1030 мм шоссе, 1080-1180 мм MTB.",
+  },
+  {
+    key: "wheelHeight", label: "Типоразмер колеса", abbr: "WH", unit: "мм", placeholder: "335", color: "#06b6d4", icon: "⭕",
+    required: true,
+    tooltip: "Выбери типоразмер колеса из списка — радиус (WH) подставится автоматически. Обязателен: по нему dual scale компенсирует перспективу фото (переднее/заднее колесо выглядят по-разному) и проверяется масштаб.",
+    howToMeasure: "Не знаешь типоразмер? Посмотри маркировку на покрышке: 26″ / 27.5″ / 29″ — MTB, 700c (28″) — шоссе, 650b — грэвел, 20″/24″ — BMX/детские. Радиусы с покрышкой: 26″→334, 27.5″→358, 29″→371, 700c→335 мм.",
   },
   // ===== Опциональные поля (алгоритм высчитает сам по фото) =====
   {
@@ -93,13 +100,16 @@ const PARAM_FIELDS: ParamField[] = [
 ];
 
 export function BikeParametersForm() {
-  const { bike, setBike, toggleLock, isLocked, wheelSizeId, setWheelSizeId } = useBikeStore();
+  const { bike, setBike, setWheelSizeId } = useBikeStore();
   const [bikes, setBikes] = useState<BikeRecord[]>([]);
   const [activeBike, setActiveBikeState] = useState<BikeRecord | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [newName, setNewName] = useState("");
   const [newType, setNewType] = useState<BikeType>("road");
   const [saved, setSaved] = useState(false);
+  // Индикатор автосохранения + метка последней записанной версии параметров
+  const [autoSaved, setAutoSaved] = useState(false);
+  const lastSavedJsonRef = useRef<string>("");
   // Гарантированный сброс BikePhotoCalibrator при смене/создании велика
   const [calibratorKey, setCalibratorKey] = useState(0);
 
@@ -121,8 +131,6 @@ export function BikeParametersForm() {
     if (!newName.trim()) return;
     const bike = createBike(newName.trim(), newType, {});
     setBike({});
-    // Сбрасываем все замки при создании нового велика
-    useBikeStore.setState({ lockedFields: [] });
     setBikes(getBikes());
     setActiveBikeState(bike);
     setCalibratorKey(k => k + 1);
@@ -134,8 +142,7 @@ export function BikeParametersForm() {
     setActiveBike(bike.id);
     setActiveBikeState(bike);
     setBike(bike.measurements);
-    // Сбрасываем замки при выборе другого велика
-    useBikeStore.setState({ lockedFields: [] });
+    lastSavedJsonRef.current = JSON.stringify(bike.measurements);
     setCalibratorKey(k => k + 1);
   };
 
@@ -160,10 +167,32 @@ export function BikeParametersForm() {
   const handleSave = () => {
     if (!activeBike) return;
     updateBike(activeBike.id, bike);
+    lastSavedJsonRef.current = JSON.stringify(bike);
     setBikes(getBikes());
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
+
+  // АВТОСОХРАНЕНИЕ: любые изменения параметров активного велика (ввод полей,
+  // замки, значения, записанные из фото-калибровки) через 800 мс после
+  // последнего изменения тихо записываются в хранилище. Кнопка «Сохранить»
+  // остаётся — сохраняет мгновенно.
+  useEffect(() => {
+    if (!activeBike) return;
+    const timer = setTimeout(() => {
+      const before = getBikes().find((b) => b.id === activeBike.id)?.measurements;
+      const json = JSON.stringify(bike);
+      if (json === lastSavedJsonRef.current) return; // нет реальных изменений
+      updateBike(activeBike.id, bike);
+      lastSavedJsonRef.current = json;
+      setBikes(getBikes());
+      if (JSON.stringify(before ?? {}) !== json) {
+        setAutoSaved(true);
+        window.setTimeout(() => setAutoSaved(false), 2000);
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [bike, activeBike]);
 
   return (
     <div className="space-y-4">
@@ -180,7 +209,10 @@ export function BikeParametersForm() {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {bikes.map((b) => {
           const isActive = activeBike?.id === b.id;
-          const filledCount = Object.values(b.measurements).filter((v) => v != null && v > 0).length;
+          const filledCount = PARAM_FIELDS.filter((p) => {
+            const v = b.measurements[p.key as keyof typeof b.measurements];
+            return v != null && v > 0;
+          }).length;
           return (
             <Card
               key={b.id}
@@ -221,7 +253,7 @@ export function BikeParametersForm() {
                 </div>
                 <div className="flex items-center justify-between text-[10px] text-muted-foreground">
                   <span>{b.type}</span>
-                  <span>{filledCount}/8 параметров</span>
+                  <span>{filledCount}/{PARAM_FIELDS.length} параметров</span>
                 </div>
               </CardContent>
             </Card>
@@ -283,20 +315,30 @@ export function BikeParametersForm() {
       {/* Если выбран велик — показываем параметры */}
       {activeBike && (
         <>
-          {/* Кнопка сохранения */}
+          {/* Кнопка сохранения (+ автосохранение — индикатор слева) */}
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold">
               🚲 {activeBike.name} — параметры
             </h3>
-            <Button
-              size="sm"
-              variant={saved ? "default" : "outline"}
-              className={saved ? "bg-emerald-500 text-white" : ""}
-              onClick={handleSave}
-            >
-              <Save className="size-3.5" />
-              {saved ? "✓ Сохранено!" : "💾 Сохранить"}
-            </Button>
+            <div className="flex items-center gap-2">
+              <span
+                className={cn(
+                  "text-[10px] text-emerald-600 dark:text-emerald-400 transition-opacity duration-500",
+                  autoSaved ? "opacity-100" : "opacity-0"
+                )}
+              >
+                ✓ Сохранено автоматически
+              </span>
+              <Button
+                size="sm"
+                variant={saved ? "default" : "outline"}
+                className={saved ? "bg-emerald-500 text-white" : ""}
+                onClick={handleSave}
+              >
+                <Save className="size-3.5" />
+                {saved ? "✓ Сохранено!" : "💾 Сохранить"}
+              </Button>
+            </div>
           </div>
 
           {/* Фото-калибратор — key=activeBike.id сбрасывает state при смене велика */}
@@ -317,9 +359,14 @@ export function BikeParametersForm() {
               if (updated) setActiveBikeState(updated);
             }}
             onAveraged={(avg) => {
-              if (avg.reach != null && !isLocked("reach")) setBike({ reach: avg.reach });
-              if (avg.stack != null && !isLocked("stack")) setBike({ stack: avg.stack });
-              if (avg.wheelbase != null && !isLocked("wheelbase")) setBike({ wheelbase: avg.wheelbase });
+              // ПРИНЦИП «ЭТАЛОН»: всё, что пользователь ввёл вручную (SH, WB, WH,
+              // ETT, Stem, α, CR, BBH) — эталон ± погрешность измерений и НИГДЕ
+              // не перезаписывается автоматически, по нему ведётся расчёт.
+              // Применяем только: reach/stack (в форме не вводятся вовсе) и WB —
+              // исключительно дозаполнением ПУСТОГО поля.
+              if (avg.wheelbase != null && !bike.wheelbase) setBike({ wheelbase: avg.wheelbase });
+              if (avg.reach != null) setBike({ reach: avg.reach });
+              if (avg.stack != null) setBike({ stack: avg.stack });
             }}
           />
 
@@ -336,14 +383,18 @@ export function BikeParametersForm() {
             {PARAM_FIELDS.map((p) => {
               const value = bike[p.key as keyof typeof bike] as number | undefined;
               const isFilled = value != null && value > 0;
-              const locked = isLocked(p.key);
+              const isWheelField = p.key === "wheelHeight";
+              // Текущий типоразмер выводим из радиуса WH (единый источник — одно поле)
+              const selectedWs = isWheelField && value ? findWheelSize(null, value) : null;
 
               return (
                 <Card key={p.key} className={cn(
                   "relative overflow-hidden transition-all",
                   isFilled
                     ? "border-emerald-300 dark:border-emerald-800 shadow-sm"
-                    : "border-border"
+                    : "border-border",
+                  // Колесо — карточка в 2 колонки: длинные названия типоразмеров читаются целиком
+                  p.key === "wheelHeight" && "sm:col-span-2"
                 )}>
                   <div className="absolute left-0 top-0 bottom-0 w-1.5" style={{ background: p.color }} />
                   <CardContent className="p-3 pl-4 space-y-1.5">
@@ -369,44 +420,57 @@ export function BikeParametersForm() {
                             </div>
                           </TooltipContent>
                         </Tooltip>
-                        {/* Замок */}
-                        <button
-                          onClick={() => toggleLock(p.key)}
-                          className={cn(
-                            "transition-colors p-0.5",
-                            locked ? "text-emerald-500" : "text-muted-foreground/30 hover:text-muted-foreground"
-                          )}
-                          title={locked ? "Разблокировать" : "Зафиксировать (значение не будет перезаписано)"}
-                        >
-                          {locked ? <Lock className="size-3" /> : <LockOpen className="size-3" />}
-                        </button>
                       </div>
                     </div>
-                    {/* Поле ввода */}
-                    <div className="relative">
-                      <Input
-                        type="number"
-                        step={p.step ?? "1"}
-                        min={p.min}
-                        max={p.max}
-                        value={value ?? ""}
-                        onChange={(e) => setBike({ [p.key]: e.target.value === "" ? undefined : parseFloat(e.target.value) } as any)}
-                        placeholder={p.placeholder}
+                    {/* Поле ввода; колесо — выпадающий список типоразмеров (одно поле, радиус подставляется сам) */}
+                    {isWheelField ? (
+                      <select
+                        value={selectedWs?.id ?? ""}
+                        onChange={(e) => {
+                          const w = WHEEL_SIZES.find((x) => x.id === e.target.value);
+                          if (!w) return;
+                          setBike({ wheelHeight: w.radiusMm } as any);
+                          setWheelSizeId(w.id);
+                        }}
                         className={cn(
-                          "pr-10 h-9",
-                          isFilled ? "font-bold" : "font-normal text-muted-foreground",
-                          locked && "bg-emerald-50 dark:bg-emerald-950/30"
+                          "h-9 w-full rounded-md border border-input bg-background px-2 text-sm",
+                          isFilled ? "font-bold" : "font-normal text-muted-foreground"
                         )}
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground pointer-events-none">
-                        {p.unit}
-                      </span>
-                    </div>
+                      >
+                        <option value="" disabled>
+                          — выбери типоразмер —
+                        </option>
+                        {WHEEL_SIZES.map((w) => (
+                          <option key={w.id} value={w.id}>
+                            ⌀ {w.label} ({w.tireDescription}, R≈{w.radiusMm} мм)
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div className="relative">
+                        <Input
+                          type="number"
+                          step={p.step ?? "1"}
+                          min={p.min}
+                          max={p.max}
+                          value={value ?? ""}
+                          onChange={(e) => setBike({ [p.key]: e.target.value === "" ? undefined : parseFloat(e.target.value) } as any)}
+                          placeholder={p.placeholder}
+                          className={cn(
+                            "pr-10 h-9",
+                            isFilled ? "font-bold" : "font-normal text-muted-foreground"
+                          )}
+                        />
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground pointer-events-none">
+                          {p.unit}
+                        </span>
+                      </div>
+                    )}
                     {/* Статус — разный для обязательных/необязательных полей */}
                     {isFilled ? (
                       <div className="flex items-center gap-1 text-[9px] text-emerald-600 dark:text-emerald-400">
                         <span className="size-1.5 rounded-full bg-emerald-500" />
-                        {locked ? "Зафиксировано" : p.required ? "✓ Обязательное заполнено" : "Заполнено"}
+                        {p.required ? "✓ Обязательное заполнено" : "Заполнено"}
                       </div>
                     ) : p.required ? (
                       <div className="flex items-center gap-1 text-[9px] text-orange-600 dark:text-orange-400 font-medium">
@@ -419,69 +483,20 @@ export function BikeParametersForm() {
                         Дополнительно
                       </div>
                     )}
+                    {/* Колесо: подсказка с точным радиусом выбранного типоразмера (как было у dropdown) */}
+                    {isWheelField && (
+                      <div className="text-[9px] leading-snug text-cyan-600 dark:text-cyan-400">
+                        {isFilled && selectedWs
+                          ? `Радиус: ${value} мм · ${selectedWs.tireDescription}`
+                          : "Радиусы: 26″→334 · 27.5″→358 · 29″→371 · 700c→335 мм"}
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               );
             })}
           </div>
           </TooltipProvider>
-
-          {/* Типоразмер колеса — для dual scale (компенсация перспективы по двум колёсам) */}
-          <Card className={cn(
-            "relative overflow-hidden transition-all border-cyan-300 dark:border-cyan-800"
-          )}>
-            <div className="absolute left-0 top-0 bottom-0 w-1.5" style={{ background: "#06b6d4" }} />
-            <CardContent className="p-3 pl-4 space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-sm">⭕</span>
-                  <span className="text-xs font-semibold">Типоразмер колеса</span>
-                  <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono">⌀</Badge>
-                </div>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button type="button" className="text-muted-foreground hover:text-foreground p-0.5">
-                      <Info className="size-3" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" className="max-w-xs">
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium">
-                        Стандартный размер обода. Используется для dual scale — компенсации
-                        перспективы при фото-калибровке.
-                      </p>
-                      <p className="text-[11px] text-muted-foreground">
-                        Если фото снято под углом — переднее и заднее колеса выглядят разного размера.
-                        Dual scale считает отдельный масштаб по каждому колесу. Выбери типоразмер —
-                        система сама подставит примерный радиус покрышки.
-                      </p>
-                    </div>
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-              <select
-                value={wheelSizeId}
-                onChange={(e) => setWheelSizeId(e.target.value)}
-                className="flex h-9 w-full rounded-md border border-cyan-300 bg-background text-foreground px-3 py-1 text-sm"
-              >
-                {WHEEL_SIZES.map((w) => (
-                  <option key={w.id} value={w.id} className="bg-background text-foreground">
-                    {w.label} ({w.tireDescription}, R≈{w.radiusMm} мм)
-                  </option>
-                ))}
-              </select>
-              {(() => {
-                const sel = findWheelSize(wheelSizeId, null);
-                if (!sel) return null;
-                return (
-                  <div className="flex items-center gap-1 text-[9px] text-cyan-600 dark:text-cyan-400">
-                    <span className="size-1.5 rounded-full bg-cyan-500" />
-                    Радиус: {sel.radiusMm} мм · {sel.tireDescription}
-                  </div>
-                );
-              })()}
-            </CardContent>
-          </Card>
         </>
       )}
     </div>

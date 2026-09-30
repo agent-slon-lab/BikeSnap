@@ -1,19 +1,32 @@
 /**
- * Авто-подсказки для положения точек.
+ * Авто-подсказки для положения точек — ЯДРО v2 (rotation-first).
+ * ================================================================
  *
- * Если точка стоит нереально (например, Stack > 700 — HT верх слишком высоко),
- * помогаем пользователю понять, где она должна быть.
+ * Все проверки работают в ПИКСЕЛЬНОМ пространстве и используют результат
+ * движка геометрии (bike-geometry-engine) как единственный источник истины:
+ *   - масштаб — engine.scaleMmPerPx (мм/пиксель, строгая иерархия);
+ *   - Stack/Reach и другие проекции — из выровненной системы (после
+ *     поворота кадра по оси колёс), т.е. СОВПАДАЮТ с цифрами в отчёте;
+ *   - цели подсказок вычисляются в выровненной системе и переводятся
+ *     обратно в координаты фото через makeInverseAlignedTransform.
  *
- * Логика:
- * 1. Для каждого bikeType есть типичный диапазон Stack/Reach.
- * 2. Зная текущий scale (мм/норм.ед.) и координаты BB,
- *    можно вычислить ожидаемое Y для HT верх.
- * 3. Если текущая позиция точки сильно отличается —
- *    предлагаем поправить (или сделать автоматически).
+ * История (v1.2.0 и ранее): функция получала scale в «мм/норм.ед.», а после
+ * перехода на ядро v2 ей стали передавать мм/пиксель. Это давало абсурдные
+ * подсказки вида «Stack = 1 мм, цель y = −401.9» (смешение единиц).
+ * Кроме того, эвристика «stTop на 35% пути BB→седло» двигала ПРАВИЛЬНО
+ * стоящую точку (стOp валиден в любой точке оси подседельной трубы) —
+ * заменена на геометрически честную проверку «stTop на ОСИ трубы».
  */
 
 import type { BikeType } from "./bike-params";
 import type { BikeKeyPoints, NullablePoint } from "./bike-photo-scale";
+import {
+  type BikeGeometryResult,
+  type Point2D,
+  makeInverseAlignedTransform,
+  perpendicularDistance,
+  distance,
+} from "./bike-geometry-engine";
 
 /** Типичные значения Stack (мм) по типу велосипеда */
 export const TYPICAL_STACK: Record<BikeType, { min: number; max: number; mid: number }> = {
@@ -33,246 +46,260 @@ export const TYPICAL_REACH: Record<BikeType, { min: number; max: number; mid: nu
   city:    { min: 350, max: 410, mid: 380 },
 };
 
+/** Допуск за пределами типичного диапазона, прежде чем подсказывать (мм) */
+const STACK_TOLERANCE_MM = 30;
+
+/** Нормальная длина рулевой трубы (мм) — цель при авто-исправлении */
+const TYPICAL_HEAD_TUBE_MM = 120;
+
+/** Максимально правдоподобная длина рулевой трубы (мм) */
+const MAX_HEAD_TUBE_MM = 250;
+
+/** Допуск «stTop в стороне от оси подседельной трубы» (мм) */
+const ST_TOP_OFF_AXIS_MM = 25;
+
 export interface PointSuggestion {
   /** Ключ точки, к которой относится подсказка */
   pointKey: keyof BikeKeyPoints;
-  /** Текущее положение точки */
+  /** Текущее положение точки (нормированные 0..1) */
   current: NullablePoint;
-  /** Рекомендуемое положение (где точка должна быть) */
+  /** Рекомендуемое положение (нормированные 0..1 — как хранятся точки) */
   suggested: { x: number; y: number };
   /** Что не так с текущим положением */
   problem: string;
   /** Что нужно сделать */
   action: string;
-  /** Расстояние от текущего до рекомендуемого (норм.ед.) */
+  /** Расстояние от текущего до рекомендуемого (мм, по масштабу движка) */
   distance: number;
   /** Серьёзность (большое расхождение = major) */
   severity: "minor" | "major";
 }
 
+/** Контекст подсказок: размер фото + результат ядра v2 */
+export interface SuggestionContext {
+  /** Размер фото в пикселях (нормированные координаты X по ширине, Y по высоте) */
+  imgSize: { width: number; height: number };
+  /** Результат calculateBikeGeometry — источник истины (масштаб, поворот, метрики) */
+  engine: BikeGeometryResult;
+}
+
 /**
- * Вычислить подсказки для точек на основе:
- * - текущего масштаба (scale)
- * - типа велосипеда (bikeType) — типичные Stack/Reach
- * - известных точек (BB, rearAxle) — для привязки
+ * Вычислить подсказки для точек (v2).
  *
- * @param points Текущие точки
- * @param scale Масштаб (мм/норм.ед.) — если null, не можем вычислять
- * @param bikeType Тип велосипеда
- * @param multiCalibration Опционально: результат мульти-калибровки для согласованности параметров
- * @returns Массив подсказок (пустой = всё ок)
+ * @param points Текущие точки (нормированные 0..1)
+ * @param ctx Размер фото + результат движка v2
+ * @param bikeType Тип велосипеда — типичные диапазоны Stack/Reach
  */
 export function suggestPointCorrections(
   points: BikeKeyPoints,
-  scale: number,
-  bikeType: BikeType | null,
-  multiCalibration?: {
-    perParameter: Array<{ key: string; knownValueMm: number; pxDistance: number; scale: number; deviation: number }>;
-    outlier: string | null;
-  } | null
+  ctx: SuggestionContext,
+  bikeType: BikeType | null
 ): PointSuggestion[] {
   const suggestions: PointSuggestion[] = [];
+  if (!bikeType) return suggestions;
 
-  if (!bikeType || scale <= 0) return suggestions;
-
-  const bb = points.bb;
-  const htTop = points.htTop;
-  const htBottom = points.htBottom;
-  const rearAxle = points.rearAxle;
-  const frontAxle = points.frontAxle;
-  const saddleMount = points.saddleMount;
-  const stTop = points.stTop;
-
-  // === ПРОВЕРКА SH: если saddleHeight "выбивается" в мульти-калибровке,
-  // значит либо BB либо saddleMount стоят неточно.
-  // Используем другой scale (от WB/ETT) чтобы понять где saddleMount должна быть.
-  if (multiCalibration && multiCalibration.outlier === "saddleHeight") {
-    // Средний масштаб по другим параметрам (без SH).
-    // Берём параметры с разумным отклонением (до 25% — иначе они тоже подозрительные).
-    const others = multiCalibration.perParameter.filter(
-      (p) => p.key !== "saddleHeight" && Math.abs(p.deviation) < 25
-    );
-    if (
-      others.length > 0 &&
-      bb && bb.x != null && bb.y != null &&
-      saddleMount && saddleMount.x != null && saddleMount.y != null
-    ) {
-      const otherScale =
-        others.reduce((s, p) => s + p.scale, 0) / others.length;
-
-      // Известный SH (который мы доверяем как реальный)
-      const realSH = multiCalibration.perParameter.find(
-        (p) => p.key === "saddleHeight"
-      )?.knownValueMm;
-
-      if (realSH && realSH > 0) {
-        // Ожидаемое расстояние на фото
-        const expectedPx = realSH / otherScale;
-        // Текущее расстояние
-        const dx = saddleMount.x - bb.x;
-        const dy = saddleMount.y - bb.y;
-        const currentPx = Math.sqrt(dx * dx + dy * dy);
-        const ratio = currentPx / expectedPx;
-
-        // Если текущее расстояние > 1.10× ожидаемого — точки слишком далеко
-        if (ratio > 1.10) {
-          // Сдвигаем saddleMount ближе к BB, сохраняя направление
-          const factor = expectedPx / currentPx;
-          const newX = bb.x + dx * factor;
-          const newY = bb.y + dy * factor;
-
-          const dist = Math.sqrt(
-            Math.pow(newX - saddleMount.x, 2) + Math.pow(newY - saddleMount.y, 2)
-          );
-
-          suggestions.push({
-            pointKey: "saddleMount",
-            current: saddleMount,
-            suggested: { x: newX, y: newY },
-            problem:
-              `Расстояние BB→saddleMount по фото = ${currentPx.toFixed(3)} норм.ед., ` +
-              `а должно быть ≈ ${expectedPx.toFixed(3)} (при scale=${otherScale.toFixed(0)} мм/ед. от WB/ETT, ` +
-              `SH=${realSH} мм). Точки стоят на ${((ratio - 1) * 100).toFixed(0)}% дальше чем надо. ` +
-              `Скорее всего saddleMount стоит на верхней кромке штыря, а не на хомуте крепления седла.`,
-            action:
-              `Сдвинуть saddleMount ближе к BB (сохраняя направление) — ` +
-              `новые координаты: x=${newX.toFixed(3)}, y=${newY.toFixed(3)} ` +
-              `(сейчас: x=${saddleMount.x.toFixed(3)}, y=${saddleMount.y.toFixed(3)})`,
-            distance: dist,
-            severity: dist > 0.05 ? "major" : "minor",
-          });
-        }
-      }
-    }
+  const { imgSize, engine } = ctx;
+  if (!imgSize.width || !imgSize.height || !Number.isFinite(engine.scaleMmPerPx)) {
+    return suggestions;
   }
+  const s = engine.scaleMmPerPx;
 
-  // === ПРОВЕРКА HT ВЕРХ (Stack) ===
-  if (
-    bb && bb.x != null && bb.y != null &&
-    htTop && htTop.x != null && htTop.y != null
-  ) {
-    // Текущий Stack в мм
-    const currentStackMm = (bb.y - htTop.y) * scale;
+  // Перевод нормированная → пиксельная (X по ширине, Y по высоте)
+  const px = (p: NullablePoint): Point2D | null => {
+    if (!p || p.x == null || p.y == null) return null;
+    return { x: p.x * imgSize.width, y: p.y * imgSize.height };
+  };
+  // Пиксельная → нормированная, с ограничением внутрь фото
+  const toNorm = (p: Point2D): { x: number; y: number } => ({
+    x: Math.min(0.99, Math.max(0.01, p.x / imgSize.width)),
+    y: Math.min(0.99, Math.max(0.01, p.y / imgSize.height)),
+  });
+
+  const unrotate = makeInverseAlignedTransform(engine.frame);
+
+  const bbPx = px(points.bb);
+  const htTopPx = px(points.htTop);
+  const htBottomPx = px(points.htBottom);
+  const stTopPx = px(points.stTop);
+  const saddleMountPx = px(points.saddleMount);
+  const rearAxlePx = px(points.rearAxle);
+  const frontAxlePx = px(points.frontAxle);
+
+  // ============================================================
+  // 1. HT ВЕРХ / STACK — по метрике движка (выровненная система)
+  // ============================================================
+  if (bbPx && htTopPx && htBottomPx) {
+    const currentStackMm = engine.metricsMm.stack;
     const typicalStack = TYPICAL_STACK[bikeType];
 
-    // Если текущий Stack выходит за типичный диапазон более чем на 30 мм
-    if (currentStackMm > typicalStack.max + 30 || currentStackMm < typicalStack.min - 30) {
-      // Вычисляем целевой Stack (середину диапазона, если текущий сильно выходит)
+    if (
+      Number.isFinite(currentStackMm) &&
+      (currentStackMm > typicalStack.max + STACK_TOLERANCE_MM ||
+        currentStackMm < typicalStack.min - STACK_TOLERANCE_MM)
+    ) {
       const targetStackMm = currentStackMm > typicalStack.max
-        ? typicalStack.max  // слишком высоко — цель = максимум
-        : typicalStack.min; // слишком низко — цель = минимум
+        ? typicalStack.max
+        : typicalStack.min;
 
-      // Целевой Y для HT верх
-      const targetY = bb.y - targetStackMm / scale;
+      // Цель в ВЫРОВНЕННОЙ системе: на оси рулевой трубы (htBottom → htTop),
+      // на высоте targetStack над BB. Сохраняем угол трубы — двигаем только
+      // вдоль её оси.
+      const rot = engine.rotated;
+      const dirX = rot.htTop.x - rot.htBottom.x;
+      const dirY = rot.htTop.y - rot.htBottom.y;
+      const targetYrot = rot.bb.y - targetStackMm / s;
 
-      // По X: HT верх должен быть примерно над передней осью или чуть правее BB
-      // Используем frontAxle.x если есть, иначе берём 0.3 (типичное значение для бокового фото)
-      const targetX = frontAxle?.x != null ? frontAxle.x : htTop.x;
+      let targetRot: Point2D;
+      if (Math.abs(dirY) > 1e-6) {
+        const t = (targetYrot - rot.htBottom.y) / dirY;
+        targetRot = { x: rot.htBottom.x + t * dirX, y: targetYrot };
+      } else {
+        // Вырожденная (горизонтальная) рулевая — двигаем вертикально
+        targetRot = { x: rot.htTop.x, y: targetYrot };
+      }
+      const targetImg = unrotate(targetRot);
+      const suggested = toNorm(targetImg);
 
-      const dist = Math.sqrt(
-        Math.pow(targetX - htTop.x, 2) + Math.pow(targetY - htTop.y, 2)
-      );
+      const distMm = distance(
+        { x: engine.rotated.htTop.x, y: engine.rotated.htTop.y },
+        targetRot
+      ) * s;
 
-      const problem =
-        currentStackMm > typicalStack.max
-          ? `Stack = ${Math.round(currentStackMm)} мм — слишком высоко (норма для ${bikeType}: ${typicalStack.min}-${typicalStack.max} мм). Точка HT верх стоит слишком высоко на фото.`
-          : `Stack = ${Math.round(currentStackMm)} мм — слишком низко (норма для ${bikeType}: ${typicalStack.min}-${typicalStack.max} мм). Точка HT верх стоит слишком низко на фото.`;
+      const tooHigh = currentStackMm > typicalStack.max;
+      const outOfPhoto =
+        targetImg.x < 0 || targetImg.x > imgSize.width ||
+        targetImg.y < 0 || targetImg.y > imgSize.height;
 
       suggestions.push({
         pointKey: "htTop",
-        current: htTop,
-        suggested: { x: targetX, y: targetY },
-        problem,
-        action: `Опустить/поднять точку HT верх на y=${targetY.toFixed(3)} (сейчас y=${htTop.y.toFixed(3)})`,
-        distance: dist,
-        severity: dist > 0.05 ? "major" : "minor",
+        current: points.htTop,
+        suggested,
+        problem:
+          `Stack = ${Math.round(currentStackMm)} мм — слишком ${tooHigh ? "высоко" : "низко"} ` +
+          `(норма для ${bikeType}: ${typicalStack.min}-${typicalStack.max} мм). ` +
+          `Точка HT верх стоит слишком ${tooHigh ? "высоко" : "низко"} на фото.` +
+          (outOfPhoto
+            ? " Ожидаемое место выходит за край фото — проверьте разметку BB и рулевой."
+            : ""),
+        action:
+          `Поставить HT верх на оси рулевой трубы со Stack ≈ ${Math.round(targetStackMm)} мм: ` +
+          `x=${suggested.x.toFixed(3)}, y=${suggested.y.toFixed(3)} ` +
+          `(сейчас: x=${points.htTop?.x?.toFixed(3) ?? "—"}, y=${points.htTop?.y?.toFixed(3) ?? "—"})`,
+        distance: Math.round(distMm),
+        severity: distMm > 50 ? "major" : "minor",
       });
     }
   }
 
-  // === ПРОВЕРКА HT ВЕРХ и HT НИЗ (длина рулевой трубы) ===
-  // Длина рулевой трубы = HT верх → HT низ (а HT низ совпадает с короной вилки).
-  // Норма: шоссе 90-180 мм, MTB 90-130 мм.
-  // Если получается > 250 мм — HT верх стоит слишком высоко (на руле или выносе, а не на раме).
-  if (
-    htTop && htTop.x != null && htTop.y != null &&
-    htBottom && htBottom.x != null && htBottom.y != null
-  ) {
-    const htLengthMm = Math.sqrt(
-      Math.pow((htTop.x - htBottom.x) * scale, 2) +
-      Math.pow((htTop.y - htBottom.y) * scale, 2)
-    );
-    if (htLengthMm > 250) {
-      // Скорее всего HT верх стоит на руле или на выносе, а не на трубе рамы.
-      // Опускаем HT верх к HT низу на типичное расстояние рулевой трубы (120 мм).
-      const targetY = htBottom.y - (120 / scale);
-      const targetX = htBottom.x; // примерно вертикально над HT низ
-
-      const dist = Math.sqrt(
-        Math.pow(targetX - htTop.x, 2) + Math.pow(targetY - htTop.y, 2)
-      );
+  // ============================================================
+  // 2. HT ВЕРХ / ДЛИНА РУЛЕВОЙ ТРУБЫ — по метрике движка
+  //
+  // Пропускается, если подсказка для htTop уже выдана проверкой Stack —
+  // иначе две цели для одной точки конфликтуют в UI («применить все»).
+  // ============================================================
+  if (htTopPx && htBottomPx && !suggestions.some((s) => s.pointKey === "htTop")) {
+    const htLengthMm = engine.extendedMm.headTubeLength;
+    if (Number.isFinite(htLengthMm) && htLengthMm > MAX_HEAD_TUBE_MM) {
+      // HT верх стоит на руле/выносе, а не на трубе. Цель: на оси трубы,
+      // на типичном расстоянии (120 мм) от HT низ (корона вилки).
+      const rot = engine.rotated;
+      const len = distance(rot.htTop, rot.htBottom);
+      const dirX = len > 1e-6 ? (rot.htTop.x - rot.htBottom.x) / len : 0;
+      const dirY = len > 1e-6 ? (rot.htTop.y - rot.htBottom.y) / len : -1;
+      const targetRot: Point2D = {
+        x: rot.htBottom.x + dirX * (TYPICAL_HEAD_TUBE_MM / s),
+        y: rot.htBottom.y + dirY * (TYPICAL_HEAD_TUBE_MM / s),
+      };
+      const suggested = toNorm(unrotate(targetRot));
+      const distMm = distance(rot.htTop, targetRot) * s;
 
       suggestions.push({
         pointKey: "htTop",
-        current: htTop,
-        suggested: { x: targetX, y: targetY },
-        problem: `Длина рулевой трубы (HT верх → HT низ) = ${Math.round(htLengthMm)} мм — нереально (норма 80-180 мм). Скорее всего HT верх стоит на руле или выносе, а не на трубе рамы. HT низ правильно стоит на короне вилки.`,
-        action: `Опустить HT верх к трубе рамы: y=${targetY.toFixed(3)} (сейчас y=${htTop.y.toFixed(3)})`,
-        distance: dist,
-        severity: dist > 0.05 ? "major" : "minor",
+        current: points.htTop,
+        suggested,
+        problem:
+          `Длина рулевой трубы (HT верх → HT низ) = ${Math.round(htLengthMm)} мм — нереально ` +
+          `(норма 80-180 мм). Скорее всего HT верх стоит на руле или выносе, а не на трубе рамы. ` +
+          `HT низ правильно стоит на короне вилки.`,
+        action:
+          `Опустить HT верх к трубе рамы (≈${TYPICAL_HEAD_TUBE_MM} мм над короной, по оси трубы): ` +
+          `x=${suggested.x.toFixed(3)}, y=${suggested.y.toFixed(3)}`,
+        distance: Math.round(distMm),
+        severity: distMm > 50 ? "major" : "minor",
       });
     }
   }
 
-  // === ПРОВЕРКА ОСЕЙ: должны быть примерно на одном Y ===
-  if (
-    rearAxle && rearAxle.x != null && rearAxle.y != null &&
-    frontAxle && frontAxle.x != null && frontAxle.y != null
-  ) {
-    const deltaY = Math.abs(frontAxle.y - rearAxle.y);
+  // ============================================================
+  // 3. ST ВЕРХ — должен лежать на ОСИ подседельной трубы (BB → седло)
+  //
+  // stTop валиден в ЛЮБОЙ точке оси (положение верха трубы рамы зависит от
+  // размера рамы), поэтому проверяем не «35% пути», а поперечное
+  // отклонение от линии BB → saddleMount. Цель — на оси на сохранённом
+  // расстоянии от BB (метрика ST length не меняется).
+  // ============================================================
+  if (bbPx && stTopPx && saddleMountPx) {
+    const offAxisMm =
+      perpendicularDistance(stTopPx, bbPx, saddleMountPx) * s;
+    if (offAxisMm > ST_TOP_OFF_AXIS_MM) {
+      const dx = saddleMountPx.x - bbPx.x;
+      const dy = saddleMountPx.y - bbPx.y;
+      // Цель: на оси подседельной трубы (BB → saddleMount), на СОХРАНЁННОМ
+      // расстоянии от BB — метрика «длина подседельной» не меняется после
+      // применения подсказки, убирается только поперечное отклонение.
+      const stLenPx = distance(stTopPx, bbPx);
+      const len = Math.sqrt(dx * dx + dy * dy);
+      const target: Point2D = len > 1e-9
+        ? { x: bbPx.x + (dx / len) * stLenPx, y: bbPx.y + (dy / len) * stLenPx }
+        : stTopPx;
+      const suggested = toNorm(target);
+      const stLenMm = engine.extendedMm.seatTubeLength;
+
+      suggestions.push({
+        pointKey: "stTop",
+        current: points.stTop,
+        suggested,
+        problem:
+          `Верх подседельной трубы стоит на ${Math.round(offAxisMm)} мм в стороне от оси ` +
+          `подседельной (линия BB → крепление седла)` +
+          (Number.isFinite(stLenMm) ? `. Длина трубы по фото: ${Math.round(stLenMm)} мм.` : "") +
+          ` Обычно точка попадает на линию BB → седло.`,
+        action:
+          `Сдвинуть ST верх на ось подседельной трубы (сохранив длину ${Number.isFinite(stLenMm) ? Math.round(stLenMm) + " мм" : "трубы"}): ` +
+          `x=${suggested.x.toFixed(3)}, y=${suggested.y.toFixed(3)} ` +
+          `(сейчас: x=${points.stTop?.x?.toFixed(3) ?? "—"}, y=${points.stTop?.y?.toFixed(3) ?? "—"})`,
+        distance: Math.round(offAxisMm),
+        severity: offAxisMm > 50 ? "major" : "minor",
+      });
+    }
+  }
+
+  // ============================================================
+  // 4. ОСИ КОЛЁС — разница Y на сыром фото (перспектива/наклон)
+  //
+  // Проверка по СЫРЫМ координатам фото: движок v2 компенсирует наклон
+  // математически, но сильная разница Y — признак перспективы, которую
+  // лучше исправить (панель «Коррекция перспективы»).
+  // ============================================================
+  if (rearAxlePx && frontAxlePx) {
+    const deltaY = Math.abs(frontAxlePx.y - rearAxlePx.y) / imgSize.height;
     if (deltaY > 0.05) {
-      const targetY = rearAxle.y;
-      const dist = Math.abs(targetY - frontAxle.y);
+      const targetY = rearAxlePx.y;
+      const distMm = Math.abs(targetY - frontAxlePx.y) * s;
 
       suggestions.push({
         pointKey: "frontAxle",
-        current: frontAxle,
-        suggested: { x: frontAxle.x, y: targetY },
-        problem: `Передняя ось на ${(deltaY * 100).toFixed(1)}% выше/ниже задней. Либо фото снято под углом, либо ось стоит неточно. Можно выровнять по задней или применить коррекцию перспективы.`,
-        action: `Выровнять переднюю ось по Y задней (y=${targetY.toFixed(3)}, сейчас y=${frontAxle.y.toFixed(3)})`,
-        distance: dist,
-        severity: dist > 0.08 ? "major" : "minor",
-      });
-    }
-  }
-
-  // === ПРОВЕРКА ST ВЕРХ: должен быть примерно над/под BB ===
-  if (
-    bb && bb.x != null && bb.y != null &&
-    stTop && stTop.x != null && stTop.y != null &&
-    saddleMount && saddleMount.x != null && saddleMount.y != null
-  ) {
-    // ST верх обычно чуть правее BB (по направлению к седлу), на ~30-50% пути от BB к saddleMount
-    // Если ST верх стоит далеко от линии BB→saddleMount — возможно ошибка
-    const dxToSaddle = saddleMount.x - bb.x;
-    const dyToSaddle = saddleMount.y - bb.y;
-    // ST верх должен быть на ~30-50% от BB к saddleMount (по длине подседельной трубы)
-    // Если saddleMount высоко (y=0.2), а BB внизу (y=0.69), то ST верх ≈ y=0.35-0.40
-    const expectedStTopRatio = 0.35; // 35% пути от BB к saddleMount
-    const expectedStTopX = bb.x + dxToSaddle * expectedStTopRatio;
-    const expectedStTopY = bb.y + dyToSaddle * expectedStTopRatio;
-    const stTopDist = Math.sqrt(
-      Math.pow(stTop.x - expectedStTopX, 2) + Math.pow(stTop.y - expectedStTopY, 2)
-    );
-    if (stTopDist > 0.1) {
-      suggestions.push({
-        pointKey: "stTop",
-        current: stTop,
-        suggested: { x: expectedStTopX, y: expectedStTopY },
-        problem: `Верх подседельной трубы стоит далеко от ожидаемого места (на ~35% пути от BB к седлу).`,
-        action: `Сдвинуть ST верх ближе к (x=${expectedStTopX.toFixed(3)}, y=${expectedStTopY.toFixed(3)})`,
-        distance: stTopDist,
-        severity: stTopDist > 0.15 ? "major" : "minor",
+        current: points.frontAxle,
+        suggested: toNorm({ x: frontAxlePx.x, y: targetY }),
+        problem:
+          `Передняя ось на ${(deltaY * 100).toFixed(1)}% выше/ниже задней. Либо фото снято под углом, ` +
+          `либо ось стоит неточно. Можно выровнять по задней или применить коррекцию перспективы ` +
+          `(движок уже компенсирует наклон ${engine.anglesDeg.frameTilt.toFixed(1)}° математически).`,
+        action:
+          `Выровнять переднюю ось по Y задней (y=${(targetY / imgSize.height).toFixed(3)}, ` +
+          `сейчас y=${points.frontAxle?.y?.toFixed(3) ?? "—"})`,
+        distance: Math.round(distMm),
+        severity: distMm > imgSize.height * 0.08 * s ? "major" : "minor",
       });
     }
   }

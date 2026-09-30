@@ -63,3 +63,6 @@ server.log
 /.zscripts
 /agent-ctx
 /worklog.md
+
+# Sandbox tool artifacts
+/tool-results

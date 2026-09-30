@@ -9,8 +9,6 @@ import {
   ArrowRight,
   ArrowUpDown,
   Ruler,
-  Aperture,
-  RotateCcw,
   ZoomIn,
 } from "lucide-react";
 import {
@@ -28,20 +26,24 @@ import { PhotoUploader } from "@/components/bike-fit/PhotoUploader";
 import { cn } from "@/lib/utils";
 import { InteractivePhoto } from "./InteractivePhoto";
 import {
-  calibrateScale,
-  computeParamsFromPhoto,
   compareMeasuredVsComputed,
   getOverallMatch,
   detectPerspective,
-  applyPerspectiveCorrection,
   type BikeKeyPoints,
   type KnownDimensionKey,
   type ComputedBikeParams,
   type ComparisonResult,
-  type CalibrationDiagnostics,
   type PerspectiveInfo,
   type NullablePoint,
 } from "@/lib/bike-photo-scale";
+import {
+  calculateBikeGeometry,
+  makeAlignedTransform,
+  type BikeKeypoints as EngineKeypoints,
+  type CalibrationConfig as EngineCalibrationConfig,
+  type CalibrationKey as EngineCalibrationKey,
+  type BikeGeometryResult,
+} from "@/lib/bike-geometry-engine";
 import {
   calculateDualScale,
   getLocalScale,
@@ -158,33 +160,32 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     setComparisons([]);
     setError(null);
     setPointsMissing([]);
-    setDiagnostics(null);
     setDebugLog([]);
     setPlacementMode(false);
     setPlacementPointKey(null);
-    setPerspectiveApplied(false);
     setPerspectiveInfo(null);
-    setOriginalPoints(null);
     setDualScale(null);
     setAutoCalibration(null);
     setConfidenceAssessment(null);
+    setEngineWarnings([]);
+    setEngineResult(null);
+    setScaleSourceInfo(null);
 
     lastEmittedRef.current = {
       photoUrl: initialPhotoUrl ?? null,
       keyPoints: initialKeyPoints ?? null,
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPhotoUrl, initialKeyPoints]);
 
   const [knownKey, setKnownKey] = useState<KnownDimensionKey>("saddleHeight");
   const [computed, setComputed] = useState<ComputedBikeParams | null>(null);
   const [comparisons, setComparisons] = useState<ComparisonResult[]>([]);
   const [pointsMissing, setPointsMissing] = useState<string[]>([]);
-  const [diagnostics, setDiagnostics] = useState<CalibrationDiagnostics | null>(null);
   const [debugLog, setDebugLog] = useState<string[]>([]);
   const [placementMode, setPlacementMode] = useState(false);
   const [placementPointKey, setPlacementPointKey] = useState<keyof BikeKeyPoints | null>(null);
-  const [perspectiveApplied, setPerspectiveApplied] = useState(false);
+  // Перспектива: только ИНФОРМАЦИЯ для dual scale — интерактивная коррекция
+  // удалена: ядро v2 выравнивает кадр автоматически (rotation-first)
   const [perspectiveInfo, setPerspectiveInfo] = useState<PerspectiveInfo | null>(null);
   // NOTE: useMultiCalibration/multiCalibration УБРАНО — теперь авто-выбор primary
   // (через calculateAutoFitCalibration из bike-calibration-helper.ts).
@@ -192,6 +193,15 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
   const [dualScale, setDualScale] = useState<DualScale | null>(null);
   // Авто-калибровка: scale + tiltAngleRad (математическая компенсация, БЕЗ поворота точек)
   const [autoCalibration, setAutoCalibration] = useState<CalibrationResult | null>(null);
+  // ЯДРО v2 (bike-geometry-engine): предупреждения и источник рабочего масштаба
+  const [engineWarnings, setEngineWarnings] = useState<string[]>([]);
+  const [engineResult, setEngineResult] = useState<BikeGeometryResult | null>(null);
+  const [scaleSourceInfo, setScaleSourceInfo] = useState<{
+    scaleMmPerPx: number;
+    source: string;
+    tiltDeg: number;
+    facingRight: boolean;
+  } | null>(null);
   const [confidenceAssessment, setConfidenceAssessment] = useState<ConfidenceAssessment | null>(null);
   const [imgSize, setImgSize] = useState<{ width: number; height: number } | null>(null);
 
@@ -276,16 +286,16 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     setComparisons([]);
     setError(null);
     setPointsMissing([]);
-    setDiagnostics(null);
     setDebugLog([]);
     setPlacementMode(false);
     setPlacementPointKey(null);
-    setPerspectiveApplied(false);
     setPerspectiveInfo(null);
-    setOriginalPoints(null);
     setDualScale(null);
     setAutoCalibration(null);
     setConfidenceAssessment(null);
+    setEngineWarnings([]);
+    setEngineResult(null);
+    setScaleSourceInfo(null);
     // Конвертируем в base64 и сохраняем
     if (onPhotoChange) {
       const reader = new FileReader();
@@ -310,16 +320,16 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     setComparisons([]);
     setError(null);
     setPointsMissing([]);
-    setDiagnostics(null);
     setDebugLog([]);
     setPlacementMode(false);
     setPlacementPointKey(null);
-    setPerspectiveApplied(false);
     setPerspectiveInfo(null);
-    setOriginalPoints(null);
     setDualScale(null);
     setAutoCalibration(null);
     setConfidenceAssessment(null);
+    setEngineWarnings([]);
+    setEngineResult(null);
+    setScaleSourceInfo(null);
     if (onPhotoChange) {
       lastEmittedRef.current = { photoUrl: null, keyPoints: null };
       onPhotoChange(null, null);
@@ -345,8 +355,9 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     setComputed(null);
     setComparisons([]);
     setError(null);
-    setDiagnostics(null);
     setPointsMissing([]);
+    setEngineWarnings([]);
+    setScaleSourceInfo(null);
     setPlacementMode(true);
     setPlacementPointKey("bb");
 
@@ -393,8 +404,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         `    Reach (старый) = ${measured.reach ?? "—"} мм ${measured.reach != null ? "[фото-раньше]" : "[нет]"}`,
         `    Stack (старый) = ${measured.stack ?? "—"} мм ${measured.stack != null ? "[фото-раньше]" : "[нет]"}`,
         `  bikeType = ${useBikeStore.getState().bikeType ?? "— (не выбран)"}`,
-        `  perspectiveApplied = ${perspectiveApplied ? "ДА" : "нет"}`,
-        `  points (нормализованные 0..1${perspectiveApplied ? " + коррекции перспективы" : ""}):`,
+        `  points (нормализованные 0..1):`,
         ...Object.entries(pts).map(([k, v]) => `    ${k}: x=${v?.x?.toFixed(4) ?? "null"}, y=${v?.y?.toFixed(4) ?? "null"}`),
       ];
       setDebugLog((prev) => [...prev.slice(-50), ...newLog]);
@@ -410,19 +420,118 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
           `    deltaY (front.y − rear.y) = ${perspective.deltaY.toFixed(4)} норм.ед.`,
           `    angle ≈ ${perspective.angleDeg.toFixed(2)}°`,
           `    severity = ${perspective.severity}`,
-          `    ${perspectiveApplied ? "✓ Коррекция применена" : perspective.needsCorrection ? "⚠ Рекомендуется коррекция (кнопка ниже)" : "✓ Коррекция не требуется"}`,
+          `    ${perspective.needsCorrection ? "⚠ Наклон заметный — учтён ядром автоматически; при сильном завале лучше переснять" : "✓ Наклон мал — компенсируется ядром автоматически"}`,
         ]);
       }
 
-      const { scale, diagnostics: diag } = calibrateScale(pts, {
-        key: knownKey,
-        value: knownVal,
-      });
-      setDiagnostics(diag);
+      // === ЯДРО v2 (bike-geometry-engine): STRICT SCALE HIERARCHY + ROTATION FIRST ===
+      // Правило ТЗ №2: userOverride СТРОГО — масштаб считается по отрезку,
+      // выбранному пользователем (knownKey). Переключение на авто-WB физически
+      // невозможно (см. scaleSource в результате движка).
+      // Правило ТЗ №3: сначала ПОВОРОТ всех точек по оси колёс, затем масштаб
+      // и проекции — Stack/Reach/ETT считаются в выровненной системе.
+      if (!imgSize) {
+        setError("Размеры фото ещё не загружены — попробуйте ещё раз через секунду.");
+        setDebugLog((prev) => [...prev, ``, `  ❌ imgSize не готов — расчёт в пикселях невозможен`]);
+        return;
+      }
 
-      // === АВТО-КАЛИБРОВКА (новая логика) ===
-      // Авто-выбор primary параметра по наибольшему px-расстоянию
-      // + математический расчёт tiltAngleRad (БЕЗ поворота точек!)
+      // 7 обязательных bike-only точек ядра
+      const requiredKeys = [
+        "rearAxle",
+        "frontAxle",
+        "bb",
+        "stTop",
+        "saddleMount",
+        "htBottom",
+        "htTop",
+      ] as const;
+      const missing = requiredKeys.filter(
+        (k) => !pts[k] || pts[k].x == null || pts[k].y == null
+      );
+      if (missing.length > 0) {
+        setPointsMissing([...missing]);
+        setError(
+          `Для расчёта не хватает точек: ${missing.join(", ")}. Разметьте их на фото.`
+        );
+        setDebugLog((prev) => [
+          ...prev,
+          ``,
+          `  ❌ Отсутствуют обязательные точки ядра: ${missing.join(", ")}`,
+        ]);
+        return;
+      }
+      setPointsMissing([]);
+
+      // Нормализованные [0..1] → пиксели (критично для неквадратных фото:
+      // X нормирован по ширине, Y — по высоте)
+      const toPxPt = (p: NullablePoint): { x: number; y: number } => ({
+        x: (p.x ?? 0) * imgSize.width,
+        y: (p.y ?? 0) * imgSize.height,
+      });
+      const enginePts: EngineKeypoints = {
+        rearAxle: toPxPt(pts.rearAxle as NullablePoint),
+        frontAxle: toPxPt(pts.frontAxle as NullablePoint),
+        bb: toPxPt(pts.bb as NullablePoint),
+        stTop: toPxPt(pts.stTop as NullablePoint),
+        saddleMount: toPxPt(pts.saddleMount as NullablePoint),
+        htBottom: toPxPt(pts.htBottom as NullablePoint),
+        htTop: toPxPt(pts.htTop as NullablePoint),
+      };
+
+      // STRICT-иерархия масштаба: ручной ввод — приоритет, WB — только fallback
+      const SUPPORTED_OVERRIDE_KEYS = new Set(["saddleHeight", "wheelbase", "ett"]);
+      const wbFallbackMm = getCalibValue("wheelbase");
+      const engineConfig: EngineCalibrationConfig = {
+        userOverrideKey: SUPPORTED_OVERRIDE_KEYS.has(knownKey)
+          ? (knownKey as EngineCalibrationKey)
+          : undefined,
+        userOverrideValueMm: knownVal,
+        fallbackWheelbaseMm: wbFallbackMm ?? undefined,
+      };
+      if (!SUPPORTED_OVERRIDE_KEYS.has(knownKey)) {
+        setDebugLog((prev) => [
+          ...prev,
+          ``,
+          `  ⚠ knownKey=${knownKey} не поддерживается ядром — масштаб по fallback WB`,
+        ]);
+      }
+
+      let engine: BikeGeometryResult;
+      try {
+        engine = calculateBikeGeometry(enginePts, engineConfig);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setError(`Ядро геометрии: ${msg}`);
+        setComputed(null);
+        setComparisons([]);
+        setEngineWarnings([]);
+        setEngineResult(null);
+        setScaleSourceInfo(null);
+        setDebugLog((prev) => [...prev, ``, `  ❌ calculateBikeGeometry: ${msg}`]);
+        return;
+      }
+
+      setEngineWarnings(engine.warnings);
+      setEngineResult(engine);
+      setScaleSourceInfo({
+        scaleMmPerPx: engine.scaleMmPerPx,
+        source: engine.scaleSource,
+        tiltDeg: engine.anglesDeg.frameTilt,
+        facingRight: engine.frame.facingRight,
+      });
+
+      setDebugLog((prev) => [
+        ...prev,
+        ``,
+        `  ЯДРО v2 (rotation-first, strict scale):`,
+        `    Направление: ${engine.frame.facingRight ? "вправо" : "влево → зеркалено (нормализовано вправо)"}`,
+        `    Наклон оси колёс: ${engine.anglesDeg.frameTilt.toFixed(2)}° — ПОВОРОТ применён ДО всех расчётов`,
+        `    МАСШТАБ: ${engine.scaleMmPerPx.toFixed(4)} мм/пикс`,
+        `    Источник масштаба: ${engine.scaleSource}`,
+      ]);
+
+      // === ПЕРЕКРЁСТНАЯ ПРОВЕРКА (справочно; на рабочий масштаб НЕ влияет) ===
       const shMm = getCalibValue("saddleHeight");
       const ettMm = getCalibValue("ett");
       const wbMm = getCalibValue("wheelbase");
@@ -446,78 +555,77 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
       setDebugLog((prev) => [
         ...prev,
         ``,
-        `  Авто-калибровка (новая логика):`,
-        `    Primary параметр: ${autoCalib.primaryParam} (knownKey=${knownKey} используется только как справочный якорь)`,
-        `    scale = ${autoCalib.scalePxToMm.toFixed(4)} мм/пикс`,
-        `    tiltAngleRad = ${autoCalib.tiltAngleRad.toFixed(4)} рад (${(autoCalib.tiltAngleRad * 180 / Math.PI).toFixed(2)}°)`,
+        `  Перекрёстная проверка масштаба (справочно — приоритет у userOverride):`,
         ...(autoCalib.candidates && autoCalib.candidates.length > 1
           ? [
-              `    Кандидаты масштаба:`,
+              `    Кандидаты:`,
               ...autoCalib.candidates.map(
                 (c) =>
-                  `      ${c.type}: ${c.scale.toFixed(4)} мм/пикс${c.isPrimary ? "  [primary]" : `  (откл. ${c.deviationPct > 0 ? "+" : ""}${c.deviationPct.toFixed(1)}%)`}`
+                  `      ${c.type}: ${c.scale.toFixed(4)} мм/пикс${c.isPrimary ? "  [базовый для сравнения]" : `  (откл. ${c.deviationPct > 0 ? "+" : ""}${c.deviationPct.toFixed(1)}%)`}`
               ),
             ]
           : []),
         autoCalib.validationWarning
-          ? `    ⚠ Валидация: ${autoCalib.validationWarning}`
-          : `    ✓ Валидация пройдена (расхождение <12%)`,
+          ? `    ⚠ Согласованность: ${autoCalib.validationWarning}`
+          : `    ✓ Кандидаты согласованы (расхождение <12%)`,
       ]);
 
-      // Используем масштаб из АВТО-КАЛИБРОВКИ (primary параметр с наибольшим px-расстоянием)
-      // вместо user-selected knownKey. Это даёт минимальную погрешность.
-      const finalScale = autoCalib.scalePxToMm > 0 ? autoCalib.scalePxToMm : scale;
+      // Опциональный htTopCap (посадка райдера) — проецируем в выровненную
+      // систему тем же преобразованием, что и ядро (makeAlignedTransform)
+      const xform = makeAlignedTransform(engine.frame);
+      const capPx =
+        pts.htTopCap && pts.htTopCap.x != null && pts.htTopCap.y != null
+          ? xform(toPxPt(pts.htTopCap))
+          : null;
 
-      // Логируем какой масштаб использован (правильные единицы: мм/пикс,
-      // т.к. calculateAutoFitCalibration считает в пикселях через imgSize)
-      setDebugLog((prev) => [
-        ...prev,
-        `  РАБОЧИЙ масштаб: finalScale = ${finalScale.toFixed(4)} мм/пикс (источник: ${autoCalib.scalePxToMm > 0 ? autoCalib.primaryParam + " (авто)" : knownKey + " (fallback)"})`,
-        `    Справочно: якорь knownKey=${knownKey} даёт ${scale != null ? scale.toFixed(2) : "—"} мм/норм.ед. — в расчёте НЕ участвует при автовыборе`,
-      ]);
-
-      if (!finalScale || finalScale <= 0) {
-        const reason = diag.reason || "неизвестная причина";
-        setError(`Не удалось откалибровать масштаб: ${reason}`);
-        setDebugLog((prev) => [
-          ...prev,
-          ``,
-          `  ❌ calibrateScale вернул null`,
-          `  причина: ${reason}`,
-          `  pxDistance (расстояние между точками калибровки) = ${diag.pxDistanceRaw}`,
-          `  pointA = ${diag.pointA ? JSON.stringify(diag.pointA) : "—"}`,
-          `  pointB = ${diag.pointB ? JSON.stringify(diag.pointB) : "—"}`,
-        ]);
-        setComputed(null);
-        setComparisons([]);
-        return;
-      }
-
-      setDebugLog((prev) => [
-        ...prev,
-        ``,
-        `  ✓ Калибровка успешна:`,
-        `    Рабочий масштаб = ${finalScale.toFixed(4)} мм/пикс (primary: ${autoCalib.primaryParam})`,
-        `    Справочный якорь (knownKey=${knownKey}): scale = ${scale.toFixed(2)} мм/норм.ед.`,
-        `    pxDistance якоря (норм. ед.) = ${diag.pxDistanceRaw?.toFixed(4)}`,
-        `    pointA = ${diag.pointA?.label}: x=${diag.pointA?.x?.toFixed(4)}, y=${diag.pointA?.y?.toFixed(4)}`,
-        `    pointB = ${diag.pointB?.label}: x=${diag.pointB?.x?.toFixed(4)}, y=${diag.pointB?.y?.toFixed(4)}`,
-      ]);
-
-      const params = computeParamsFromPhoto(pts, finalScale ?? 0, knownKey, imgSize ?? undefined);
+      // Маппинг результата движка в ComputedBikeParams (совместимость с UI)
+      const params: ComputedBikeParams = {
+        saddleHeight: engine.metricsMm.saddleHeight,
+        ett: engine.metricsMm.ett,
+        ettDirect: engine.extendedMm.ettDirect,
+        reach: engine.metricsMm.reach,
+        stack: engine.metricsMm.stack,
+        stem: null,
+        wheelbase: engine.metricsMm.wheelbase,
+        wheelHeight: null,
+        bbHeight: null,
+        bbDrop: engine.extendedMm.bbDrop,
+        rearCenter: engine.extendedMm.rearCenter,
+        frontCenter: engine.extendedMm.frontCenter,
+        stackReachRatio: engine.extendedMm.stackReachRatio,
+        setback: engine.extendedMm.setback,
+        seatTubeLength: engine.extendedMm.seatTubeLength,
+        forkLength: engine.extendedMm.forkLength,
+        headTubeLength: engine.extendedMm.headTubeLength,
+        forkOffset: engine.extendedMm.forkOffset,
+        handlebarHeight: capPx
+          ? Math.round(Math.abs(engine.rotated.bb.y - capPx.y) * engine.scaleMmPerPx)
+          : null,
+        spacerStackHeight: capPx
+          ? Math.round(Math.abs(engine.rotated.htTop.y - capPx.y) * engine.scaleMmPerPx)
+          : null,
+        sta: Number.isFinite(engine.anglesDeg.seatTubeAngle)
+          ? engine.anglesDeg.seatTubeAngle
+          : null,
+        hta: Number.isFinite(engine.anglesDeg.headTubeAngle)
+          ? engine.anglesDeg.headTubeAngle
+          : null,
+        scale: engine.scaleMmPerPx,
+        calibratedBy: knownKey,
+      };
       setComputed(params);
 
       setDebugLog((prev) => [
         ...prev,
         ``,
-        `  Вычисленные параметры (из фото):`,
+        `  Вычисленные параметры (выровненная система, мм):`,
         `    SH (BB→седло) = ${params.saddleHeight ?? "null"} мм`,
-        `    ETT (формула Reach+Stack/tan(STA)) = ${params.ett ?? "null"} мм`,
+        `    ETT (пересечение горизонали HT с осью ST) = ${params.ett ?? "null"} мм`,
         `    ETT прямой (горизонталь ST→HT) = ${params.ettDirect ?? "null"} мм`,
         `    Reach (горизонталь BB→HT) = ${params.reach ?? "null"} мм`,
         `    Stack (вертикаль BB→HT) = ${params.stack ?? "null"} мм`,
         `    WB (rear→front ось) = ${params.wheelbase ?? "null"} мм`,
-        `    Setback (горизонталь BB→седло) = ${params.setback ?? "null"} мм`,
+        `    Setback (⊥ к оси подседельной) = ${params.setback ?? "null"} мм`,
         `    BB Drop (вертикаль BB→ось колеса) = ${params.bbDrop ?? "null"} мм`,
         `    ST (BB→верх ST) = ${params.seatTubeLength ?? "null"} мм`,
         `    RC (BB→задняя ось) = ${params.rearCenter ?? "null"} мм`,
@@ -528,6 +636,11 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         `    Stack/Reach = ${params.stackReachRatio ?? "null"}`,
         `    STA = ${params.sta ?? "null"}° (угол подседельной трубы)`,
         `    HTA = ${params.hta ?? "null"}° (угол рулевой трубы)`,
+        ``,
+        `  Предупреждения движка (${engine.warnings.length}):`,
+        ...(engine.warnings.length > 0
+          ? engine.warnings.map((w) => `    ⚠ ${w}`)
+          : [`    ✓ нет`]),
         ``,
         `  Проверки (что физически возможно):`,
         ...buildValidationChecks(params),
@@ -619,7 +732,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
           .map((p) => `    ${p.label}: ${p.value} [${p.confidence}] ${p.warnings[0] ?? ""}`),
       ]);
     },
-    [knownKey, measured, perspectiveApplied, getCalibValue, imgSize, bikeType, perspectiveInfo]
+    [knownKey, measured, getCalibValue, imgSize, bikeType]
   );
 
   const handleCalibrate = useCallback(() => {
@@ -633,14 +746,19 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
       `  knownKey = ${knownKey}, knownValue = ${knownValue} мм`,
     ]);
     runCalibration(keyPoints, knownValue);
-  }, [keyPoints, knownValue, runCalibration, perspectiveApplied, knownKey]);
+  }, [keyPoints, knownValue, runCalibration, knownKey]);
 
   // Подсказки для точек — что и где нужно поправить.
-  // Вычисляются после калибровки, потому что нужен scale.
+  // v2: работают в пиксельном пространстве через результат ядра
+  // (масштаб мм/пикс, выровненная система) — цифры совпадают с отчётом.
   const pointSuggestions: PointSuggestion[] = useMemo(() => {
-    if (!keyPoints || !computed || !bikeType) return [];
-    return suggestPointCorrections(keyPoints, computed.scale, bikeType, null);
-  }, [keyPoints, computed, bikeType]);
+    if (!keyPoints || !engineResult || !bikeType || !imgSize) return [];
+    return suggestPointCorrections(
+      keyPoints,
+      { imgSize, engine: engineResult },
+      bikeType
+    );
+  }, [keyPoints, engineResult, bikeType, imgSize]);
 
   const handleApplySuggestion = useCallback((suggestion: PointSuggestion) => {
     if (!keyPoints) return;
@@ -698,62 +816,6 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
       runCalibration(corrected, knownValue);
     }
   }, [keyPoints, pointSuggestions, knownValue, runCalibration]);
-
-  // Применить коррекцию перспективы: преобразует точки (аффинный сдвиг Y
-  // так, чтобы оси колёс выровнялись). После этого пересчитывает всё.
-  const handleApplyPerspective = useCallback(() => {
-    if (!keyPoints) return;
-    const corrected = applyPerspectiveCorrection(keyPoints);
-
-    // Логируем: до/после всех точек
-    const ts = new Date().toLocaleTimeString();
-    setDebugLog((prev) => [
-      ...prev.slice(-80),
-      ``,
-      `[${ts}] 📐 Применить коррекцию перспективы (выровнять оси колёс по Y):`,
-      `  точки до коррекции:`,
-      ...Object.entries(keyPoints).map(([k, v]) => `    ${k}: x=${(v as any)?.x?.toFixed(4) ?? "null"}, y=${(v as any)?.y?.toFixed(4) ?? "null"}`),
-      `  точки после коррекции:`,
-      ...Object.entries(corrected).map(([k, v]) => `    ${k}: x=${(v as any)?.x?.toFixed(4) ?? "null"}, y=${(v as any)?.y?.toFixed(4) ?? "null"}`),
-    ]);
-
-    setKeyPoints(corrected);
-    setPerspectiveApplied(true);
-    // Пересчёт с новыми точками
-    if (knownValue != null && knownValue > 0) {
-      runCalibration(corrected, knownValue);
-    }
-  }, [keyPoints, knownValue, runCalibration]);
-
-  // Откатить коррекцию: восстанавливает исходные точки.
-  // Сохраняем исходные точки при первом применении коррекции.
-  const [originalPoints, setOriginalPoints] = useState<BikeKeyPoints | null>(null);
-  const handleResetPerspective = useCallback(() => {
-    if (!originalPoints) return;
-
-    // Логируем
-    const ts = new Date().toLocaleTimeString();
-    setDebugLog((prev) => [
-      ...prev.slice(-80),
-      ``,
-      `[${ts}] ↩️ Отменить коррекцию перспективы — точки восстановлены:`,
-      ...Object.entries(originalPoints).map(([k, v]) => `    ${k}: x=${(v as any)?.x?.toFixed(4) ?? "null"}, y=${(v as any)?.y?.toFixed(4) ?? "null"}`),
-    ]);
-
-    setKeyPoints(originalPoints);
-    setPerspectiveApplied(false);
-    setOriginalPoints(null);
-    if (knownValue != null && knownValue > 0) {
-      runCalibration(originalPoints, knownValue);
-    }
-  }, [originalPoints, knownValue, runCalibration]);
-
-  // Обёрнутый apply, который сохраняет исходные точки перед изменением
-  const handleApplyPerspectiveWithBackup = useCallback(() => {
-    if (!keyPoints) return;
-    setOriginalPoints(keyPoints);
-    handleApplyPerspective();
-  }, [keyPoints, handleApplyPerspective]);
 
   // NOTE: Авто-выравнивание (поворот точек) УБРАНО.
   // Точки на фото НЕ двигаются — остаются там, где их поставил пользователь.
@@ -974,8 +1036,15 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     for (const c of comparisons) {
       averaged[c.key] = c.averaged;
     }
+    // ПРИНЦИП «ЭТАЛОН»: WB не входит в comparisons (он known-размер и используется
+    // как калибровка), поэтому фото-WB передаём отдельно из результата ядра v2.
+    // Право записать его остаётся у формы: WB пишется ТОЛЬКО в пустое поле,
+    // введённое вручную значение никогда не перезаписывается.
+    if (engineResult) {
+      averaged.wheelbase = engineResult.metricsMm.wheelbase;
+    }
     onAveraged(averaged);
-  }, [comparisons, onAveraged]);
+  }, [comparisons, onAveraged, engineResult]);
 
   const overall = comparisons.length > 0 ? getOverallMatch(comparisons) : null;
 
@@ -1096,18 +1165,10 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                 <AlertCircle className="size-4 mt-0.5 shrink-0" />
                 <div className="space-y-1">
                   <div>{error}</div>
-                  {diagnostics && (
+                  {pointsMissing.length > 0 && (
                     <div className="text-[11px] font-mono text-rose-600/80 dark:text-rose-400/70 border-t border-rose-200/50 dark:border-rose-900/50 pt-1 mt-1">
-                      <div>Параметр: <b>{diagnostics.knownKey}</b> = {diagnostics.knownValueMm} мм</div>
-                      {diagnostics.pxDistanceRaw != null && (
-                        <div>Расстояние между точками (норм. ед.): <b>{diagnostics.pxDistanceRaw.toFixed(4)}</b></div>
-                      )}
-                      {diagnostics.pointA && (
-                        <div>{diagnostics.pointA.label}: x={diagnostics.pointA.x?.toFixed(4)}, y={diagnostics.pointA.y?.toFixed(4)}</div>
-                      )}
-                      {diagnostics.pointB && (
-                        <div>{diagnostics.pointB.label}: x={diagnostics.pointB.x?.toFixed(4)}, y={diagnostics.pointB.y?.toFixed(4)}</div>
-                      )}
+                      <div>Обязательные точки ядра (7): rearAxle, frontAxle, bb, stTop, saddleMount, htBottom, htTop</div>
+                      <div>Отсутствуют: <b>{pointsMissing.join(", ")}</b></div>
                     </div>
                   )}
                 </div>
@@ -1224,76 +1285,33 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                   );
                 })()}
 
-                {/* Предупреждение о перспективе (по разнице Y между осями колёс) */}
-                {perspectiveInfo && perspectiveInfo.needsCorrection && !perspectiveApplied && (
-                  <div className="rounded-lg border-l-4 border-sky-400 dark:border-sky-600 bg-sky-50 dark:bg-sky-950/30 p-3 space-y-2">
-                    <div className="flex items-start gap-2">
-                      <Aperture className="size-4 mt-0.5 shrink-0 text-sky-500" />
-                      <div className="flex-1 space-y-1">
-                        <p className="text-sm font-semibold text-sky-700 dark:text-sky-400">
-                          Фото снято не строго сбоку
-                        </p>
-                        <p className="text-xs text-muted-foreground leading-relaxed">
-                          {perspectiveInfo.description}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground/80">
-                          ΔY = {(perspectiveInfo.absDeltaY * 100).toFixed(2)}% высоты фото ·
-                          угол наклона ≈ {perspectiveInfo.angleDeg.toFixed(1)}°
-                        </p>
-                        {perspectiveInfo.severity === "major" && (
-                          <p className="text-[11px] text-rose-600 dark:text-rose-400 mt-1">
-                            ⚠ Сильное искажение: колёса выглядят эллипсами, расчёты неточные.
-                            Лучше переснять фото строго сбоку, либо применить коррекцию.
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <Button
-                      onClick={handleApplyPerspectiveWithBackup}
-                      size="sm"
-                      variant="outline"
-                      className="w-full border-sky-400 dark:border-sky-700 text-sky-700 dark:text-sky-400 hover:bg-sky-100 dark:hover:bg-sky-900/40"
-                    >
-                      <Aperture className="size-3.5" />
-                      Применить коррекцию перспективы (выровнять оси колёс)
-                    </Button>
-                  </div>
-                )}
-
-                {/* Индикатор: коррекция применена */}
-                {perspectiveApplied && (
-                  <div className="rounded-lg border-l-4 border-emerald-400 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/30 p-3 space-y-2">
-                    <div className="flex items-start gap-2">
-                      <CheckCircle2 className="size-4 mt-0.5 shrink-0 text-emerald-500" />
-                      <div className="flex-1 space-y-1">
-                        <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">
-                          Коррекция перспективы применена
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Точки сдвинуты по Y так, чтобы оси колёс выровнялись.
-                          Reach, Stack, ETT пересчитаны с учётом коррекции.
+                {/* Статус кадра — лаконично: ядро v2 выравнивает горизонт
+                    автоматически (rotation-first), вопросов и кнопок нет.
+                    Предупреждение только при сильном завале (>8°). */}
+                {engineResult && (() => {
+                  const tilt = Math.abs(engineResult.anglesDeg.frameTilt);
+                  if (tilt > 8) {
+                    return (
+                      <div className="flex items-start gap-2 rounded-lg border-l-4 border-amber-400 dark:border-amber-600 bg-amber-50 dark:bg-amber-950/30 p-3">
+                        <AlertCircle className="size-4 mt-0.5 shrink-0 text-amber-500" />
+                        <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+                          Фотография сделана под сильным углом ({tilt.toFixed(1)}°).
+                          Для идеальной точности рекомендуем сделать снимок строго сбоку
+                          на уровне каретки.
                         </p>
                       </div>
-                    </div>
-                    <Button
-                      onClick={handleResetPerspective}
-                      size="sm"
-                      variant="outline"
-                      className="w-full"
-                    >
-                      <RotateCcw className="size-3.5" />
-                      Отменить коррекцию (вернуть исходные точки)
-                    </Button>
-                  </div>
-                )}
-
-                {/* Если перспектива ОК — тихий бейдж */}
-                {perspectiveInfo && !perspectiveInfo.needsCorrection && !perspectiveApplied && (
-                  <div className="flex items-center gap-2 text-xs text-emerald-600 dark:text-emerald-400">
-                    <Aperture className="size-3.5" />
-                    Перспектива в норме (ΔY = {(perspectiveInfo.absDeltaY * 100).toFixed(2)}%) — фото снято корректно сбоку.
-                  </div>
-                )}
+                    );
+                  }
+                  if (tilt > 0.5) {
+                    return (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <CheckCircle2 className="size-3.5 shrink-0 text-emerald-500" />
+                        Горизонт кадра автоматически выровнен ({tilt.toFixed(1)}°)
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
 
                 {/* Подсказки по точкам: что стоит поправить */}
                 {pointSuggestions.length > 0 && (
@@ -1477,41 +1495,69 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                       </p>
                     ) : (
                       <p className="text-emerald-600 dark:text-emerald-400">
-                        ✓ Заполнено {filledKnownsCount} размера(ов) — авто-калибровка выберет лучший.
+                        ✓ Заполнено {filledKnownsCount} размера(ов) — рабочий масштаб по primary (СТРОГО), остальные — перекрёстная проверка.
                       </p>
                     )}
                   </div>
 
-                  {/* Авто-калибровка: показывает какой параметр выбран как primary + validation */}
-                  {autoCalibration && keyPoints && (
+                  {/* ЯДРО v2: калибровка масштаба (strict hierarchy) + поворот кадра */}
+                  {scaleSourceInfo && keyPoints && (
                     <div className="space-y-2 rounded-md border border-violet-200 dark:border-violet-900 bg-violet-50/50 dark:bg-violet-950/20 p-2.5">
                       <div className="flex items-start gap-2">
                         <div className="flex-1">
                           <p className="text-xs font-semibold text-violet-700 dark:text-violet-400">
-                            Авто-калибровка (без мульти-усреднения)
+                            Калибровка масштаба (ядро v2 — rotation-first)
                           </p>
                           <p className="text-[10px] text-muted-foreground mt-0.5">
-                            Система выбрала параметр с наибольшим расстоянием в пикселях как primary — он даёт минимальную погрешность масштаба. Остальные параметры используются для скрытой валидации.
+                            Рабочий масштаб считается СТРОГО по выбранному вами primary-параметру.
+                            Все проекции (Stack/Reach/ETT) считаются после поворота кадра по оси колёс.
                           </p>
                         </div>
                       </div>
                       <div className="text-[10px] font-mono space-y-0.5">
                         <div className="text-violet-700 dark:text-violet-400">
-                          Primary: <b>{autoCalibration.primaryParam}</b> · scale = {autoCalibration.scalePxToMm.toFixed(4)} мм/пикс
+                          Масштаб: <b>{scaleSourceInfo.scaleMmPerPx.toFixed(4)} мм/пикс</b>
                         </div>
+                        <div className="text-muted-foreground">Источник: {scaleSourceInfo.source}</div>
                         <div className="text-muted-foreground">
-                          Наклон горизонта (математический офсет): {(autoCalibration.tiltAngleRad * 180 / Math.PI).toFixed(2)}°
+                          Поворот кадра: {scaleSourceInfo.tiltDeg.toFixed(2)}° (применён до расчётов)
+                          {" · "}{scaleSourceInfo.facingRight ? "смотрит вправо" : "смотрит влево → нормализовано"}
                         </div>
                       </div>
-                      {autoCalibration.validationWarning ? (
+                      {autoCalibration?.candidates && autoCalibration.candidates.length > 1 && (
+                        <div className="text-[10px] font-mono space-y-0.5 border-t border-violet-200 dark:border-violet-900 pt-1.5">
+                          <div className="text-muted-foreground">Перекрёстная проверка (справочно):</div>
+                          {autoCalibration.candidates.map((c) => (
+                            <div key={c.type} className="text-muted-foreground">
+                              {c.type}: {c.scale.toFixed(4)} мм/пикс
+                              {c.isPrimary ? "  [база]" : `  (откл. ${c.deviationPct > 0 ? "+" : ""}${c.deviationPct.toFixed(1)}%)`}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {autoCalibration?.validationWarning ? (
                         <div className="text-[10px] text-amber-600 dark:text-amber-400 font-medium px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/40">
                           ⚠ {autoCalibration.validationWarning}
                         </div>
                       ) : (
                         <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/40">
-                          ✓ Валидация пройдена (расхождение &lt;12%)
+                          ✓ Кандидаты согласованы (расхождение &lt;12%)
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {/* ЯДРО v2: предупреждения движка (валидация разметки) */}
+                  {engineWarnings.length > 0 && (
+                    <div className="space-y-1.5 rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50/70 dark:bg-amber-950/20 p-2.5">
+                      <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
+                        Предупреждения движка ({engineWarnings.length})
+                      </p>
+                      <ul className="text-[10px] text-amber-700/90 dark:text-amber-400/90 space-y-1 list-disc list-inside">
+                        {engineWarnings.map((w, i) => (
+                          <li key={i}>{w}</li>
+                        ))}
+                      </ul>
                     </div>
                   )}
 
@@ -1524,6 +1570,11 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                     <Ruler className="size-4" />
                     Вычислить все параметры
                   </Button>
+                  <p className="text-[10px] text-muted-foreground text-center leading-relaxed">
+                    Шаг 1: расчёт геометрии из фото по вашему primary-размеру.
+                    Результат появится ниже для сверки с вашим вводом — в форму велика
+                    ничего не записывается.
+                  </p>
                 </div>
 
                 {/* Результаты сравнения */}
@@ -1554,6 +1605,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                       <div className="text-xs text-muted-foreground bg-muted/30 rounded-md p-2">
                         Масштаб: {computed.scale.toFixed(3)} мм/пикс ·
                         Калибровка по: {KNOWN_DIM_OPTIONS.find((o) => o.key === computed.calibratedBy)?.label}
+                        {scaleSourceInfo?.source.includes("USER_OVERRIDE") ? " (СТРОГО, ручной ввод)" : " (fallback WB)"}
                       </div>
                     )}
 
@@ -1653,8 +1705,13 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                       size="sm"
                     >
                       <CheckCircle2 className="size-4" />
-                      Применить усреднённые значения к форме
+                      Записать в параметры велика
                     </Button>
+                    <p className="text-[10px] text-muted-foreground text-center leading-relaxed">
+                      Шаг 2: переносит Reach и Stack (в форме не вводятся) в карточку
+                      велика; WB дозаполняется, только если поле пустое. Введённое
+                      вручную — эталон и не перезаписывается. Сохраняется автоматически.
+                    </p>
                   </div>
                 )}
 

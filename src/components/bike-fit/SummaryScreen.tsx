@@ -19,10 +19,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import {
-  BIKE_TYPES,
-  PARAM_CATEGORY_COLORS,
-} from "@/lib/bike-params";
+import { BIKE_TYPES, PARAM_CATEGORY_COLORS } from "@/lib/bike-params";
+import { findWheelSize } from "@/lib/bike-perspective";
 import {
   COMPLAINTS,
   useBikeStore,
@@ -91,6 +89,11 @@ export function SummaryScreen() {
       value: bike.saddleHeight ? `${bike.saddleHeight} мм` : "Не указана",
     },
     {
+      label: "Колёсная база (WB)",
+      done: !!bike.wheelbase,
+      value: bike.wheelbase ? `${bike.wheelbase} мм` : "Не указана",
+    },
+    {
       label: "ETT",
       done: !!bike.ett,
       value: bike.ett ? `${bike.ett} мм` : "Не указан",
@@ -126,6 +129,16 @@ export function SummaryScreen() {
   const totalCount = checklist.length;
   const canProceedToAnalysis = doneCount === totalCount;
 
+  // Обязательные для перехода к анализу — тот же гейт, что и в навигации
+  // (SH — строгий масштаб, WB — fallback масштаба, WH — dual scale)
+  const requiredReady =
+    !!bike.saddleHeight && !!bike.wheelbase && !!bike.wheelHeight;
+
+  // Типоразмер выводим из единственного поля WH (без отдельного контрола)
+  const wheelGuess = bike.wheelHeight
+    ? findWheelSize(null, bike.wheelHeight)
+    : null;
+
   const goToStep = (step: OnboardingStep) => setStep(step);
 
   return (
@@ -154,7 +167,7 @@ export function SummaryScreen() {
               <div
                 className={cn(
                   "h-full rounded-full transition-all",
-                  canProceedToAnalysis
+                  requiredReady
                     ? "bg-emerald-500"
                     : "bg-orange-500"
                 )}
@@ -269,6 +282,7 @@ export function SummaryScreen() {
                         value={bike.saddleHeight}
                         unit="мм"
                       />
+                      <DataCell label="WB" value={bike.wheelbase} unit="мм" />
                       <DataCell label="ETT" value={bike.ett} unit="мм" />
                       <DataCell label="Stem" value={bike.stem} unit="мм" />
                       {bike.stemAngle != null && (
@@ -276,6 +290,21 @@ export function SummaryScreen() {
                       )}
                       <DataCell label="CR" value={bike.crank} unit="мм" />
                       <DataCell label="WH" value={bike.wheelHeight} unit="мм" />
+                      {/* Типоразмер — вычислен из WH, не отдельное поле */}
+                      <div className="rounded-md border bg-muted/30 px-2 py-1.5">
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                          Типоразмер
+                        </p>
+                        <p className="text-sm font-semibold tabular-nums">
+                          {wheelGuess ? (
+                            <span className="text-cyan-600 dark:text-cyan-400">
+                              ≈ {wheelGuess.label}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground/50 font-normal">—</span>
+                          )}
+                        </p>
+                      </div>
                       <DataCell label="BBH" value={bike.bbHeight} unit="мм" />
                     </div>
 
@@ -345,12 +374,18 @@ export function SummaryScreen() {
         </CardContent>
       </Card>
 
-      {!canProceedToAnalysis && (
+      {!requiredReady ? (
         <p className="text-center text-xs text-muted-foreground">
-          Заполните все обязательные поля ({doneCount}/{totalCount}) для
-          перехода к фотоанализу
+          Для анализа обязательны: SH (высота седла), WB (колёсная база) и WH (радиус
+          колеса) — заполните их на шаге «Велосипед». Остальные данные ({doneCount}/{" "}
+          {totalCount}) — по желанию, алгоритм вычислит их по фото.
         </p>
-      )}
+      ) : !canProceedToAnalysis ? (
+        <p className="text-center text-xs text-muted-foreground">
+          Обязательные поля заполнены — можно переходить к анализу. Не заполнено
+          ещё {totalCount - doneCount} доп. полей: они будут вычислены по фото.
+        </p>
+      ) : null}
     </div>
   );
 }

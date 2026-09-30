@@ -19,6 +19,12 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     // React rules
     "react-hooks/exhaustive-deps": "off",
     "react-hooks/purity": "off",
+    // Экспериментальная семья правил react-hooks v6 (стиль React Compiler):
+    // отключена консистентно с purity/exhaustive-deps выше. Легаси-паттерны
+    // (setState в effect, доступ к сеттерам до объявления useState в замыкании
+    // BikePhotoCalibrator) — рабочие, рефакторинг отложен.
+    "react-hooks/set-state-in-effect": "off",
+    "react-hooks/immutability": "off",
     "react/no-unescaped-entities": "off",
     "react/display-name": "off",
     "react/prop-types": "off",

@@ -39,7 +39,6 @@ export interface OnboardingContextValue {
     wheelbase?: number;
   };
   wheelSizeId: string;
-  lockedFields: string[];
 
   hasStartedOnboarding: boolean;
   isOnboardingComplete: boolean;
@@ -54,7 +53,6 @@ export function useOnboardingContext(): OnboardingContextValue {
   const body = useBikeStore((s) => s.body);
   const bike = useBikeStore((s) => s.bike);
   const wheelSizeId = useBikeStore((s) => s.wheelSizeId);
-  const lockedFields = useBikeStore((s) => s.lockedFields);
 
   const hasStartedOnboarding = bikeType != null;
   const isOnboardingComplete =
@@ -67,7 +65,6 @@ export function useOnboardingContext(): OnboardingContextValue {
     body,
     bike,
     wheelSizeId,
-    lockedFields,
     hasStartedOnboarding,
     isOnboardingComplete,
   };
