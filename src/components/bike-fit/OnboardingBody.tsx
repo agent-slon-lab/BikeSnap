@@ -53,6 +53,40 @@ const BODY_FIELD_INFO: Record<string, { what: string; howTo: string }> = {
   },
 };
 
+/**
+ * Заметная ⓘ-иконка с подсказкой «что это / как измерить».
+ * Единый размер (size-4 = 16px) и фирменный sky-цвет — видна и на телефоне.
+ */
+function InfoTip({
+  what,
+  howTo,
+  contentClassName,
+}: {
+  what: string;
+  howTo: string;
+  contentClassName?: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label="Подсказка: что это и как измерить"
+          className="inline-flex size-6 items-center justify-center rounded-full text-sky-500 transition-colors hover:text-sky-600 dark:text-sky-400 dark:hover:text-sky-300"
+        >
+          <Info className="size-4" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className={cn("max-w-xs", contentClassName)}>
+        <div className="space-y-1">
+          <p className="text-xs font-medium">{what}</p>
+          <p className="text-[11px] text-muted-foreground">{howTo}</p>
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function OnboardingBody() {
   const { body, setBody } = useBikeStore();
   const [riders, setRiders] = useState<Rider[]>([]);
@@ -204,21 +238,12 @@ export function OnboardingBody() {
                 {isActive ? (
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <Label className="text-[10px] text-muted-foreground flex items-center gap-1">
+                      <Label className="text-[10px] text-muted-foreground flex items-center gap-0.5">
                         Рост
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button type="button" className="text-muted-foreground/60 hover:text-foreground">
-                              <Info className="size-2.5" />
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom" className="max-w-xs">
-                            <div className="space-y-1">
-                              <p className="text-xs font-medium">{BODY_FIELD_INFO.height.what}</p>
-                              <p className="text-[11px] text-muted-foreground">{BODY_FIELD_INFO.height.howTo}</p>
-                            </div>
-                          </TooltipContent>
-                        </Tooltip>
+                        <InfoTip
+                          what={BODY_FIELD_INFO.height.what}
+                          howTo={BODY_FIELD_INFO.height.howTo}
+                        />
                       </Label>
                       <Input
                         type="number"
@@ -229,21 +254,12 @@ export function OnboardingBody() {
                       />
                     </div>
                     <div>
-                      <Label className="text-[10px] text-muted-foreground flex items-center gap-1">
+                      <Label className="text-[10px] text-muted-foreground flex items-center gap-0.5">
                         Inseam
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button type="button" className="text-muted-foreground/60 hover:text-foreground">
-                              <Info className="size-2.5" />
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom" className="max-w-xs">
-                            <div className="space-y-1">
-                              <p className="text-xs font-medium">{BODY_FIELD_INFO.inseam.what}</p>
-                              <p className="text-[11px] text-muted-foreground">{BODY_FIELD_INFO.inseam.howTo}</p>
-                            </div>
-                          </TooltipContent>
-                        </Tooltip>
+                        <InfoTip
+                          what={BODY_FIELD_INFO.inseam.what}
+                          howTo={BODY_FIELD_INFO.inseam.howTo}
+                        />
                       </Label>
                       <Input
                         type="number"
@@ -283,7 +299,13 @@ export function OnboardingBody() {
               />
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <Label className="text-[10px] text-muted-foreground">Рост (см)</Label>
+                  <Label className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                    Рост (см)
+                    <InfoTip
+                      what={BODY_FIELD_INFO.height.what}
+                      howTo={BODY_FIELD_INFO.height.howTo}
+                    />
+                  </Label>
                   <Input
                     type="number"
                     placeholder="178"
@@ -293,7 +315,13 @@ export function OnboardingBody() {
                   />
                 </div>
                 <div>
-                  <Label className="text-[10px] text-muted-foreground">Inseam (см)</Label>
+                  <Label className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                    Inseam (см)
+                    <InfoTip
+                      what={BODY_FIELD_INFO.inseam.what}
+                      howTo={BODY_FIELD_INFO.inseam.howTo}
+                    />
+                  </Label>
                   <Input
                     type="number"
                     placeholder="82"
@@ -339,39 +367,20 @@ export function OnboardingBody() {
                   Дополнительные параметры: {activeRider.name}
                 </span>
               </div>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button type="button" className="text-muted-foreground hover:text-foreground p-0.5">
-                    <Info className="size-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="max-w-sm">
-                  <div className="space-y-1">
-                    <p className="text-xs font-medium">Зачем нужны дополнительные параметры?</p>
-                    <p className="text-[11px] text-muted-foreground">
-                      Эти параметры необязательны, но повышают точность рекомендаций. Длина стопы влияет на расчёт длины шатуна и положения шипов. Длина руки и туловища — на расчёт длины выноса и Reach. Гибкость спины — на угол наклона корпуса. Чем больше данных — тем точнее индивидуальная подгонка.
-                    </p>
-                  </div>
-                </TooltipContent>
-              </Tooltip>
+              <InfoTip
+                what="Зачем нужны дополнительные параметры?"
+                howTo="Эти параметры необязательны, но повышают точность рекомендаций. Длина стопы влияет на расчёт длины шатуна и положения шипов. Длина руки и туловища — на расчёт длины выноса и Reach. Гибкость спины — на угол наклона корпуса. Чем больше данных — тем точнее индивидуальная подгонка."
+                contentClassName="max-w-sm"
+              />
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div>
-                <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                <Label className="text-xs text-muted-foreground flex items-center gap-0.5">
                   Длина стопы (см)
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button type="button" className="text-muted-foreground/60 hover:text-foreground">
-                        <Info className="size-3" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" className="max-w-xs">
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium">{BODY_FIELD_INFO.footLength.what}</p>
-                        <p className="text-[11px] text-muted-foreground">{BODY_FIELD_INFO.footLength.howTo}</p>
-                      </div>
-                    </TooltipContent>
-                  </Tooltip>
+                  <InfoTip
+                    what={BODY_FIELD_INFO.footLength.what}
+                    howTo={BODY_FIELD_INFO.footLength.howTo}
+                  />
                 </Label>
                 <Input
                   type="number"
@@ -382,21 +391,12 @@ export function OnboardingBody() {
                 />
               </div>
               <div>
-                <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                <Label className="text-xs text-muted-foreground flex items-center gap-0.5">
                   Длина руки (см)
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button type="button" className="text-muted-foreground/60 hover:text-foreground">
-                        <Info className="size-3" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" className="max-w-xs">
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium">{BODY_FIELD_INFO.armLength.what}</p>
-                        <p className="text-[11px] text-muted-foreground">{BODY_FIELD_INFO.armLength.howTo}</p>
-                      </div>
-                    </TooltipContent>
-                  </Tooltip>
+                  <InfoTip
+                    what={BODY_FIELD_INFO.armLength.what}
+                    howTo={BODY_FIELD_INFO.armLength.howTo}
+                  />
                 </Label>
                 <Input
                   type="number"
@@ -407,21 +407,12 @@ export function OnboardingBody() {
                 />
               </div>
               <div>
-                <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                <Label className="text-xs text-muted-foreground flex items-center gap-0.5">
                   Длина туловища (см)
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button type="button" className="text-muted-foreground/60 hover:text-foreground">
-                        <Info className="size-3" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" className="max-w-xs">
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium">{BODY_FIELD_INFO.torsoLength.what}</p>
-                        <p className="text-[11px] text-muted-foreground">{BODY_FIELD_INFO.torsoLength.howTo}</p>
-                      </div>
-                    </TooltipContent>
-                  </Tooltip>
+                  <InfoTip
+                    what={BODY_FIELD_INFO.torsoLength.what}
+                    howTo={BODY_FIELD_INFO.torsoLength.howTo}
+                  />
                 </Label>
                 <Input
                   type="number"

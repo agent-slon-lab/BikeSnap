@@ -409,8 +409,8 @@ export function BikeParametersForm() {
                         {/* Подсказка «как измерить» */}
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <button type="button" className="text-muted-foreground hover:text-foreground p-0.5">
-                              <Info className="size-3" />
+                            <button type="button" className="inline-flex size-6 items-center justify-center rounded-full text-sky-500 transition-colors hover:text-sky-600 dark:text-sky-400 dark:hover:text-sky-300">
+                              <Info className="size-4" />
                             </button>
                           </TooltipTrigger>
                           <TooltipContent side="bottom" className="max-w-xs">
