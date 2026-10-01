@@ -10,6 +10,8 @@ import {
   Settings,
   User,
   ListChecks,
+  Info,
+  HelpCircle,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
@@ -20,6 +22,8 @@ import {
   type OnboardingStep,
 } from "@/lib/bike-store";
 import { APP_VERSION } from "@/lib/app-version";
+import { AppTour } from "@/components/whats-new/app-tour";
+import { WhatsNewDialog } from "@/components/whats-new/whats-new-dialog";
 import { OnboardingContext } from "@/components/bike-fit/OnboardingContext";
 import { OnboardingBody } from "@/components/bike-fit/OnboardingBody";
 import { BikeParametersForm } from "@/components/bike-fit/BikeParametersForm";
@@ -356,26 +360,108 @@ function Header({ onLogoClick }: { onLogoClick?: () => void }) {
   );
 }
 
+const TOUR_KEY = "bikesnap-tour-done";
+const SEEN_VERSION_KEY = "bikesnap-seen-version";
+
 function Footer() {
+  // ===== Координатор попапов: тур для новичков + «Что нового» при обновлении =====
+  const [tourOpen, setTourOpen] = useState(false);
+  const [newsOpen, setNewsOpen] = useState(false);
+  const [hasNews, setHasNews] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        const tourDone = localStorage.getItem(TOUR_KEY) === "1";
+        const unseenNews = localStorage.getItem(SEEN_VERSION_KEY) !== APP_VERSION;
+        setHasNews(unseenNews);
+        if (!tourDone) {
+          setTourOpen(true); // первый визит — краткий тур
+        } else if (unseenNews) {
+          setNewsOpen(true); // вернувшийся пользователь + новая версия
+        }
+      } catch {
+        /* localStorage недоступен — попапы просто не покажутся */
+      }
+    }, 900);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const closeTour = (done: boolean) => {
+    setTourOpen(false);
+    if (done) {
+      try {
+        localStorage.setItem(TOUR_KEY, "1");
+        // новичку «Что нового» сразу после тура не показываем — тихо запоминаем версию
+        localStorage.setItem(SEEN_VERSION_KEY, APP_VERSION);
+      } catch {
+        /* ignore */
+      }
+      setHasNews(false);
+    }
+  };
+
+  const closeNews = (open: boolean) => {
+    setNewsOpen(open);
+    if (!open) {
+      try {
+        localStorage.setItem(SEEN_VERSION_KEY, APP_VERSION);
+      } catch {
+        /* ignore */
+      }
+      setHasNews(false);
+    }
+  };
+
+  const reopenTour = () => {
+    setNewsOpen(false);
+    setTourOpen(true);
+  };
+
   return (
     <footer className="mt-auto border-t bg-muted/30">
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <div className="flex flex-col items-center justify-between gap-3 sm:flex-row">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="flex flex-wrap items-center justify-center gap-2 text-sm text-muted-foreground">
             <Bike className="size-4 text-orange-500" />
             <span>
               BikeSnap · образовательный инструмент для велосипедистов
             </span>
-            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground">
+            {/* Версия — крупнее и кликабельная: открывает «Что нового» */}
+            <button
+              onClick={() => setNewsOpen(true)}
+              title="Что нового в этой версии"
+              className="relative inline-flex items-center gap-1.5 rounded-full border bg-background px-3 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+            >
+              <Info className="size-3.5 text-orange-500" />
               {APP_VERSION}
-            </Badge>
+              {hasNews && (
+                <span className="absolute -right-0.5 -top-0.5 flex size-2.5">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-orange-400 opacity-75" />
+                  <span className="relative inline-flex size-2.5 rounded-full bg-orange-500" />
+                </span>
+              )}
+            </button>
+            {/* Повторный запуск тура по приложению */}
+            <button
+              onClick={reopenTour}
+              title="Краткий тур по приложению"
+              className="inline-flex items-center gap-1.5 rounded-full border bg-background px-3 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+            >
+              <HelpCircle className="size-3.5 text-orange-500" />
+              Тур
+            </button>
           </div>
-          <p className="text-xs text-muted-foreground text-center sm:text-right max-w-md">
+          <p className="max-w-md text-center text-xs text-muted-foreground sm:text-right">
             Инструмент носит рекомендательный характер. Для профессионального
             фиттинга обратитесь к сертифицированному специалисту.
           </p>
         </div>
       </div>
+
+      {/* Попапы приложения: тур + что нового */}
+      <AppTour open={tourOpen} onClose={closeTour} />
+      <WhatsNewDialog open={newsOpen} onOpenChange={closeNews} />
     </footer>
   );
 }
