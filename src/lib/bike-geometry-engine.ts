@@ -224,6 +224,34 @@ function isFinitePoint(p: Point2D): boolean {
 /** Минимальное px-расстояние отрезка калибровки (защита от совпавших точек) */
 const MIN_CALIB_PX = 2;
 
+/**
+ * Физические диапазоны (мм) для ручной калибровки масштаба.
+ * Значение ВНЕ диапазона физически невозможно (опечатка/мусор в поле)
+ * и НЕ может использоваться как строгий масштаб — иначе все метрики
+ * уезжают в 100 раз (кейс «SH=8 вместо 800»: масштаб 0.0046 мм/px,
+ * Reach=5 мм, WB=11 мм). Диапазоны широкие (детские/тандем), ловят
+ * только заведомый мусор.
+ */
+export const OVERRIDE_PHYSICAL_RANGE_MM: Record<
+  Exclude<CalibrationKey, "wheelDiameter">,
+  { min: number; max: number }
+> = {
+  saddleHeight: { min: 400, max: 1000 },
+  ett: { min: 300, max: 700 },
+  wheelbase: { min: 700, max: 1600 },
+};
+
+/** Значение калибровки физически возможно? */
+export function isPlausibleOverrideMm(
+  key: CalibrationKey,
+  valueMm: number
+): boolean {
+  if (!Number.isFinite(valueMm) || valueMm <= 0) return false;
+  if (key === "wheelDiameter") return true;
+  const range = OVERRIDE_PHYSICAL_RANGE_MM[key];
+  return valueMm >= range.min && valueMm <= range.max;
+}
+
 export function calculateBikeGeometry(
   pts: BikeKeypoints,
   config: CalibrationConfig
@@ -319,10 +347,31 @@ export function calculateBikeGeometry(
   let scaleMmPerPx = 0;
   let scaleSource = "";
 
-  if (
+  // Строгий override применяется ТОЛЬКО если значение физически возможно.
+  // Мусор вида «SH = 8 мм» не должен масштабировать всю геометрию —
+  // уходим на fallback по колёсной базе с громким предупреждением.
+  const overrideRequested = !!(
     config.userOverrideKey &&
     config.userOverrideValueMm &&
     config.userOverrideValueMm > 0
+  );
+  const overridePlausible =
+    overrideRequested &&
+    config.userOverrideKey !== undefined &&
+    config.userOverrideValueMm !== undefined &&
+    isPlausibleOverrideMm(config.userOverrideKey, config.userOverrideValueMm);
+
+  if (overrideRequested && !overridePlausible && config.userOverrideKey !== "wheelDiameter") {
+    const range = OVERRIDE_PHYSICAL_RANGE_MM[config.userOverrideKey as Exclude<CalibrationKey, "wheelDiameter">];
+    warnings.push(
+      `❌ МАСШТАБ ПО ${config.userOverrideKey} = ${config.userOverrideValueMm} мм ОТКЛОНЁН: вне физического диапазона ${range.min}–${range.max} мм (опечатка в поле калибровки?). Применён fallback по колёсной базе — метрики ниже НЕ соответствуют этому мусорному значению.`
+    );
+  }
+
+  if (
+    overrideRequested &&
+    overridePlausible &&
+    config.userOverrideKey
   ) {
     if (config.userOverrideKey === "wheelDiameter") {
       warnings.push(
@@ -330,7 +379,7 @@ export function calculateBikeGeometry(
       );
     } else if (pxFor[config.userOverrideKey] >= MIN_CALIB_PX) {
       scaleMmPerPx =
-        config.userOverrideValueMm / pxFor[config.userOverrideKey];
+        config.userOverrideValueMm! / pxFor[config.userOverrideKey];
       scaleSource = `USER_OVERRIDE (${config.userOverrideKey} = ${config.userOverrideValueMm}mm) — СТРОГО`;
     } else {
       warnings.push(
@@ -339,7 +388,7 @@ export function calculateBikeGeometry(
     }
   }
 
-  // Fallback: если нет ручного ввода — колёсная база (по умолчанию 1080 мм)
+  // Fallback: если нет ручного ввода (или он отклонён как мусор) — колёсная база
   if (scaleMmPerPx === 0) {
     const pxWB = pxFor.wheelbase;
     if (pxWB < MIN_CALIB_PX) {
@@ -347,24 +396,37 @@ export function calculateBikeGeometry(
         "Невозможно откалибровать масштаб: нет ручного ввода, а оси колёс вырождены."
       );
     }
-    const defaultWB = config.fallbackWheelbaseMm && config.fallbackWheelbaseMm > 0
-      ? config.fallbackWheelbaseMm
+    const fallbackWbPlausible =
+      config.fallbackWheelbaseMm != null &&
+      config.fallbackWheelbaseMm > 0 &&
+      isPlausibleOverrideMm("wheelbase", config.fallbackWheelbaseMm);
+    if (
+      config.fallbackWheelbaseMm != null &&
+      config.fallbackWheelbaseMm > 0 &&
+      !fallbackWbPlausible
+    ) {
+      warnings.push(
+        `❌ Fallback WB = ${config.fallbackWheelbaseMm} мм тоже вне физического диапазона 700–1600 мм — использован типовой 1080 мм.`
+      );
+    }
+    const defaultWB = fallbackWbPlausible
+      ? (config.fallbackWheelbaseMm as number)
       : 1080;
     scaleMmPerPx = defaultWB / pxWB;
     scaleSource = `FALLBACK_AUTO (Wheelbase = ${defaultWB}mm)`;
   }
 
   // Перекрёстная проверка: если ручной ввод и известный WB противоречат друг другу
+  // (только для ПРИНЯТОГО override — отклонённый мусор сравнивать бессмысленно)
   if (
+    overridePlausible &&
     config.userOverrideKey &&
-    config.userOverrideValueMm &&
-    config.userOverrideValueMm > 0 &&
     config.userOverrideKey !== "wheelDiameter" &&
     pxFor[config.userOverrideKey] >= MIN_CALIB_PX &&
     pxFor.wheelbase >= MIN_CALIB_PX
   ) {
     const overrideScale =
-      config.userOverrideValueMm / pxFor[config.userOverrideKey];
+      (config.userOverrideValueMm as number) / pxFor[config.userOverrideKey];
     const wbFallbackMm =
       config.fallbackWheelbaseMm && config.fallbackWheelbaseMm > 0
         ? config.fallbackWheelbaseMm

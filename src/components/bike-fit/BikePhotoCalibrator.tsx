@@ -40,6 +40,8 @@ import {
 import {
   calculateBikeGeometry,
   makeAlignedTransform,
+  isPlausibleOverrideMm,
+  OVERRIDE_PHYSICAL_RANGE_MM,
   type BikeKeypoints as EngineKeypoints,
   type CalibrationConfig as EngineCalibrationConfig,
   type CalibrationKey as EngineCalibrationKey,
@@ -119,7 +121,10 @@ async function compressImage(dataUrl: string, maxDim: number, quality: number): 
   });
 }
 
-const KNOWN_DIM_OPTIONS: Array<{ key: KnownDimensionKey; label: string; unit: string; placeholder: string }> = [
+/** Ключи калибровочных полей, поддержанных панелью (и ядром) */
+type CalibFieldKey = "saddleHeight" | "ett" | "wheelbase";
+
+const KNOWN_DIM_OPTIONS: Array<{ key: CalibFieldKey; label: string; unit: string; placeholder: string }> = [
   { key: "saddleHeight", label: "Высота седла (SH)", unit: "мм", placeholder: "730" },
   { key: "ett", label: "ETT (эфф. верхняя труба)", unit: "мм", placeholder: "545" },
   { key: "wheelbase", label: "WB (колёсная база)", unit: "мм", placeholder: "1000" },
@@ -241,14 +246,36 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     wheelbase: measured.wheelbase != null ? String(measured.wheelbase) : "",
   });
 
-  // Когда measured меняется (пользователь редактировал форму выше) — синхронизируем,
-  // но только для тех полей, которые у нас в calibInputs пустые.
-  // Заполненные пользователем в калибраторе поля не трогаем — он может их переопределять.
+  // Поля, которые пользователь ВРУЧНУЮ правил в калибраторе (в этой сессии).
+  // Грязные поля не перетираются из карточки — НО мусорные значения
+  // (вне физического диапазона) исправляются onBlur и guard-ом в runCalibration.
+  const calibDirtyRef = useRef<{ saddleHeight: boolean; ett: boolean; wheelbase: boolean }>({
+    saddleHeight: false,
+    ett: false,
+    wheelbase: false,
+  });
+
+  // Когда measured меняется (пользователь редактировал карточку велика) —
+  // зеркалим во ВСЕ нетронутые поля. Раньше синхронизировались только ПУСТЫЕ
+  // поля, из-за чего однажды введённый мусор (например «8» вместо «800»)
+  // жил в поле вечно и строго уезжал в масштаб — все метрики уезжали в 100 раз.
   useEffect(() => {
     setCalibInputs((prev) => ({
-      saddleHeight: prev.saddleHeight || (measured.saddleHeight != null ? String(measured.saddleHeight) : ""),
-      ett: prev.ett || (measured.ett != null ? String(measured.ett) : ""),
-      wheelbase: prev.wheelbase || (measured.wheelbase != null ? String(measured.wheelbase) : ""),
+      saddleHeight: calibDirtyRef.current.saddleHeight
+        ? prev.saddleHeight
+        : measured.saddleHeight != null
+          ? String(measured.saddleHeight)
+          : "",
+      ett: calibDirtyRef.current.ett
+        ? prev.ett
+        : measured.ett != null
+          ? String(measured.ett)
+          : "",
+      wheelbase: calibDirtyRef.current.wheelbase
+        ? prev.wheelbase
+        : measured.wheelbase != null
+          ? String(measured.wheelbase)
+          : "",
     }));
   }, [measured.saddleHeight, measured.ett, measured.wheelbase]);
 
@@ -277,6 +304,34 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
   // Текущее значение primary-параметра для калибровки
   const knownValue = getCalibValue(knownKey);
   const hasKnownValue = knownValue != null && knownValue > 0;
+
+  // Число из сырого поля ввода (или null)
+  const parseCalibRaw = useCallback((raw: string): number | null => {
+    if (!raw || raw.trim() === "") return null;
+    const n = parseFloat(raw.replace(",", "."));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }, []);
+
+  // Значение поля ВНЕ физического диапазона → мусор, в масштаб не допускается
+  const isImplausibleInput = useCallback(
+    (key: KnownDimensionKey, raw: string): boolean => {
+      if (key !== "saddleHeight" && key !== "ett" && key !== "wheelbase") return false;
+      const n = parseCalibRaw(raw);
+      return n != null && !isPlausibleOverrideMm(key, n);
+    },
+    [parseCalibRaw]
+  );
+
+  // Значение из карточки велика для ключа калибровки
+  const getMeasuredFor = useCallback(
+    (key: CalibFieldKey): number | null =>
+      key === "saddleHeight"
+        ? (measured.saddleHeight ?? null)
+        : key === "ett"
+          ? (measured.ett ?? null)
+          : (measured.wheelbase ?? null),
+    [measured.saddleHeight, measured.ett, measured.wheelbase]
+  );
 
   // Подсчёт сколько значений заполнено (для auto-включения мульти-калибровки)
   const filledKnownsCount = useMemo(() => {
@@ -396,12 +451,65 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
 
   const runCalibration = useCallback(
     (pts: BikeKeyPoints, knownVal: number) => {
-      // Логируем входные данные
       const ts = new Date().toLocaleTimeString();
+
+      // === ЗАЩИТА ОТ МУСОРНОГО МАСШТАБА (кейс «SH = 8» вместо «800») ===
+      // Значение ВНЕ физического диапазона не допускается до строгого масштаба:
+      //  1) если в карточке велика есть физически возможное значение — берём его;
+      //  2) иначе блокируем расчёт с понятной ошибкой.
+      // Ядро страхует это же правило со своей стороны (isPlausibleOverrideMm).
+      const SUPPORTED_GUARD_KEYS = ["saddleHeight", "ett", "wheelbase"] as const;
+      let effectiveKnown = knownVal;
+      let guardNote: string | null = null;
+      if (
+        (SUPPORTED_GUARD_KEYS as readonly string[]).includes(knownKey) &&
+        !isPlausibleOverrideMm(knownKey as (typeof SUPPORTED_GUARD_KEYS)[number], knownVal)
+      ) {
+        const gk = knownKey as (typeof SUPPORTED_GUARD_KEYS)[number];
+        const fromCard = getMeasuredFor(gk);
+        if (fromCard != null && isPlausibleOverrideMm(gk, fromCard)) {
+          effectiveKnown = fromCard;
+          guardNote =
+            `  🛡 Поле калибровки = ${knownVal} мм — вне физического диапазона ` +
+            `(${OVERRIDE_PHYSICAL_RANGE_MM[gk].min}–${OVERRIDE_PHYSICAL_RANGE_MM[gk].max} мм). ` +
+            `В расчёте использовано значение из карточки велика: ${fromCard} мм.`;
+        } else {
+          const range = OVERRIDE_PHYSICAL_RANGE_MM[gk];
+          const label = KNOWN_DIM_OPTIONS.find((o) => o.key === gk)?.label ?? knownKey;
+          setError(
+            `Калибровка заблокирована: ${label} = ${knownVal} мм — вне физического диапазона ${range.min}–${range.max} мм. Исправьте значение в зелёной панели «Калибровка масштаба» или в карточке велика.`
+          );
+          setDebugLog((prev) => [
+            ...prev.slice(-50),
+            ``,
+            `[${ts}] 🛡 РАСЧЁТ ЗАБЛОКИРОВАН: ${knownKey} = ${knownVal} мм вне диапазона ${range.min}–${range.max} мм — мусорное значение не допущено до масштаба.`,
+            `  Карточка велика: ${fromCard != null ? `${fromCard} мм (тоже вне диапазона)` : "значение не заполнено"}.`,
+          ]);
+          return;
+        }
+      }
+
+      // Расхождение поля калибровки с карточкой (обе физически возможны) —
+      // отдельная явная строка в логе, чтобы источник истины был виден сразу
+      let divergenceNote: string | null = null;
+      if (
+        (SUPPORTED_GUARD_KEYS as readonly string[]).includes(knownKey) &&
+        effectiveKnown === knownVal
+      ) {
+        const gk = knownKey as (typeof SUPPORTED_GUARD_KEYS)[number];
+        const fromCard = getMeasuredFor(gk);
+        if (fromCard != null && fromCard !== knownVal && isPlausibleOverrideMm(gk, knownVal)) {
+          divergenceNote =
+            `  ⓘ Поле калибровки (${knownVal} мм) ≠ карточка велика (${fromCard} мм) — ` +
+            `масштаб СТРОГО по полю калибровки.`;
+        }
+      }
+
+      // Логируем входные данные
       const newLog = [
         `[${ts}] runCalibration вызвана:`,
         `  knownKey = ${knownKey}`,
-        `  knownValue = ${knownVal} мм`,
+        `  knownValue = ${effectiveKnown} мм${effectiveKnown !== knownVal ? ` (в поле калибровки: ${knownVal})` : ""}`,
         `  measured из формы (то, что ввёл пользователь):`,
         `    SH (saddleHeight) = ${measured.saddleHeight ?? "—"} мм ${measured.saddleHeight != null ? "[ввод]" : ""}`,
         `    ETT = ${measured.ett ?? "—"} мм [ввод]`,
@@ -415,6 +523,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         `  bikeType = ${useBikeStore.getState().bikeType ?? "— (не выбран)"}`,
         `  points (нормализованные 0..1):`,
         ...Object.entries(pts).map(([k, v]) => `    ${k}: x=${v?.x?.toFixed(4) ?? "null"}, y=${v?.y?.toFixed(4) ?? "null"}`),
+        ...(guardNote ? [``, guardNote] : []),
+        ...(divergenceNote ? [divergenceNote] : []),
       ];
       setDebugLog((prev) => [...prev.slice(-50), ...newLog]);
 
@@ -495,7 +605,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         userOverrideKey: SUPPORTED_OVERRIDE_KEYS.has(knownKey)
           ? (knownKey as EngineCalibrationKey)
           : undefined,
-        userOverrideValueMm: knownVal,
+        userOverrideValueMm: effectiveKnown,
         fallbackWheelbaseMm: wbFallbackMm ?? undefined,
       };
       if (!SUPPORTED_OVERRIDE_KEYS.has(knownKey)) {
@@ -741,7 +851,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
           .map((p) => `    ${p.label}: ${p.value} [${p.confidence}] ${p.warnings[0] ?? ""}`),
       ]);
     },
-    [knownKey, measured, getCalibValue, imgSize, bikeType]
+    [knownKey, measured, getCalibValue, getMeasuredFor, imgSize, bikeType]
   );
 
   const handleCalibrate = useCallback(() => {
@@ -1425,6 +1535,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                               placeholder={opt.placeholder}
                               onChange={(e) => {
                                 const v = e.target.value;
+                                calibDirtyRef.current[opt.key] = true;
                                 setCalibInputs((prev) => ({
                                   ...prev,
                                   [opt.key]: v,
@@ -1437,6 +1548,28 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                                 ]);
                               }}
                               onBlur={() => {
+                                const raw = calibInputs[opt.key];
+                                // Мусор в поле (вне физического диапазона) —
+                                // чиним сразу при выходе из поля: значение из
+                                // карточки, если оно физически возможно, иначе очищаем.
+                                if (isImplausibleInput(opt.key, raw)) {
+                                  const measuredVal = getMeasuredFor(opt.key);
+                                  const fixed =
+                                    measuredVal != null && isPlausibleOverrideMm(opt.key, measuredVal)
+                                      ? String(measuredVal)
+                                      : "";
+                                  const ts = new Date().toLocaleTimeString();
+                                  setCalibInputs((prev) => ({ ...prev, [opt.key]: fixed }));
+                                  calibDirtyRef.current[opt.key] = false;
+                                  setDebugLog((prev) => [
+                                    ...prev.slice(-80),
+                                    `[${ts}] 🛡 Поле ${opt.key} = "${raw}" — вне физического диапазона, исправлено на ${fixed || "(пусто)"}.`,
+                                  ]);
+                                  if (fixed && keyPoints) {
+                                    setTimeout(() => runCalibration(keyPoints, parseFloat(fixed)), 0);
+                                  }
+                                  return;
+                                }
                                 // При потере фокуса — пересчитать, если есть точки и хоть одно значение
                                 if (keyPoints && numVal != null && numVal > 0) {
                                   setTimeout(() => {
@@ -1451,7 +1584,9 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                               className={cn(
                                 "h-9 pr-10 text-sm",
                                 numVal != null && numVal > 0
-                                  ? "border-emerald-400 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/20"
+                                  ? isImplausibleInput(opt.key, rawVal)
+                                    ? "border-rose-500 dark:border-rose-600 bg-rose-50/50 dark:bg-rose-950/20"
+                                    : "border-emerald-400 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/20"
                                   : "border-input"
                               )}
                             />
@@ -1459,6 +1594,26 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                               {opt.unit}
                             </span>
                           </div>
+                          {(() => {
+                            const measuredVal = getMeasuredFor(opt.key);
+                            const range = OVERRIDE_PHYSICAL_RANGE_MM[opt.key];
+                            const implausible = isImplausibleInput(opt.key, rawVal);
+                            if (implausible) {
+                              return (
+                                <p className="text-[10px] leading-tight text-rose-600 dark:text-rose-400">
+                                  ⛔ {parseCalibRaw(rawVal)} мм — вне физического диапазона {range.min}–{range.max} мм. Поле не допускается до масштаба{measuredVal != null ? ` — в карточке: ${measuredVal} мм` : ""}.
+                                </p>
+                              );
+                            }
+                            if (numVal != null && measuredVal != null && numVal !== measuredVal) {
+                              return (
+                                <p className="text-[10px] leading-tight text-amber-600 dark:text-amber-400">
+                                  ⓘ В карточке велика: {measuredVal} мм — масштаб строго по этому полю.
+                                </p>
+                              );
+                            }
+                            return null;
+                          })()}
                           {numVal != null && numVal > 0 && (
                             <button
                               type="button"
@@ -1487,6 +1642,15 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                       );
                     })}
                   </div>
+
+                  {/* Primary вне физического диапазона — расчёт по нему заблокирован */}
+                  {knownValue != null && knownValue > 0 &&
+                    (knownKey === "saddleHeight" || knownKey === "ett" || knownKey === "wheelbase") &&
+                    !isPlausibleOverrideMm(knownKey, knownValue) && (
+                      <p className="rounded-md border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 px-3 py-2 text-xs text-rose-700 dark:text-rose-400">
+                        ⛔ Primary «{KNOWN_DIM_OPTIONS.find((o) => o.key === knownKey)?.label}» = {knownValue} мм — вне физического диапазона. Расчёт по нему заблокирован: исправьте поле выше или очистите его (иначе масштаб возьмётся из карточки велика).
+                      </p>
+                    )}
 
                   {/* Статус: сколько значений заполнено */}
                   <div className="text-xs">
