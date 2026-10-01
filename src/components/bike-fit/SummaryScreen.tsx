@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   Bike,
   User,
@@ -27,6 +28,21 @@ import {
   type OnboardingStep,
 } from "@/lib/bike-store";
 import { calculateAll } from "@/lib/bike-calculations";
+import { StepGuide, type GuideStepDef } from "@/components/guide/step-guide";
+
+// ============================================================
+// КРАТКИЙ ТУР ШАГА 4 — одна плашка (v1.11.0). Один раз, автозапуск.
+// ============================================================
+const SUMMARY_GUIDE_KEY = "bikesnap-summary-guide-done";
+
+const SUMMARY_GUIDE_STEPS: GuideStepDef[] = [
+  {
+    targetId: "summary-progress",
+    title: "Коротко о шаге «Сводка»",
+    text: "Шкала — готовность данных. Обязательны SH, WB и типоразмер колеса — остальное алгоритм возьмёт с фото. Клик по карточке — быстрый переход к редактированию. Дальше — «Далее: Анализ».",
+    nextLabel: "Понятно, готово",
+  },
+];
 
 export function SummaryScreen() {
   const {
@@ -141,6 +157,29 @@ export function SummaryScreen() {
 
   const goToStep = (step: OnboardingStep) => setStep(step);
 
+  // Авто-старт одноплашечного тура сводки — один раз
+  const [guideOpen, setGuideOpen] = useState(false);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        if (localStorage.getItem(SUMMARY_GUIDE_KEY) !== "1") setGuideOpen(true);
+      } catch {
+        /* localStorage недоступен — тур просто не покажется */
+      }
+    }, 700);
+    return () => clearTimeout(t);
+  }, []);
+
+  const finishGuide = () => {
+    setGuideOpen(false);
+    try {
+      localStorage.setItem(SUMMARY_GUIDE_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+  };
+
   return (
     <div className="space-y-6">
       <Card>
@@ -156,7 +195,7 @@ export function SummaryScreen() {
         </CardHeader>
         <CardContent>
           {/* Прогресс */}
-          <div className="mb-6">
+          <div className="mb-6" id="summary-progress">
             <div className="flex items-baseline justify-between mb-2">
               <span className="text-sm font-medium">Готовность к анализу</span>
               <span className="text-sm text-muted-foreground tabular-nums">
@@ -386,6 +425,11 @@ export function SummaryScreen() {
           ещё {totalCount - doneCount} доп. полей: они будут вычислены по фото.
         </p>
       ) : null}
+
+      {/* Краткий тур одной плашкой (один раз, см. SUMMARY_GUIDE_STEPS) */}
+      {guideOpen && (
+        <StepGuide steps={SUMMARY_GUIDE_STEPS} open onFinish={finishGuide} />
+      )}
     </div>
   );
 }

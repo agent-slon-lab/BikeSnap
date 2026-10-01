@@ -190,6 +190,11 @@ export const useBikeStore = create<AppState>()(
 
       setWheelSizeId: (id) => set({ wheelSizeId: id }),
 
+      // ПОЛНЫЙ сброс сценария: вызывается при старте нового сценария
+      // (выбор режима на стартовом экране, создание нового велика).
+      // Чистит ВСЁ, что могло протечь из предыдущего объекта: онбординг,
+      // параметры тела, параметры велика и типоразмер колеса.
+      // Библиотеки великов/райдеров (localStorage bikefit-*) не трогает.
       reset: () =>
         set({
           step: "context",
@@ -198,6 +203,7 @@ export const useBikeStore = create<AppState>()(
           complaints: [],
           body: initialBody,
           bike: initialBike,
+          wheelSizeId: "26",
         }),
 
       getRiderGoal: () => {

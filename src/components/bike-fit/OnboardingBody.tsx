@@ -110,6 +110,19 @@ export function OnboardingBody() {
     reload();
   }, [reload]);
 
+  // Сброс черновика «Новый райдер»: при открытии, при отмене и после создания —
+  // форма всегда стартует чистой (имя/рост/inseam не протекают между открытиями)
+  const resetNewForm = () => {
+    setNewName("");
+    setNewHeight("");
+    setNewInseam("");
+  };
+
+  const openNewForm = () => {
+    resetNewForm();
+    setShowNew(true);
+  };
+
   const handleCreate = () => {
     if (!newName.trim()) return;
     const h = parseFloat(newHeight) || 0;
@@ -127,9 +140,7 @@ export function OnboardingBody() {
     setRiders(getRiders());
     setActiveRiderState(rider);
     setShowNew(false);
-    setNewName("");
-    setNewHeight("");
-    setNewInseam("");
+    resetNewForm();
   };
 
   const handleSelect = (rider: Rider) => {
@@ -336,7 +347,7 @@ export function OnboardingBody() {
                 <Button size="sm" className="flex-1 h-7 text-xs" onClick={handleCreate} disabled={!newName.trim()}>
                   <Plus className="size-3" /> Создать
                 </Button>
-                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setShowNew(false); setNewName(""); }}>
+                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setShowNew(false); resetNewForm(); }}>
                   Отмена
                 </Button>
               </div>
@@ -345,7 +356,7 @@ export function OnboardingBody() {
         ) : (
           <Card
             className="border-dashed border-sky-300 dark:border-sky-800 hover:bg-sky-50/50 dark:hover:bg-sky-950/20 cursor-pointer transition-colors"
-            onClick={() => setShowNew(true)}
+            onClick={openNewForm}
           >
             <CardContent className="p-4 flex flex-col items-center justify-center min-h-[120px]">
               <Plus className="size-8 text-sky-400 mb-1" />

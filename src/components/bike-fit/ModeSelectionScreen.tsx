@@ -20,12 +20,16 @@ import { useBikeStore } from "@/lib/bike-store";
 import { BIKE_MODELS, getModelCountByType } from "@/lib/bike-models";
 
 export function ModeSelectionScreen() {
-  const { setMode, resetMode } = useBikeStore();
+  const { setMode, reset } = useBikeStore();
   const counts = getModelCountByType();
   const totalModels = BIKE_MODELS.length;
 
+  // Новый сценарий = чистое состояние: сбрасываем ВСЁ, что осталось от
+  // предыдущего прохода (тип/цель/жалобы/тело/параметры велика/колесо),
+  // иначе при «создании нового» протекали старые данные (stale state).
+  // Библиотеки великов и райдеров сохраняются — их подгрузит шаг 2/3.
   const handleSelectMode = (mode: "fit" | "select") => {
-    resetMode();
+    reset();
     setMode(mode);
   };
 

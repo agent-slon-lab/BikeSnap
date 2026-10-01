@@ -11,6 +11,7 @@ import {
   User,
   ListChecks,
   Info,
+  Check,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
@@ -224,20 +225,54 @@ export default function Home() {
                 {currentIndex + 1}/{STEPS.length}
               </Badge>
             </div>
+            {/* Шаги-вкладки (v1.11.0): как на десктопе — кликабельны.
+                Раньше были просто черточки без переходов. */}
             <div className="flex gap-1">
-              {STEPS.map((s, i) => (
-                <div
-                  key={s.id}
-                  className={cn(
-                    "h-1 flex-1 rounded-full transition-colors",
-                    i === currentIndex
-                      ? "bg-orange-500"
-                      : i < currentIndex
-                        ? "bg-emerald-500"
-                        : "bg-muted"
-                  )}
-                />
-              ))}
+              {STEPS.map((s, i) => {
+                const accessible = isStepAccessible(s.id, store);
+                const isActive = i === currentIndex;
+                const isPast = i < currentIndex;
+                return (
+                  <button
+                    key={s.id}
+                    onClick={() => accessible && setStep(s.id)}
+                    disabled={!accessible}
+                    aria-label={`Шаг ${i + 1}: ${s.shortLabel}${accessible ? "" : " (пока недоступен)"}`}
+                    aria-current={isActive ? "step" : undefined}
+                    className={cn(
+                      "flex min-w-0 flex-1 flex-col items-center gap-1 rounded-lg px-0.5 py-1.5 transition-colors",
+                      accessible ? "cursor-pointer active:bg-muted/60" : "cursor-not-allowed",
+                      isActive && "bg-orange-500/10"
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "flex size-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold transition-colors",
+                        isActive
+                          ? "bg-orange-500 text-white ring-2 ring-orange-500/30"
+                          : isPast
+                            ? "bg-emerald-500 text-white"
+                            : accessible
+                              ? "border bg-muted text-muted-foreground"
+                              : "border border-dashed bg-muted/50 text-muted-foreground/50"
+                      )}
+                    >
+                      {isPast ? <Check className="size-3.5" /> : i + 1}
+                    </span>
+                    <span
+                      className={cn(
+                        "w-full truncate text-center text-[9px] leading-none",
+                        isActive
+                          ? "font-bold text-orange-600 dark:text-orange-400"
+                          : "text-muted-foreground",
+                        !accessible && "opacity-50"
+                      )}
+                    >
+                      {s.shortLabel}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -318,15 +353,58 @@ export default function Home() {
 function Header({ onLogoClick }: { onLogoClick?: () => void }) {
   const { resolvedTheme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
-  const [newsOpen, setNewsOpen] = useState(false);
-  const [hasNews, setHasNews] = useState(false);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // Координатор «Что нового»: новичку версия запоминается тихо,
-  // вернувшемуся с непросмотренной версией — показываем диалог
+  return (
+    <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-md">
+      <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+        <button
+          onClick={onLogoClick}
+          className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+          disabled={!onLogoClick}
+        >
+          <div className="flex size-8 items-center justify-center rounded-lg bg-orange-500 text-white">
+            <Bike className="size-5" />
+          </div>
+          <div className="flex flex-col -space-y-0.5">
+            <span className="text-sm font-bold leading-tight">BikeSnap</span>
+            <span className="text-[10px] text-muted-foreground leading-tight">
+              Анализ посадки велосипедиста
+            </span>
+          </div>
+        </button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
+            title="Переключить тему"
+          >
+            {mounted && resolvedTheme === "dark" ? (
+              <Sun className="size-4" />
+            ) : (
+              <Moon className="size-4" />
+            )}
+          </Button>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+const VISITED_KEY = "bikesnap-visited";
+const SEEN_VERSION_KEY = "bikesnap-seen-version";
+
+function Footer() {
+  const [newsOpen, setNewsOpen] = useState(false);
+  const [hasNews, setHasNews] = useState(false);
+
+  // Координатор «Что нового» — вернулся в футер (v1.11.0), где и была
+  // кнопка версии: новичку версия запоминается тихо, вернувшемуся
+  // с непросмотренной версией — показываем диалог
   useEffect(() => {
     const timer = setTimeout(() => {
       try {
@@ -359,30 +437,22 @@ function Header({ onLogoClick }: { onLogoClick?: () => void }) {
   };
 
   return (
-    <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-md">
-      <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-        <button
-          onClick={onLogoClick}
-          className="flex items-center gap-2 hover:opacity-80 transition-opacity"
-          disabled={!onLogoClick}
-        >
-          <div className="flex size-8 items-center justify-center rounded-lg bg-orange-500 text-white">
-            <Bike className="size-5" />
-          </div>
-          <div className="flex flex-col -space-y-0.5">
-            <span className="text-sm font-bold leading-tight">BikeSnap</span>
-            <span className="text-[10px] text-muted-foreground leading-tight">
-              Анализ посадки велосипедиста
+    <footer className="mt-auto border-t bg-muted/30">
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <div className="flex flex-col items-center justify-between gap-3 sm:flex-row">
+          <div className="flex flex-wrap items-center justify-center gap-2 text-sm text-muted-foreground">
+            <Bike className="size-4 text-orange-500" />
+            <span>
+              BikeSnap · образовательный инструмент для велосипедистов
             </span>
           </div>
-        </button>
-        <div className="flex items-center gap-2">
-          {/* Крупная кнопка версии с «i» — всегда на виду, открывает «Что нового» */}
+          {/* Кнопка версии «i» — снова в футере (v1.11.0), крупная и тапабельная,
+              с пульс-точкой при непросмотренных новостях */}
           <button
             onClick={() => setNewsOpen(true)}
             title="Что нового в этой версии"
             aria-label="Что нового в этой версии"
-            className="relative inline-flex h-9 items-center gap-1.5 rounded-full border border-orange-500/50 bg-orange-500/10 px-3.5 text-sm font-bold text-foreground shadow-sm transition-colors hover:bg-orange-500/20"
+            className="relative inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-orange-500/50 bg-orange-500/10 px-3.5 text-sm font-bold text-foreground shadow-sm transition-colors hover:bg-orange-500/20"
           >
             <Info className="size-[18px] text-orange-500" />
             <span className="tabular-nums">{APP_VERSION}</span>
@@ -393,47 +463,15 @@ function Header({ onLogoClick }: { onLogoClick?: () => void }) {
               </span>
             )}
           </button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
-            title="Переключить тему"
-          >
-            {mounted && resolvedTheme === "dark" ? (
-              <Sun className="size-4" />
-            ) : (
-              <Moon className="size-4" />
-            )}
-          </Button>
         </div>
+        <p className="mt-3 max-w-md mx-auto text-center text-xs text-muted-foreground sm:mx-0 sm:ml-auto sm:text-right">
+          Инструмент носит рекомендательный характер. Для профессионального
+          фиттинга обратитесь к сертифицированному специалисту.
+        </p>
       </div>
 
-      {/* Диалог «Что нового» (кнопка версии — рядом) */}
+      {/* Диалог «Что нового» (открывается кнопкой версии) */}
       <WhatsNewDialog open={newsOpen} onOpenChange={closeNews} />
-    </header>
-  );
-}
-
-const VISITED_KEY = "bikesnap-visited";
-const SEEN_VERSION_KEY = "bikesnap-seen-version";
-
-function Footer() {
-  return (
-    <footer className="mt-auto border-t bg-muted/30">
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-        <div className="flex flex-col items-center justify-between gap-3 sm:flex-row">
-          <div className="flex flex-wrap items-center justify-center gap-2 text-sm text-muted-foreground">
-            <Bike className="size-4 text-orange-500" />
-            <span>
-              BikeSnap · образовательный инструмент для велосипедистов
-            </span>
-          </div>
-          <p className="max-w-md text-center text-xs text-muted-foreground sm:text-right">
-            Инструмент носит рекомендательный характер. Для профессионального
-            фиттинга обратитесь к сертифицированному специалисту.
-          </p>
-        </div>
-      </div>
     </footer>
   );
 }

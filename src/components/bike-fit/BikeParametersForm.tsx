@@ -194,15 +194,34 @@ export function BikeParametersForm() {
     }
   };
 
+  // Сброс черновика формы «Новый велик» — вызывается при ОТКРЫТИИ формы
+  // и после успешного создания (главное — форма всегда стартует чистой,
+  // без протечек от предыдущего ввода/предыдущего велика)
+  const resetNewForm = () => {
+    setNewName("");
+    setNewType("road");
+  };
+
+  const openNewForm = () => {
+    resetNewForm(); // сброс при открытии (useEffect-on-isOpen из ТЗ)
+    setShowNew(true);
+  };
+
   const handleCreate = () => {
     if (!newName.trim()) return;
     const bike = createBike(newName.trim(), newType, {});
+    // ПОЛНЫЙ resetForm после успешного создания (сброс при submit из ТЗ):
+    // пустые параметры в сторе + чистый типоразмер колеса + чистый черновик.
+    // CalibratorKey ниже — гарантированный remount калибратора через React key:
+    // старое фото, точки и рассчитанные метрики уничтожаются вместе с компонентом.
     setBike({});
+    setWheelSizeId("26");
+    lastSavedJsonRef.current = ""; // автосейв не должен записать старый JSON в новый велик
     setBikes(getBikes());
     setActiveBikeState(bike);
-    setCalibratorKey(k => k + 1);
+    setCalibratorKey((k) => k + 1);
     setShowNew(false);
-    setNewName("");
+    resetNewForm();
   };
 
   const handleSelect = (bike: BikeRecord) => {
@@ -367,7 +386,7 @@ export function BikeParametersForm() {
         ) : (
           <Card
             className="border-dashed border-emerald-300 dark:border-emerald-800 hover:bg-emerald-50/50 dark:hover:bg-emerald-950/20 cursor-pointer transition-colors"
-            onClick={() => setShowNew(true)}
+            onClick={openNewForm}
           >
             <CardContent className="p-4 flex flex-col items-center justify-center min-h-[80px]">
               <Plus className="size-8 text-emerald-400 mb-1" />

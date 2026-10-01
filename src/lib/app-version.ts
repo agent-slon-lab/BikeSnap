@@ -1,2 +1,2 @@
 /** Единая точка версии приложения: футер, CHANGELOG-ссылки, отчёты об отладке. */
-export const APP_VERSION = "v1.10.0";
+export const APP_VERSION = "v1.11.0";

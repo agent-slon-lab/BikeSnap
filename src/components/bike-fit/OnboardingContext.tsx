@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Check, Target, Heart, Info } from "lucide-react";
 import {
   Card,
@@ -24,6 +25,22 @@ import {
   COMPLAINTS,
   type Complaint,
 } from "@/lib/bike-store";
+import { StepGuide, type GuideStepDef } from "@/components/guide/step-guide";
+
+// ============================================================
+// КРАТКИЙ ТУР ШАГА 1 — одна плашка (v1.11.0). Показывается один раз,
+// автозапуск через 700 мс после входа на шаг.
+// ============================================================
+const CTX_GUIDE_KEY = "bikesnap-ctx-guide-done";
+
+const CTX_GUIDE_STEPS: GuideStepDef[] = [
+  {
+    targetId: "ctx-section-type",
+    title: "Коротко о шаге «Контекст»",
+    text: "Выбери тип велосипеда и цель посадки — от них считаются все рекомендации. Жалобы — по желанию: добавят персональные советы. Дальше — кнопка «Далее: Тело» внизу страницы.",
+    nextLabel: "Понятно, готово",
+  },
+];
 
 const GOALS = [
   {
@@ -59,11 +76,34 @@ export function OnboardingContext() {
     toggleComplaint,
   } = useBikeStore();
 
+  // Авто-старт одноплашечного тура: один раз, пока не пройдён
+  const [guideOpen, setGuideOpen] = useState(false);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        if (localStorage.getItem(CTX_GUIDE_KEY) !== "1") setGuideOpen(true);
+      } catch {
+        /* localStorage недоступен — тур просто не покажется */
+      }
+    }, 700);
+    return () => clearTimeout(t);
+  }, []);
+
+  const finishGuide = () => {
+    setGuideOpen(false);
+    try {
+      localStorage.setItem(CTX_GUIDE_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+  };
+
   return (
     <TooltipProvider delayDuration={200}>
     <div className="space-y-8">
       {/* Шаг 1: Тип велосипеда */}
-      <section>
+      <section id="ctx-section-type">
         <div className="mb-4 flex items-center gap-2">
           <div className="flex size-7 items-center justify-center rounded-full bg-orange-500 text-white text-sm font-bold">
             1
@@ -281,6 +321,12 @@ export function OnboardingContext() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Краткий тур одной плашкой (один раз, см. CTX_GUIDE_STEPS).
+          Монтируем только при открытии — всегда стартует с единственного шага. */}
+      {guideOpen && (
+        <StepGuide steps={CTX_GUIDE_STEPS} open onFinish={finishGuide} />
+      )}
     </div>
     </TooltipProvider>
   );
