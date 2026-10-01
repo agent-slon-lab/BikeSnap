@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export interface DeviceOrientationState {
   /** Боковой крен телефона (град): 0 = идеально ровно, + = наклон вправо */
@@ -7,12 +7,17 @@ export interface DeviceOrientationState {
   pitch: number;
   /** Датчик реально отдаёт данные (на десктопе событий нет) */
   supported: boolean;
+  /** Право на датчик получено (iOS 13+ — после requestPermission, остальные — true) */
+  permissionGranted: boolean;
 }
 
 /**
  * Запрос доступа к гироскопу. На iOS 13+ Safari требует явного разрешения,
  * вызванного ИЗ обработчика пользовательского жеста (клик по кнопке).
  * На Android/десктопе разрешения не нужно — просто проверяем наличие API.
+ *
+ * iOS запоминает решение для origin: повторный вызов после grant мгновенно
+ * возвращает granted, поэтому безопасно вызывать при каждом открытии камеры.
  */
 export async function ensureOrientationPermission(): Promise<boolean> {
   if (typeof window === "undefined") return false;
@@ -30,25 +35,37 @@ export async function ensureOrientationPermission(): Promise<boolean> {
 }
 
 /**
- * Гироскоп телефона для помощника ракурса.
+ * Гироскоп телефона для помощника ракурса (v3).
  *
- * Крен (roll) вычисляется с учётом ориентации экрана:
- * портрет — gamma, ландшафт — beta (с знаком по направлению поворота).
- * Точность ±1° достаточно для индикатора «телефон ровно».
+ * Ключевые свойства:
+ *  - `active` — подписка только пока видоискатель открыт (переоткрытие модалки
+ *    пересоздаёт слушатель: iOS 13+ сохраняет выданное разрешение для origin,
+ *    поэтому повторный запрос НЕ нужен — события сразу текут);
+ *  - roll/pitch корректируются по screen.orientation (портрет: roll = gamma,
+ *    ландшафт: roll = ±beta с учётом стороны поворота);
+ *  - `supported` = true только при реальных данных (десктопный Chrome шлёт
+ *    одно событие с null — отсечено, чтобы не висли «Выровняйте телефон»);
+ *  - `requestPermission()` — для iOS 13+, вызывать из клика.
  *
  * Обратная совместимость: isLevel/pitch (использовались в v1.2.x).
  */
-export function useDeviceOrientation() {
+export function useDeviceOrientation(active: boolean = true) {
   const [state, setState] = useState<DeviceOrientationState>({
     roll: 0,
     pitch: 0,
     supported: false,
+    permissionGranted: false,
   });
 
+  const requestPermission = useCallback(async (): Promise<boolean> => {
+    const granted = await ensureOrientationPermission();
+    setState((prev) => ({ ...prev, permissionGranted: granted }));
+    return granted;
+  }, []);
+
   useEffect(() => {
-    if (typeof window === "undefined" || !("DeviceOrientationEvent" in window)) {
-      return;
-    }
+    if (!active || typeof window === "undefined") return;
+    if (!("DeviceOrientationEvent" in window)) return;
 
     const handleOrientation = (e: DeviceOrientationEvent) => {
       // Десктопный Chrome может послать одно событие с null-значениями —
@@ -60,24 +77,38 @@ export function useDeviceOrientation() {
       const angle =
         (typeof screen !== "undefined" && screen.orientation?.angle) || 0;
 
-      // Крен относительно линии горизонта для текущей ориентации экрана
+      // Крен/наклон относительно линии горизонта для текущей ориентации экрана
       let roll: number;
-      if (angle === 90) roll = -beta;
-      else if (angle === 270 || angle === -90) roll = beta;
-      else roll = gamma; // портрет (0) и 180 — эвристика
+      let pitch: number;
+      if (angle === 90) {
+        roll = -beta;
+        pitch = -gamma;
+      } else if (angle === 270 || angle === -90) {
+        roll = beta;
+        pitch = gamma;
+      } else {
+        // портрет (0) и 180 — эвристика
+        roll = gamma;
+        pitch = beta;
+      }
 
-      setState({ roll, pitch: beta, supported: true });
+      setState({
+        roll,
+        pitch,
+        supported: true,
+        permissionGranted: true,
+      });
     };
 
     window.addEventListener("deviceorientation", handleOrientation);
     return () => {
       window.removeEventListener("deviceorientation", handleOrientation);
     };
-  }, []);
+  }, [active]);
 
-  const { roll, pitch, supported } = state;
+  const { roll, pitch, supported, permissionGranted } = state;
   // Телефон «ровно»: крен < 3° и вертикальная ориентация (портрет)
   const isLevel = supported && Math.abs(roll) < 3 && pitch > 80 && pitch < 100;
 
-  return { isLevel, pitch, roll, supported };
+  return { isLevel, pitch, roll, supported, permissionGranted, requestPermission };
 }

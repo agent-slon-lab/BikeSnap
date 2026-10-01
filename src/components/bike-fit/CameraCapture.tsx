@@ -1,13 +1,24 @@
 "use client";
 
 /**
- * CAMERA CAPTURE — живой видоискатель с помощником ракурса («дорисуй колёса в объективе»)
- * =======================================================================================
+ * CAMERA CAPTURE — живой видоискатель с помощником ракурса и авто-спуском
+ * =======================================================================
  *
  * Идея пользователя: пока наводишь камеру, программа находит колёса велосипеда,
  * дорисовывает их поверх картинки и подсказывает, куда встать. Колесо, снятое
  * строго сбоку — идеальный круг; под углом — овал. Пользователь смещается,
  * пока нарисованные овалы не станут кругами — это и есть правильный ракурс.
+ *
+ * v1.4.0 (камера-движок):
+ *  - детекция вынесена в Web Worker (src/workers/wheel-detect.worker.ts) —
+ *    Main Thread не фризится; при недоступности воркера — фолбэк на main thread;
+ *  - спуск через captureSafeFrame: кадр высокого разрешения ограничивается
+ *    до 2048px по большой стороне (iOS Safari не сбрасывает Canvas-контекст);
+ *  - АВТО-СПУСК: круглость пары ≥ 90% без завала по Pitch удерживается 1.5 с →
+ *    обратный отсчёт 3..2..1 → снимок; любое нарушение условий сбрасывает счёт;
+ *  - ПРЕДУПРЕЖДЕНИЕ PITCH: телефон завален вперёд/назад (beta за пределами
+ *    вертикали ±8°) → «Держите телефон строго вертикально (на уровне каретки)».
+ *    Показывается только при живых данных гироскопа (на десктопе молчим).
  *
  * Оверлей:
  *  - эллипсы колёс с процентом круглости (зелёный ≥ 88% — снимай);
@@ -26,13 +37,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { detectWheels, type DetectedEllipse, type WheelDetectStatus } from "@/lib/wheel-detect";
+import {
+  detectWheels,
+  type DetectedEllipse,
+  type WheelDetectResult,
+  type WheelDetectStatus,
+} from "@/lib/wheel-detect";
+import { captureSafeFrame } from "@/lib/camera-utils";
 import { useDeviceOrientation } from "@/hooks/use-device-orientation";
 
 interface CameraCaptureProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Вызывается с JPEG-файлом после нажатия кнопки спуска */
+  /** Вызывается с JPEG-файлом после нажатия кнопки спуска или авто-спуска */
   onCapture: (file: File) => void;
   /** Название ракурса для заголовка (например, «Фото — вид сбоку») */
   label?: string;
@@ -44,6 +61,15 @@ const PROC_WIDTH = 320;
 const PROC_INTERVAL_MS = 280;
 /** Коэффициент сглаживания детекций (EMA) — меньше = плавнее, но инертнее */
 const SMOOTH_ALPHA = 0.45;
+
+/** Порог круглости для АВТО-спуска — строгое «идеально» (планка ok-статуса 0.88) */
+const AUTO_ROUNDNESS = 0.9;
+/** Сколько нужно удерживать идеальный ракурс до запуска отсчёта, мс */
+const AUTO_HOLD_MS = 1500;
+/** Период тика менеджера авто-спуска, мс */
+const AUTO_TICK_MS = 100;
+/** Допуск Pitch вокруг вертикали (телефон вертикально ≈ beta 90°) */
+const PITCH_TOLERANCE_DEG = 8;
 
 interface OverlayState {
   status: WheelDetectStatus;
@@ -68,9 +94,63 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
   const [videoReady, setVideoReady] = useState(false);
   const [shot, setShot] = useState(false);
 
-  const { roll: gyroRoll, supported: gyroSupported } = useDeviceOrientation();
+  // Гироскоп активен только пока видоискатель открыт (переоткрытие модалки
+  // пересоздаёт подписку; iOS помнит выданное разрешение для origin)
+  const {
+    roll: gyroRoll,
+    pitch: gyroPitch,
+    supported: gyroSupported,
+    requestPermission,
+  } = useDeviceOrientation(open);
   const gyroRollRef = useRef(0);
   gyroRollRef.current = gyroSupported ? gyroRoll : 0;
+
+  // iOS 13+: запрос разрешения из жеста уже выполнен в PhotoUploader (клик по
+  // кнопке). Здесь дублируем мягко: если данные не текут и API умеет
+  // requestPermission — попробуем ещё раз (безопасно, origin помнит grant).
+  useEffect(() => {
+    if (!open || gyroSupported) return;
+    void requestPermission().catch(() => false);
+  }, [open, gyroSupported, requestPermission]);
+
+  // ============================================================
+  // WEB WORKER ДЕТЕКЦИИ (с фолбэком на main thread)
+  // ============================================================
+
+  const workerRef = useRef<Worker | null>(null);
+  const workerBrokenRef = useRef(false);
+
+  useEffect(() => {
+    if (!open || workerBrokenRef.current) return;
+
+    let w: Worker | null = null;
+    try {
+      w = new Worker(
+        new URL("../../workers/wheel-detect.worker.ts", import.meta.url),
+        { type: "module" },
+      );
+      w.onmessage = (e: MessageEvent<WheelDetectResult>) => {
+        busyRef.current = false;
+        applyResult(e.data);
+      };
+      w.onerror = () => {
+        // Воркер не запустился (старый браузер/политика CSP) — молча переходим
+        // на main thread: детектор лёгкий, UX не пострадает
+        workerBrokenRef.current = true;
+        busyRef.current = false;
+        w?.terminate();
+        if (workerRef.current === w) workerRef.current = null;
+      };
+      workerRef.current = w;
+    } catch {
+      workerBrokenRef.current = true;
+    }
+
+    return () => {
+      w?.terminate();
+      if (workerRef.current === w) workerRef.current = null;
+    };
+  }, [open]);
 
   // ============================================================
   // ЖИЗНЕННЫЙ ЦИКЛ КАМЕРЫ
@@ -85,6 +165,7 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
     setVideoReady(false);
     setShot(false);
     smoothRef.current = [];
+    busyRef.current = false;
 
     const start = async () => {
       try {
@@ -135,46 +216,56 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
   }, [open, facing]);
 
   // ============================================================
-  // ЦИКЛ ДЕТЕКЦИИ
+  // ЦИКЛ ДЕТЕКЦИИ (кадр готовим в main thread, считаем в воркере)
   // ============================================================
+
+  const applyResult = useCallback((result: WheelDetectResult) => {
+    const smoothed = smoothDetections(result.wheels, smoothRef.current);
+    smoothRef.current = smoothed;
+    setOverlay({
+      status: result.status,
+      wheels: smoothed,
+      roundness: result.roundness,
+      axleTiltDeg: result.axleTiltDeg,
+      hint: result.hint,
+    });
+  }, []);
 
   useEffect(() => {
     if (!open || !videoReady) return;
 
-    const processFrame = () => {
+    const grabFrame = (): ImageData | null => {
       const video = videoRef.current;
-      if (!video || video.readyState < 2 || busyRef.current) return;
-      busyRef.current = true;
-      try {
-        const vw = video.videoWidth;
-        const vh = video.videoHeight;
-        if (!vw || !vh) return;
+      if (!video || video.readyState < 2) return null;
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      if (!vw || !vh) return null;
 
-        if (!procCanvasRef.current) procCanvasRef.current = document.createElement("canvas");
-        const proc = procCanvasRef.current;
-        const pw = PROC_WIDTH;
-        const ph = Math.max(32, Math.round((PROC_WIDTH * vh) / vw));
-        if (proc.width !== pw || proc.height !== ph) {
-          proc.width = pw;
-          proc.height = ph;
-        }
-        const pctx = proc.getContext("2d", { willReadFrequently: true });
-        if (!pctx) return;
-        pctx.drawImage(video, 0, 0, pw, ph);
-        const frame = pctx.getImageData(0, 0, pw, ph);
+      if (!procCanvasRef.current) procCanvasRef.current = document.createElement("canvas");
+      const proc = procCanvasRef.current;
+      const pw = PROC_WIDTH;
+      const ph = Math.max(32, Math.round((PROC_WIDTH * vh) / vw));
+      if (proc.width !== pw || proc.height !== ph) {
+        proc.width = pw;
+        proc.height = ph;
+      }
+      const pctx = proc.getContext("2d", { willReadFrequently: true });
+      if (!pctx) return null;
+      pctx.drawImage(video, 0, 0, pw, ph);
+      return pctx.getImageData(0, 0, pw, ph);
+    };
 
-        const result = detectWheels(frame);
-        const smoothed = smoothDetections(result.wheels, smoothRef.current);
-        smoothRef.current = smoothed;
-        setOverlay({
-          status: result.status,
-          wheels: smoothed,
-          roundness: result.roundness,
-          axleTiltDeg: result.axleTiltDeg,
-          hint: result.hint,
-        });
-      } finally {
-        busyRef.current = false;
+    const processFrame = () => {
+      if (busyRef.current) return;
+      const frame = grabFrame();
+      if (!frame) return;
+
+      if (workerRef.current) {
+        busyRef.current = true;
+        workerRef.current.postMessage({ imageData: frame });
+      } else {
+        // Фолбэк: считаем в main thread (детектор ~1-2 мс на кадре 320px)
+        applyResult(detectWheels(frame));
       }
     };
 
@@ -186,7 +277,7 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
         timerRef.current = null;
       }
     };
-  }, [open, videoReady]);
+  }, [open, videoReady, applyResult]);
 
   // ============================================================
   // ОТРИСОВКА ОВЕРЛЕЯ
@@ -310,41 +401,97 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
   }, [open, drawOverlay]);
 
   // ============================================================
-  // СЪЁМКА
+  // СЪЁМКА (безопасный кадр ≤2048px)
   // ============================================================
 
   const capture = useCallback(() => {
     const video = videoRef.current;
     if (!video || !video.videoWidth || shot) return;
     setShot(true);
-    try {
-      const c = document.createElement("canvas");
-      c.width = video.videoWidth;
-      c.height = video.videoHeight;
-      const ctx = c.getContext("2d");
-      if (!ctx) return;
-      ctx.drawImage(video, 0, 0);
-      c.toBlob(
-        (blob) => {
-          setShot(false);
-          if (!blob) return;
-          const file = new File([blob], `bike-${Date.now()}.jpg`, { type: "image/jpeg" });
-          onCapture(file);
-          onOpenChange(false);
-        },
-        "image/jpeg",
-        0.92,
-      );
-    } catch {
-      setShot(false);
-    }
+    captureSafeFrame(video)
+      .then((blob) => {
+        const file = new File([blob], `bike-${Date.now()}.jpg`, { type: "image/jpeg" });
+        onCapture(file);
+        onOpenChange(false);
+      })
+      .catch(() => undefined)
+      .finally(() => setShot(false));
   }, [onCapture, onOpenChange, shot]);
+
+  const captureRef = useRef(capture);
+  captureRef.current = capture;
 
   const flipCamera = useCallback(() => {
     setFacing((f) => (f === "environment" ? "user" : "environment"));
   }, []);
 
-  const status = overlay?.status ?? "none";
+  // ============================================================
+  // АВТО-СПУСК: удержание идеального ракурса 1.5с → отсчёт 3..2..1 → снимок
+  // ============================================================
+
+  // Завал телефона вперёд/назад (Pitch) — только при живых данных датчика:
+  // на десктопе supported=false и предупреждение никогда не блокирует спуск
+  const pitchWarning =
+    gyroSupported && Math.abs(gyroPitch - 90) > PITCH_TOLERANCE_DEG;
+
+  const status: WheelDetectStatus = overlay?.status ?? "none";
+  const roundness = overlay?.roundness ?? 0;
+  const isOptimal =
+    status === "ok" && roundness >= AUTO_ROUNDNESS && !pitchWarning && !error;
+
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const holdStartRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const tick = () => {
+      if (!isOptimal) {
+        // Условие нарушено — полный сброс удержания и отсчёта
+        holdStartRef.current = null;
+        setCountdown((c) => (c === null ? c : null));
+        return;
+      }
+      const now = performance.now();
+      if (holdStartRef.current === null) {
+        holdStartRef.current = now;
+        setCountdown((c) => (c === null ? c : null));
+        return;
+      }
+      const heldMs = now - holdStartRef.current;
+      if (heldMs < AUTO_HOLD_MS) {
+        // Удержание ещё не набрано — статус «Удерживайте…»
+        setCountdown((c) => (c === null ? c : null));
+        return;
+      }
+      const countdownMs = heldMs - AUTO_HOLD_MS; // отсчёт 3 с: 3..2..1
+      const value = 3 - Math.floor(countdownMs / 1000);
+      if (value <= 0) {
+        holdStartRef.current = null;
+        setCountdown(null);
+        captureRef.current(); // авто-клик
+        return;
+      }
+      setCountdown((c) => (c === value ? c : value));
+    };
+
+    const t = setInterval(tick, AUTO_TICK_MS);
+    return () => clearInterval(t);
+  }, [open, isOptimal]);
+
+  const pillText = pitchWarning
+    ? "Держите телефон строго вертикально (на уровне каретки)"
+    : countdown !== null
+      ? `Снимок через ${countdown}…`
+      : isOptimal
+        ? "Ракурс идеален! Удерживайте — снимем автоматически"
+        : (overlay?.hint ?? "Наведите камеру на велосипед — оба колеса должны быть полностью в кадре");
+
+  const pillTone: "ok" | "warn" | "muted" = pitchWarning
+    ? "warn"
+    : countdown !== null || isOptimal
+      ? "ok"
+      : "muted";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -374,12 +521,25 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
                 <div
                   className={
                     "flex items-center gap-2 rounded-xl px-3 py-2 text-center text-xs font-semibold backdrop-blur " +
-                    statusPillClass(status)
+                    (pillTone === "ok"
+                      ? "bg-emerald-500/85 text-white"
+                      : pillTone === "warn"
+                        ? "bg-amber-500/85 text-black"
+                        : "bg-black/65 text-white")
                   }
                 >
-                  <StatusIcon status={status} />
-                  <span>{overlay?.hint ?? "Наведите камеру на велосипед — оба колеса должны быть полностью в кадре"}</span>
+                  <PillIcon tone={pillTone} />
+                  <span>{pillText}</span>
                 </div>
+              </div>
+            )}
+
+            {/* Оверлей обратного отсчёта */}
+            {countdown !== null && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/30">
+                <span className="text-7xl font-bold text-white drop-shadow-lg">
+                  {countdown}
+                </span>
               </div>
             )}
 
@@ -421,7 +581,7 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
               aria-label="Сделать снимок"
               className={
                 "size-16 rounded-full border-4 border-white bg-white/90 shadow-lg transition-all active:scale-90 disabled:opacity-40 " +
-                (status === "ok" ? "ring-4 ring-emerald-400/60" : "")
+                (pillTone === "ok" ? "ring-4 ring-emerald-400/60" : "")
               }
             />
 
@@ -463,21 +623,8 @@ function wheelColor(roundness: number, status: WheelDetectStatus): string {
   return "#fb7185"; // rose-400
 }
 
-function statusPillClass(status: WheelDetectStatus): string {
-  switch (status) {
-    case "ok":
-      return "bg-emerald-500/85 text-white";
-    case "tilted":
-      return "bg-amber-500/85 text-black";
-    case "partial":
-      return "bg-black/65 text-white";
-    default:
-      return "bg-black/65 text-white";
-  }
-}
-
-function StatusIcon({ status }: { status: WheelDetectStatus }) {
-  if (status === "ok") return <CheckCircle2 className="size-4 shrink-0" />;
-  if (status === "tilted") return <MoveHorizontal className="size-4 shrink-0" />;
+function PillIcon({ tone }: { tone: "ok" | "warn" | "muted" }) {
+  if (tone === "ok") return <CheckCircle2 className="size-4 shrink-0" />;
+  if (tone === "warn") return <MoveHorizontal className="size-4 shrink-0" />;
   return <AlertCircle className="size-4 shrink-0" />;
 }
