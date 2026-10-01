@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { Upload, Image as ImageIcon, AlertCircle, X, Smartphone } from "lucide-react";
+import { Upload, Image as ImageIcon, AlertCircle, X, Smartphone, Camera } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useDeviceOrientation } from "@/hooks/use-device-orientation";
+import { useDeviceOrientation, ensureOrientationPermission } from "@/hooks/use-device-orientation";
+import { CameraCapture } from "@/components/bike-fit/CameraCapture";
 
 interface PhotoUploaderProps {
   onPhotoSelected: (file: File, url: string) => void;
@@ -32,7 +33,8 @@ export function PhotoUploader({
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { isLevel } = useDeviceOrientation();
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const { isLevel, supported: gyroSupported } = useDeviceOrientation();
 
   const validate = useCallback((file: File): string | null => {
     const isAccepted =
@@ -47,7 +49,7 @@ export function PhotoUploader({
     return null;
   }, []);
 
-  const handleFile = useCallback(
+  const applyFile = useCallback(
     (file: File) => {
       const err = validate(file);
       if (err) {
@@ -63,6 +65,18 @@ export function PhotoUploader({
     },
     [validate, onPhotoSelected, currentPhotoUrl]
   );
+
+  const handleFile = useCallback(
+    (file: File) => applyFile(file),
+    [applyFile]
+  );
+
+  // Открытие камеры: на iOS запрос разрешения на гироскоп обязан идти
+  // из жеста пользователя — поэтому вызываем его прямо в обработчике клика
+  const openCamera = useCallback(() => {
+    void ensureOrientationPermission().catch(() => false);
+    setCameraOpen(true);
+  }, []);
 
   const onDrop = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
@@ -150,8 +164,8 @@ export function PhotoUploader({
           <p className="text-xs text-muted-foreground">
             JPG, PNG, WebP · до {MAX_SIZE_MB} МБ
           </p>
-          {/* Уровень гироскопа — только на мобильных */}
-          {typeof window !== 'undefined' && 'DeviceOrientationEvent' in window && (
+          {/* Уровень гироскопа — только когда датчик реально отдаёт данные */}
+          {gyroSupported && (
             <div className={cn(
               "mt-2 inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-semibold",
               isLevel
@@ -171,6 +185,25 @@ export function PhotoUploader({
           className="sr-only"
         />
       </div>
+
+      {/* Камера с помощником ракурса: детектор находит колёса в видоискателе,
+          дорисовывает их и подсказывает, когда ракурс строго сбоку */}
+      <Button
+        type="button"
+        variant="outline"
+        onClick={openCamera}
+        className="w-full border-orange-300 text-orange-600 hover:bg-orange-50 hover:text-orange-700 dark:border-orange-800 dark:text-orange-400 dark:hover:bg-orange-950/40"
+      >
+        <Camera className="size-4" />
+        Снять фото с помощником ракурса
+      </Button>
+
+      <CameraCapture
+        open={cameraOpen}
+        onOpenChange={setCameraOpen}
+        onCapture={handleFile}
+        label={label}
+      />
 
       {error && (
         <div className="flex items-start gap-2 rounded-lg border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 px-4 py-3 text-sm text-rose-700 dark:text-rose-400">
