@@ -20,6 +20,16 @@
  *    вертикали ±8°) → «Держите телефон строго вертикально (на уровне каретки)».
  *    Показывается только при живых данных гироскопа (на десктопе молчим).
  *
+ * v1.5.0 (ландшафт):
+ *  - на телефоне модалка всегда fullscreen (в обеих ориентациях) — дефолтный
+ *    sm:max-w-lg у DialogContent больше не сужает видоискатель;
+ *  - телефон набок (landscape + высота ≤ 500px, флаг useMediaFlag): панель
+ *    управления переезжает вправо вертикальным столбцом, превью занимает всю
+ *    ширину; перестройка — мгновенная, по matchMedia, прямо в открытом
+ *    видоискателе;
+ *  - на десктопе (ширина ≥ 640px И высота ≥ 501px) — прежнее «оконное» модальное
+ *    окно 46rem × 92dvh.
+ *
  * Оверлей:
  *  - эллипсы колёс с процентом круглости (зелёный ≥ 88% — снимай);
  *  - линия осей между колёсами + её завал к горизонту (то же выравнивание,
@@ -37,6 +47,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import {
   detectWheels,
   type DetectedEllipse,
@@ -45,6 +56,11 @@ import {
 } from "@/lib/wheel-detect";
 import { captureSafeFrame } from "@/lib/camera-utils";
 import { useDeviceOrientation } from "@/hooks/use-device-orientation";
+import {
+  useMediaFlag,
+  PHONE_LANDSCAPE_QUERY,
+  DESKTOP_DIALOG_QUERY,
+} from "@/hooks/use-media-flag";
 
 interface CameraCaptureProps {
   open: boolean;
@@ -80,6 +96,11 @@ interface OverlayState {
 }
 
 export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCaptureProps) {
+  // Телефон лежит набок / десктопное окно — реактивные флаги (перестройка
+  // на лету при повороте устройства)
+  const phoneLandscape = useMediaFlag(PHONE_LANDSCAPE_QUERY);
+  const desktopDialog = useMediaFlag(DESKTOP_DIALOG_QUERY);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const procCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -495,12 +516,23 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="h-[100dvh] max-h-none w-screen max-w-none overflow-hidden rounded-none border-none bg-black p-0 gap-0 sm:h-[92dvh] sm:w-[46rem] sm:max-w-[94vw] sm:rounded-2xl">
+      <DialogContent
+        className={cn(
+          // База — телефон, обе ориентации: строго fullscreen
+          // (sm:max-w-[94vw] глушит дефолтный sm:max-w-lg из ui/dialog)
+          "h-[100dvh] max-h-none w-screen max-w-none overflow-hidden rounded-none border-none bg-black p-0 gap-0 sm:max-w-[94vw]",
+          // Десктоп — оконный режим
+          desktopDialog &&
+            "h-[92dvh] w-[46rem] max-w-[94vw] rounded-2xl",
+          // Телефон набок — гарантируем fullscreen даже на широких экранах
+          phoneLandscape && "sm:w-screen sm:max-w-none",
+        )}
+      >
         <DialogTitle className="sr-only">
           Камера — помощник ракурса{label ? `: ${label}` : ""}
         </DialogTitle>
 
-        <div className="flex h-full flex-col bg-black">
+        <div className={cn("flex h-full bg-black", phoneLandscape ? "flex-row" : "flex-col")}>
           {/* Область превью */}
           <div className="relative flex min-h-0 flex-1 items-center justify-center">
             <video
@@ -517,7 +549,10 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
 
             {/* Статус-плашка */}
             {!error && (
-              <div className="pointer-events-none absolute left-1/2 top-3 w-[92%] max-w-md -translate-x-1/2">
+              <div className={cn(
+                "pointer-events-none absolute left-1/2 top-3 w-[92%] -translate-x-1/2",
+                phoneLandscape ? "max-w-sm" : "max-w-md",
+              )}>
                 <div
                   className={
                     "flex items-center gap-2 rounded-xl px-3 py-2 text-center text-xs font-semibold backdrop-blur " +
@@ -561,8 +596,15 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
             )}
           </div>
 
-          {/* Панель управления */}
-          <div className="flex items-center justify-center gap-8 bg-black pb-[max(1rem,env(safe-area-inset-bottom))] pt-4">
+          {/* Панель управления: портрет — снизу горизонтально,
+              ландшафт — справа вертикальным столбцом (с safe-area под «челку») */}
+          <div
+            className={cn(
+              "flex items-center justify-center gap-8 bg-black pb-[max(1rem,env(safe-area-inset-bottom))] pt-4",
+              phoneLandscape &&
+                "h-full flex-col gap-7 pb-4 pl-4 pr-[max(1rem,env(safe-area-inset-right))]",
+            )}
+          >
             <Button
               variant="ghost"
               size="icon"

@@ -74,8 +74,18 @@ export function useDeviceOrientation(active: boolean = true) {
       if (e.beta === null && e.gamma === null) return;
       const beta = e.beta ?? 0;
       const gamma = e.gamma ?? 0;
+      // Текущий поворот экрана. screen.orientation нет на iOS < 16.4 —
+      // там работает устаревший, но живой window.orientation (-90/90/180).
+      // Без фолбэка на старых iOS в ландшафте pitch/roll считались бы
+      // по портретной схеме и авто-спуск блокировался бы вечным warning'ом.
       const angle =
-        (typeof screen !== "undefined" && screen.orientation?.angle) || 0;
+        (typeof screen !== "undefined" && screen.orientation?.angle) ||
+        (typeof window !== "undefined" &&
+        typeof (window as unknown as { orientation?: number }).orientation ===
+          "number"
+          ? ((window as unknown as { orientation?: number }).orientation ??
+            0)
+          : 0) || 0;
 
       // Крен/наклон относительно линии горизонта для текущей ориентации экрана
       let roll: number;

@@ -38,6 +38,8 @@ import {
 } from "@/lib/bike-fit";
 import { BIKE_TYPES } from "@/lib/bike-params";
 import { useBikeStore } from "@/lib/bike-store";
+import { cn } from "@/lib/utils";
+import { useMediaFlag, PHONE_LANDSCAPE_QUERY } from "@/hooks/use-media-flag";
 
 interface ViewPhotoState {
   url: string | null;
@@ -64,6 +66,8 @@ const SYMMETRY_COLORS = {
 
 export function PhotoAnalysisSection() {
   const { bikeType, body } = useBikeStore();
+  // Телефон набок: фото слева, рекомендации/метрики справа (две колонки)
+  const phoneLandscape = useMediaFlag(PHONE_LANDSCAPE_QUERY);
 
   // Состояние для каждого ракурса
   const [sideState, setSideState] = useState<ViewPhotoState>(INITIAL_STATE);
@@ -363,7 +367,13 @@ export function PhotoAnalysisSection() {
         </TabsList>
 
         {/* === Вид сбоку === */}
-        <TabsContent value="side" className="space-y-4">
+        <TabsContent
+          value="side"
+          className={cn(
+            "space-y-4",
+            phoneLandscape && sideAnalysis && "grid grid-cols-2 items-start gap-4 space-y-0",
+          )}
+        >
           <ViewSection
             view="side"
             state={sideState}
@@ -404,7 +414,13 @@ export function PhotoAnalysisSection() {
         </TabsContent>
 
         {/* === Вид сзади === */}
-        <TabsContent value="back" className="space-y-4">
+        <TabsContent
+          value="back"
+          className={cn(
+            "space-y-4",
+            phoneLandscape && backAnalysis && "grid grid-cols-2 items-start gap-4 space-y-0",
+          )}
+        >
           <ViewSection
             view="back"
             state={backState}
@@ -442,7 +458,13 @@ export function PhotoAnalysisSection() {
         </TabsContent>
 
         {/* === Вид спереди === */}
-        <TabsContent value="front" className="space-y-4">
+        <TabsContent
+          value="front"
+          className={cn(
+            "space-y-4",
+            phoneLandscape && frontAnalysis && "grid grid-cols-2 items-start gap-4 space-y-0",
+          )}
+        >
           <ViewSection
             view="front"
             state={frontState}
@@ -557,7 +579,7 @@ function ViewSection({
                 <span>{VIEW_LABELS[view].emoji}</span>
                 Фото — {VIEW_LABELS[view].ru}
               </CardTitle>
-              {analysis && (
+              {!!analysis && (
                 <Badge className="bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400">
                   ✓ Готово
                 </Badge>
