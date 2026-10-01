@@ -65,9 +65,23 @@ type WizardStep = 0 | 1 | 2 | 3;
 
 export function ModelSelectionWizard() {
   const store = useBikeStore();
-  const { bikeType, goal, body, setBikeType, setGoal, setBody, resetMode } = store;
+  const {
+    bikeType,
+    goal,
+    body,
+    setBikeType,
+    setGoal,
+    setBody,
+    resetMode,
+    selectStep,
+    setSelectStep,
+  } = store;
 
-  const [step, setStep] = useState<WizardStep>(0);
+  // v1.13.0: шаг мастера живёт в store и персистится — после refresh/
+  // перезахода открываемся на том же шаге (раньше был локальный useState,
+  // и позиция терялась, хотя данные сохранялись)
+  const step = selectStep as WizardStep;
+  const setStep = (s: WizardStep) => setSelectStep(s);
 
   // Состояние тела — локальное, синхронизировано с store
   const [height, setHeight] = useState<number>(body.height || 0);

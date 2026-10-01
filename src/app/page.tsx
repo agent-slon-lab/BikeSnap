@@ -98,6 +98,22 @@ export default function Home() {
   const { mode, step, setStep, resetMode } = store;
   const { resolvedTheme, setTheme } = useTheme();
 
+  // v1.13.0: mode/step персистятся в localStorage. Пока не смонтировались —
+  // рендерим заглушку: SSR и первый клиентский рендер должны совпадать,
+  // иначе React hydration mismatch. После маунта открываемся ровно на том
+  // шаге, где пользователь остановился (или на меню для новичка).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="flex size-16 items-center justify-center rounded-2xl bg-orange-500 text-white shadow-lg shadow-orange-500/30">
+          <Bike className="size-9 animate-pulse" />
+        </div>
+      </div>
+    );
+  }
+
   // ===== РЕЖИМ ВЫБОРА (mode === null) — стартовая страница =====
   if (!mode) {
     return (
@@ -286,7 +302,8 @@ export default function Home() {
             <p className="mx-auto mt-4 max-w-2xl text-base text-muted-foreground sm:text-lg">
               Пройдите 4 шага онбординга: параметры тела → размеры велосипеда
               → сводка → фотоанализ позы. Получите конкретные рекомендации в
-              миллиметрах.
+              миллиметрах. Прогресс сохраняется автоматически — можно
+              вернуться в любой момент.
             </p>
           </section>
         )}

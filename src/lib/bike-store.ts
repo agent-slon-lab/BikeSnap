@@ -87,7 +87,12 @@ interface AppState {
   mode: "fit" | "select" | null;
 
   // Текущий шаг (для Режима A — настройки велосипеда)
+  // v1.13.0: персистится — после refresh/перезахода открываемся на том же шаге
   step: OnboardingStep;
+
+  // Текущий шаг мастера подбора рамы (Режим B), 0..3
+  // v1.13.0: был локальный useState — терялся при refresh
+  selectStep: number;
 
   // Данные онбординга (общие для обоих режимов)
   bikeType: BikeType | null;
@@ -110,6 +115,7 @@ interface AppState {
 
   // Действия Режима A (настройка)
   setStep: (step: OnboardingStep) => void;
+  setSelectStep: (n: number) => void;
   setBikeType: (type: BikeType) => void;
   setGoal: (goal: "comfort" | "sport" | "race") => void;
   toggleComplaint: (c: Complaint) => void;
@@ -152,6 +158,7 @@ export const useBikeStore = create<AppState>()(
     (set, get) => ({
       mode: null,
       step: "body",
+      selectStep: 0,
       bikeType: null,
       goal: null,
       complaints: [],
@@ -160,7 +167,10 @@ export const useBikeStore = create<AppState>()(
       wheelSizeId: "26",
 
       setMode: (mode) => set({ mode }),
-      resetMode: () => set({ mode: null, step: "body" }),
+      // v1.13.0: «На главную» больше не сбрасывает шаг — меню покажет
+      // «Продолжить», и пользователь вернётся ровно туда, где остановился
+      resetMode: () => set({ mode: null }),
+      setSelectStep: (n) => set({ selectStep: Math.max(0, Math.min(3, Math.round(n))) }),
 
       setStep: (step) => set({ step }),
       setBikeType: (bikeType) => set({ bikeType }),
@@ -197,6 +207,7 @@ export const useBikeStore = create<AppState>()(
       reset: () =>
         set({
           step: "body",
+          selectStep: 0,
           bikeType: null,
           goal: null,
           complaints: [],
@@ -213,9 +224,14 @@ export const useBikeStore = create<AppState>()(
     }),
     {
       name: "bikefit-storage",
-      // сохраняем только данные, не UI-состояние
+      // v1.13.0: сохраняем ВСЁ — и данные, и позицию пользователя (режим,
+      // шаг настроек, шаг подбора рамы). Теперь каждый клик/этап переживает
+      // refresh и перезаход: открываемся ровно там, где остановились.
       // wheelSizeId — параметр колеса из шага 3, нужен на сводке и в калибраторе
       partialize: (state) => ({
+        mode: state.mode,
+        step: state.step,
+        selectStep: state.selectStep,
         bikeType: state.bikeType,
         goal: state.goal,
         complaints: state.complaints,
@@ -223,6 +239,23 @@ export const useBikeStore = create<AppState>()(
         bike: state.bike,
         wheelSizeId: state.wheelSizeId,
       }),
+      // Санитайзер ре-гидрации: старые бэкапы (без mode/step/selectStep) и
+      // мусорные значения не должны ломать навигацию (напр. step: "context"
+      // из версий ≤ v1.11.x).
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<AppState>;
+        const fitSteps: OnboardingStep[] = ["body", "bike", "summary", "analysis"];
+        const mode = p.mode === "fit" || p.mode === "select" ? p.mode : null;
+        const step =
+          p.step && fitSteps.includes(p.step) ? p.step : "body";
+        const selectStep =
+          typeof p.selectStep === "number" &&
+          p.selectStep >= 0 &&
+          p.selectStep <= 3
+            ? Math.round(p.selectStep)
+            : 0;
+        return { ...current, ...p, mode, step, selectStep };
+      },
     }
   )
 );

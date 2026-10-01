@@ -6,6 +6,7 @@ import {
   Search,
   ChevronRight,
   Sparkles,
+  History,
 } from "lucide-react";
 import {
   Card,
@@ -16,11 +17,34 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { useBikeStore } from "@/lib/bike-store";
+import { useBikeStore, type OnboardingStep } from "@/lib/bike-store";
 import { BIKE_MODELS, getModelCountByType } from "@/lib/bike-models";
 
+const FIT_STEP_LABELS: Record<OnboardingStep, string> = {
+  body: "Тело",
+  bike: "Велосипед",
+  summary: "Сводка",
+  analysis: "Анализ",
+};
+const SELECT_STEP_LABELS = [
+  "Тип и цель",
+  "Тело",
+  "Целевая геометрия",
+  "Результаты",
+];
+
 export function ModeSelectionScreen() {
-  const { setMode, reset } = useBikeStore();
+  const {
+    setMode,
+    reset,
+    body,
+    goal,
+    complaints,
+    bike,
+    bikeType,
+    selectStep,
+    step,
+  } = useBikeStore();
   const counts = getModelCountByType();
   const totalModels = BIKE_MODELS.length;
 
@@ -33,8 +57,61 @@ export function ModeSelectionScreen() {
     setMode(mode);
   };
 
+  // ===== v1.13.0: «Продолжить с того же места» =====
+  // Прогресс есть? (данные сценариев сохранены в bikefit-storage)
+  const hasSelectProgress =
+    selectStep > 0 && (!!bikeType || !!goal || body.height > 0);
+  const hasFitProgress =
+    body.height > 0 ||
+    body.inseam > 0 ||
+    !!goal ||
+    complaints.length > 0 ||
+    !!bike.saddleHeight ||
+    !!bike.wheelbase ||
+    !!bike.wheelHeight;
+  // Сценарии взаимоисключаемы (карточка режима сбрасывает всё), но body/goal
+  // общие — при прогрессе подбора рамы показываем только его, чтобы не путать
+  const resumeSelect = hasSelectProgress;
+  const resumeFit = !hasSelectProgress && hasFitProgress;
+
+  const handleResume = () => {
+    // Без reset() — возвращаемся ровно на сохранённый шаг (mode/step/selectStep
+    // восстановились из bikefit-storage при загрузке страницы)
+    setMode(resumeSelect ? "select" : "fit");
+  };
+
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+      {/* v1.13.0: баннер «Продолжить» — если есть незавершённый сценарий */}
+      {(resumeFit || resumeSelect) && (
+        <div className="mb-6 rounded-xl border border-orange-500/40 bg-orange-500/5 p-4 sm:p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-orange-500/15">
+                <History className="size-5 text-orange-500" />
+              </div>
+              <div>
+                <p className="text-sm font-bold">
+                  Продолжить с того места, где остановились
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {resumeSelect
+                    ? `Подбор рамы · шаг ${selectStep + 1} из 4 «${SELECT_STEP_LABELS[selectStep] ?? "—"}» — все данные сохранены`
+                    : `Настройка велосипеда · шаг «${FIT_STEP_LABELS[step]}» — все данные сохранены`}
+                </p>
+              </div>
+            </div>
+            <Button
+              onClick={handleResume}
+              className="shrink-0 bg-orange-500 hover:bg-orange-600"
+            >
+              Продолжить
+              <ChevronRight className="size-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Hero */}
       <div className="mb-10 text-center">
         <div className="mb-4 flex justify-center">
@@ -72,7 +149,7 @@ export function ModeSelectionScreen() {
                 <Wrench className="size-6" />
               </div>
               <Badge variant="outline" className="bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-400">
-                5 шагов
+                4 шага
               </Badge>
             </div>
             <CardTitle className="mt-4 text-xl">Настроить мой велосипед</CardTitle>
@@ -107,6 +184,11 @@ export function ModeSelectionScreen() {
               Начать настройку
               <ChevronRight className="size-4" />
             </Button>
+            {(resumeFit || resumeSelect) && (
+              <p className="text-center text-[11px] text-muted-foreground">
+                Начать заново — сохранённый прогресс будет удалён
+              </p>
+            )}
           </CardContent>
         </Card>
 
@@ -164,6 +246,11 @@ export function ModeSelectionScreen() {
               Подобрать раму
               <ChevronRight className="size-4" />
             </Button>
+            {(resumeFit || resumeSelect) && (
+              <p className="text-center text-[11px] text-muted-foreground">
+                Начать заново — сохранённый прогресс будет удалён
+              </p>
+            )}
           </CardContent>
         </Card>
       </div>
