@@ -55,6 +55,7 @@ import {
   type WheelDetectStatus,
 } from "@/lib/wheel-detect";
 import { captureSafeFrame } from "@/lib/camera-utils";
+import type { CaptureMeta } from "@/lib/fit-report";
 import { useDeviceOrientation } from "@/hooks/use-device-orientation";
 import {
   useMediaFlag,
@@ -65,8 +66,9 @@ import {
 interface CameraCaptureProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Вызывается с JPEG-файлом после нажатия кнопки спуска или авто-спуска */
-  onCapture: (file: File) => void;
+  /** Вызывается с JPEG-файлом после нажатия кнопки спуска или авто-спуска.
+   *  meta — гироскоп в момент спуска (для отчёта об отладке, v1.6.0). */
+  onCapture: (file: File, meta?: CaptureMeta) => void;
   /** Название ракурса для заголовка (например, «Фото — вид сбоку») */
   label?: string;
 }
@@ -123,8 +125,12 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
     supported: gyroSupported,
     requestPermission,
   } = useDeviceOrientation(open);
+  // Roll/Pitch в refs: capture() читает актуальные значения без пересоздания
+  // колбэка (в его зависимостях нет gyro-состояния)
   const gyroRollRef = useRef(0);
   gyroRollRef.current = gyroSupported ? gyroRoll : 0;
+  const gyroPitchRef = useRef(0);
+  gyroPitchRef.current = gyroSupported ? gyroPitch : 0;
 
   // iOS 13+: запрос разрешения из жеста уже выполнен в PhotoUploader (клик по
   // кнопке). Здесь дублируем мягко: если данные не текут и API умеет
@@ -432,7 +438,13 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
     captureSafeFrame(video)
       .then((blob) => {
         const file = new File([blob], `bike-${Date.now()}.jpg`, { type: "image/jpeg" });
-        onCapture(file);
+        // Гироскоп в момент спуска — уйдёт в отчёт для отладки
+        onCapture(file, {
+          pitch: gyroPitchRef.current,
+          roll: gyroRollRef.current,
+          gyroSupported,
+          timestamp: Date.now(),
+        });
         onOpenChange(false);
       })
       .catch(() => undefined)

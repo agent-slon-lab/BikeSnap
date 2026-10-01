@@ -40,12 +40,16 @@ import { BIKE_TYPES } from "@/lib/bike-params";
 import { useBikeStore } from "@/lib/bike-store";
 import { cn } from "@/lib/utils";
 import { useMediaFlag, PHONE_LANDSCAPE_QUERY } from "@/hooks/use-media-flag";
+import { DebugReportCard } from "@/components/bike-fit/DebugReportCard";
+import type { CaptureMeta, ReportViewInput } from "@/lib/fit-report";
 
 interface ViewPhotoState {
   url: string | null;
   landmarks: Point[] | null;
   analyzing: boolean;
   error: string | null;
+  /** Гироскоп в момент спуска (только для кадров из камеры, v1.6.0) */
+  captureMeta: CaptureMeta | null;
 }
 
 const INITIAL_STATE: ViewPhotoState = {
@@ -53,6 +57,7 @@ const INITIAL_STATE: ViewPhotoState = {
   landmarks: null,
   analyzing: false,
   error: null,
+  captureMeta: null,
 };
 
 // Цвета линий симметрии для overlay
@@ -241,18 +246,18 @@ export function PhotoAnalysisSection() {
   );
 
   const handlePhotoSelected = useCallback(
-    (view: ViewType, file: File, url: string) => {
+    (view: ViewType, file: File, url: string, meta?: CaptureMeta) => {
       if (view === "side") {
         if (sideState.url) URL.revokeObjectURL(sideState.url);
-        setSideState({ ...INITIAL_STATE, url });
+        setSideState({ ...INITIAL_STATE, url, captureMeta: meta ?? null });
         setSideAnalysis(null);
       } else if (view === "back") {
         if (backState.url) URL.revokeObjectURL(backState.url);
-        setBackState({ ...INITIAL_STATE, url });
+        setBackState({ ...INITIAL_STATE, url, captureMeta: meta ?? null });
         setBackAnalysis(null);
       } else {
         if (frontState.url) URL.revokeObjectURL(frontState.url);
-        setFrontState({ ...INITIAL_STATE, url });
+        setFrontState({ ...INITIAL_STATE, url, captureMeta: meta ?? null });
         setFrontAnalysis(null);
       }
     },
@@ -520,6 +525,39 @@ export function PhotoAnalysisSection() {
         />
       )}
 
+      {/* === Отчёт для отладки (v1.6.0): появляется как только есть фото —
+          и при успехе анализа, и при ошибке (ошибки ценнее для отладки) === */}
+      {(sideState.url || backState.url || frontState.url) && (
+        <DebugReportCard
+          views={[
+            {
+              view: "side",
+              url: sideState.url,
+              landmarks: sideState.landmarks,
+              analysis: sideAnalysis,
+              error: sideState.error,
+              captureMeta: sideState.captureMeta,
+            },
+            {
+              view: "back",
+              url: backState.url,
+              landmarks: backState.landmarks,
+              analysis: backAnalysis,
+              error: backState.error,
+              captureMeta: backState.captureMeta,
+            },
+            {
+              view: "front",
+              url: frontState.url,
+              landmarks: frontState.landmarks,
+              analysis: frontAnalysis,
+              error: frontState.error,
+              captureMeta: frontState.captureMeta,
+            },
+          ] as ReportViewInput[]}
+        />
+      )}
+
       {/* === Комплексные рекомендации: геометрия ↔ поза === */}
       {sideAnalysis && (
         <CrossRefRecommendations sideAnalysis={sideAnalysis} />
@@ -536,7 +574,7 @@ interface ViewSectionProps {
   view: ViewType;
   state: ViewPhotoState;
   analysis: unknown;
-  onPhotoSelected: (view: ViewType, file: File, url: string) => void;
+  onPhotoSelected: (view: ViewType, file: File, url: string, meta?: CaptureMeta) => void;
   onClear: (view: ViewType) => void;
   onAnalyze: (img: HTMLImageElement) => void;
   overlayLines?: Array<{ a: Point; b: Point; color: string; label?: string; dashed?: boolean }>;
@@ -564,7 +602,7 @@ function ViewSection({
           </CardHeader>
           <CardContent>
             <PhotoUploader
-              onPhotoSelected={(file, url) => onPhotoSelected(view, file, url)}
+              onPhotoSelected={(file, url, meta) => onPhotoSelected(view, file, url, meta)}
               currentPhotoUrl={state.url}
               onClear={() => onClear(view)}
               label={`Загрузите фото — ${VIEW_LABELS[view].short}`}
@@ -607,7 +645,7 @@ function ViewSection({
             )}
             <div className="flex justify-center">
               <PhotoUploader
-                onPhotoSelected={(file, url) => onPhotoSelected(view, file, url)}
+                onPhotoSelected={(file, url, meta) => onPhotoSelected(view, file, url, meta)}
                 currentPhotoUrl={state.url}
                 onClear={() => onClear(view)}
               />

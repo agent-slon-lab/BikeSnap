@@ -4,11 +4,13 @@ import { useCallback, useRef, useState } from "react";
 import { Upload, Image as ImageIcon, AlertCircle, X, Smartphone, Camera } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import type { CaptureMeta } from "@/lib/fit-report";
 import { useDeviceOrientation, ensureOrientationPermission } from "@/hooks/use-device-orientation";
 import { CameraCapture } from "@/components/bike-fit/CameraCapture";
 
 interface PhotoUploaderProps {
-  onPhotoSelected: (file: File, url: string) => void;
+  /** meta — гироскоп в момент спуска (есть только у кадров из камеры) */
+  onPhotoSelected: (file: File, url: string, meta?: CaptureMeta) => void;
   currentPhotoUrl: string | null;
   onClear: () => void;
   /** Заголовок зоны загрузки */
@@ -50,7 +52,7 @@ export function PhotoUploader({
   }, []);
 
   const applyFile = useCallback(
-    (file: File) => {
+    (file: File, meta?: CaptureMeta) => {
       const err = validate(file);
       if (err) {
         setError(err);
@@ -61,13 +63,13 @@ export function PhotoUploader({
         URL.revokeObjectURL(currentPhotoUrl);
       }
       const url = URL.createObjectURL(file);
-      onPhotoSelected(file, url);
+      onPhotoSelected(file, url, meta);
     },
     [validate, onPhotoSelected, currentPhotoUrl]
   );
 
   const handleFile = useCallback(
-    (file: File) => applyFile(file),
+    (file: File, meta?: CaptureMeta) => applyFile(file, meta),
     [applyFile]
   );
 

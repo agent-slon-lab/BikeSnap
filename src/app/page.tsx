@@ -19,6 +19,7 @@ import {
   useBikeStore,
   type OnboardingStep,
 } from "@/lib/bike-store";
+import { APP_VERSION } from "@/lib/app-version";
 import { OnboardingContext } from "@/components/bike-fit/OnboardingContext";
 import { OnboardingBody } from "@/components/bike-fit/OnboardingBody";
 import { BikeParametersForm } from "@/components/bike-fit/BikeParametersForm";
@@ -366,7 +367,7 @@ function Footer() {
               BikeSnap · образовательный инструмент для велосипедистов
             </span>
             <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground">
-              v1.5.0
+              {APP_VERSION}
             </Badge>
           </div>
           <p className="text-xs text-muted-foreground text-center sm:text-right max-w-md">
