@@ -137,7 +137,14 @@ export function VideoAnalysisSection() {
     const A = side === "left" ? POSE_LANDMARKS.LEFT_ANKLE : POSE_LANDMARKS.RIGHT_ANKLE;
     const HE = side === "left" ? POSE_LANDMARKS.LEFT_HEEL : POSE_LANDMARKS.RIGHT_HEEL;
 
-    const angles = [
+    // Явный тип: union цветов из литерала сужает push цвета shoulder ниже
+    const angles: Array<{
+      a: { x: number; y: number };
+      b: { x: number; y: number };
+      c: { x: number; y: number };
+      color: string;
+      label: string;
+    }> = [
       {
         a: landmarks[H],
         b: landmarks[K],
@@ -376,7 +383,8 @@ export function VideoAnalysisSection() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <ResultsPanel analysis={analysis} />
+                {/* Видео-анализ всегда снимается сбоку — viewType фиксирован */}
+                <ResultsPanel viewType="side" sideAnalysis={analysis} backAnalysis={null} frontAnalysis={null} />
               </CardContent>
             </Card>
           )}

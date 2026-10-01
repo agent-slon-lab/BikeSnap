@@ -256,6 +256,8 @@ export async function POST(req: NextRequest) {
     }
 
     const response = await zai.chat.completions.createVision({
+      // Vision-модель SDK (обязательное поле типа CreateChatCompletionVisionBody)
+      model: "glm-4.5v",
       messages: [
         {
           role: "user",
