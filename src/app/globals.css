@@ -119,6 +119,20 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* ============================================================
+     ПЛЕЙСХОЛДЕРЫ (примерные цифры-подсказки в пустых полях)
+     Должны быть заметно тусклее реальных значений, чтобы их
+     нельзя было спутать с введёнными данными. !important —
+     сознательно: перекрывает утилиты placeholder:text-*.
+     ============================================================ */
+  input::placeholder,
+  textarea::placeholder {
+    color: color-mix(in oklab, var(--muted-foreground) 50%, transparent) !important;
+  }
+  /* Radix SelectTrigger в состоянии placeholder */
+  [data-slot="select-trigger"][data-placeholder] {
+    color: color-mix(in oklab, var(--muted-foreground) 50%, transparent) !important;
+  }
 }
 
 /* ============================================================

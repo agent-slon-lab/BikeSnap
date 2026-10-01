@@ -182,7 +182,8 @@ export function OnboardingBody() {
         <User className="size-5 text-orange-500" />
         <h2 className="text-lg font-bold">Райдеры</h2>
         <span className="text-xs text-muted-foreground">
-          Выбери райдера или создай нового
+          Выбери райдера или создай нового · главное — рост и inseam, остальное
+          по желанию
         </span>
       </div>
 

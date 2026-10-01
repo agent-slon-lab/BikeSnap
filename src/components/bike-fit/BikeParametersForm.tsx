@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Bike, Plus, Trash2, Save, Info } from "lucide-react";
+import { Bike, Plus, Trash2, Save, Info, CircleHelp } from "lucide-react";
+import { StepGuide, type GuideStepDef } from "@/components/guide/step-guide";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -99,6 +100,40 @@ const PARAM_FIELDS: ParamField[] = [
   },
 ];
 
+// ============================================================
+// ИНТЕРАКТИВНЫЙ ГИД ШАГА 3: что заполнять и в каком порядке.
+// Обязательные поля — по очереди (SH → WB → WH), шаг проваливается
+// сам, как только поле заполнено. Опциональные — коротким финалом.
+// ============================================================
+const BIKE_GUIDE_KEY = "bikesnap-bike-guide-done";
+
+const BIKE_GUIDE_STEPS: GuideStepDef[] = [
+  {
+    targetId: "bike-field-saddleHeight",
+    title: "Шаг 1 · Высота седла (SH)",
+    text: "Обязательно. Измерь рулеткой от центра каретки до верха седла и впиши число в мм. Это эталон — от него считаются все рекомендации.",
+    done: () => !!useBikeStore.getState().bike.saddleHeight,
+  },
+  {
+    targetId: "bike-field-wheelbase",
+    title: "Шаг 2 · Колёсная база (WB)",
+    text: "Обязательно. Расстояние между осями колёс — рулеткой по земле. Часто есть в геометрии рамы на сайте производителя.",
+    done: () => !!useBikeStore.getState().bike.wheelbase,
+  },
+  {
+    targetId: "bike-field-wheelHeight",
+    title: "Шаг 3 · Типоразмер колеса",
+    text: "Обязательно. Просто выбери из списка — 26″/27.5″/29″/700c. Маркировка напечатана на покрышке, радиус подставится сам.",
+    done: () => !!useBikeStore.getState().bike.wheelHeight,
+    nextLabel: "Дальше",
+  },
+  {
+    targetId: "bike-field-ett",
+    title: "Готово! Остальное — по желанию",
+    text: "ETT, вынос, угол, шатун и каретку можно не трогать: алгоритм посчитает их по фото. Теперь жми «Далее: Сводка» внизу страницы.",
+  },
+];
+
 export function BikeParametersForm() {
   const { bike, setBike, setWheelSizeId } = useBikeStore();
   const [bikes, setBikes] = useState<BikeRecord[]>([]);
@@ -112,6 +147,8 @@ export function BikeParametersForm() {
   const lastSavedJsonRef = useRef<string>("");
   // Гарантированный сброс BikePhotoCalibrator при смене/создании велика
   const [calibratorKey, setCalibratorKey] = useState(0);
+  // Интерактивный гид шага 3: авто-старт один раз (пока не пройдён)
+  const [guideOpen, setGuideOpen] = useState(false);
 
   const reload = useCallback(() => {
     const all = getBikes();
@@ -126,6 +163,36 @@ export function BikeParametersForm() {
   useEffect(() => {
     reload();
   }, [reload]);
+
+  // Авто-старт гида: при первом входе на шаг с выбранным велосипедом,
+  // если три обязательных поля ещё не заполнены. Пройдённый гид больше
+  // не показывается (localStorage), но доступен кнопкой «Как заполнить».
+  useEffect(() => {
+    if (!activeBike) return;
+    const t = setTimeout(() => {
+      try {
+        if (localStorage.getItem(BIKE_GUIDE_KEY) === "1") return;
+        const b = useBikeStore.getState().bike;
+        if (b.saddleHeight && b.wheelbase && b.wheelHeight) {
+          localStorage.setItem(BIKE_GUIDE_KEY, "1"); // опытному пользователю гид не нужен
+          return;
+        }
+        setGuideOpen(true);
+      } catch {
+        /* localStorage недоступен — гид просто не покажется сам */
+      }
+    }, 700);
+    return () => clearTimeout(t);
+  }, [activeBike?.id]);
+
+  const finishGuide = () => {
+    setGuideOpen(false);
+    try {
+      localStorage.setItem(BIKE_GUIDE_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+  };
 
   const handleCreate = () => {
     if (!newName.trim()) return;
@@ -315,12 +382,22 @@ export function BikeParametersForm() {
       {/* Если выбран велик — показываем параметры */}
       {activeBike && (
         <>
-          {/* Кнопка сохранения (+ автосохранение — индикатор слева) */}
-          <div className="flex items-center justify-between">
+          {/* Кнопка сохранения (+ автосохранение — индикатор слева, гид — повтор) */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold">
               🚲 {activeBike.name} — параметры
             </h3>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-muted-foreground"
+                onClick={() => setGuideOpen(true)}
+                title="Пошаговая подсказка: что заполнять и как измерить"
+              >
+                <CircleHelp className="size-4 text-orange-500" />
+                Как заполнить
+              </Button>
               <span
                 className={cn(
                   "text-[10px] text-emerald-600 dark:text-emerald-400 transition-opacity duration-500",
@@ -388,8 +465,8 @@ export function BikeParametersForm() {
               const selectedWs = isWheelField && value ? findWheelSize(null, value) : null;
 
               return (
-                <Card key={p.key} className={cn(
-                  "relative overflow-hidden transition-all",
+                <Card key={p.key} id={`bike-field-${p.key}`} className={cn(
+                  "relative overflow-hidden transition-all scroll-mt-20",
                   isFilled
                     ? "border-emerald-300 dark:border-emerald-800 shadow-sm"
                     : "border-border",
@@ -434,7 +511,7 @@ export function BikeParametersForm() {
                         }}
                         className={cn(
                           "h-9 w-full rounded-md border border-input bg-background px-2 text-sm",
-                          isFilled ? "font-bold" : "font-normal text-muted-foreground"
+                          isFilled ? "font-bold" : "font-normal text-muted-foreground/50"
                         )}
                       >
                         <option value="" disabled>
@@ -497,6 +574,12 @@ export function BikeParametersForm() {
             })}
           </div>
           </TooltipProvider>
+
+          {/* Интерактивный гид шага 3 (что нажимать и когда — прямо по шагам).
+              Монтируем только при открытии, чтобы шаги всегда начинались с 1-го. */}
+          {guideOpen && (
+            <StepGuide steps={BIKE_GUIDE_STEPS} open onFinish={finishGuide} />
+          )}
         </>
       )}
     </div>

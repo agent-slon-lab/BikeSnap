@@ -11,7 +11,6 @@ import {
   User,
   ListChecks,
   Info,
-  HelpCircle,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
@@ -22,7 +21,6 @@ import {
   type OnboardingStep,
 } from "@/lib/bike-store";
 import { APP_VERSION } from "@/lib/app-version";
-import { AppTour } from "@/components/whats-new/app-tour";
 import { WhatsNewDialog } from "@/components/whats-new/whats-new-dialog";
 import { OnboardingContext } from "@/components/bike-fit/OnboardingContext";
 import { OnboardingBody } from "@/components/bike-fit/OnboardingBody";
@@ -320,10 +318,45 @@ export default function Home() {
 function Header({ onLogoClick }: { onLogoClick?: () => void }) {
   const { resolvedTheme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
+  const [newsOpen, setNewsOpen] = useState(false);
+  const [hasNews, setHasNews] = useState(false);
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // Координатор «Что нового»: новичку версия запоминается тихо,
+  // вернувшемуся с непросмотренной версией — показываем диалог
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        const visited = localStorage.getItem(VISITED_KEY) === "1";
+        const unseen = localStorage.getItem(SEEN_VERSION_KEY) !== APP_VERSION;
+        if (!visited) {
+          localStorage.setItem(VISITED_KEY, "1");
+          localStorage.setItem(SEEN_VERSION_KEY, APP_VERSION);
+        } else {
+          setHasNews(unseen);
+          if (unseen) setNewsOpen(true);
+        }
+      } catch {
+        /* localStorage недоступен — попап просто не покажется */
+      }
+    }, 900);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const closeNews = (open: boolean) => {
+    setNewsOpen(open);
+    if (!open) {
+      try {
+        localStorage.setItem(SEEN_VERSION_KEY, APP_VERSION);
+      } catch {
+        /* ignore */
+      }
+      setHasNews(false);
+    }
+  };
 
   return (
     <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-md">
@@ -343,81 +376,48 @@ function Header({ onLogoClick }: { onLogoClick?: () => void }) {
             </span>
           </div>
         </button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
-          title="Переключить тему"
-        >
-          {mounted && resolvedTheme === "dark" ? (
-            <Sun className="size-4" />
-          ) : (
-            <Moon className="size-4" />
-          )}
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* Крупная кнопка версии с «i» — всегда на виду, открывает «Что нового» */}
+          <button
+            onClick={() => setNewsOpen(true)}
+            title="Что нового в этой версии"
+            aria-label="Что нового в этой версии"
+            className="relative inline-flex h-9 items-center gap-1.5 rounded-full border border-orange-500/50 bg-orange-500/10 px-3.5 text-sm font-bold text-foreground shadow-sm transition-colors hover:bg-orange-500/20"
+          >
+            <Info className="size-[18px] text-orange-500" />
+            <span className="tabular-nums">{APP_VERSION}</span>
+            {hasNews && (
+              <span className="absolute -right-1 -top-1 flex size-3.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-orange-400 opacity-75" />
+                <span className="relative inline-flex size-3.5 rounded-full bg-orange-500 ring-2 ring-background" />
+              </span>
+            )}
+          </button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
+            title="Переключить тему"
+          >
+            {mounted && resolvedTheme === "dark" ? (
+              <Sun className="size-4" />
+            ) : (
+              <Moon className="size-4" />
+            )}
+          </Button>
+        </div>
       </div>
+
+      {/* Диалог «Что нового» (кнопка версии — рядом) */}
+      <WhatsNewDialog open={newsOpen} onOpenChange={closeNews} />
     </header>
   );
 }
 
-const TOUR_KEY = "bikesnap-tour-done";
+const VISITED_KEY = "bikesnap-visited";
 const SEEN_VERSION_KEY = "bikesnap-seen-version";
 
 function Footer() {
-  // ===== Координатор попапов: тур для новичков + «Что нового» при обновлении =====
-  const [tourOpen, setTourOpen] = useState(false);
-  const [newsOpen, setNewsOpen] = useState(false);
-  const [hasNews, setHasNews] = useState(false);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      try {
-        const tourDone = localStorage.getItem(TOUR_KEY) === "1";
-        const unseenNews = localStorage.getItem(SEEN_VERSION_KEY) !== APP_VERSION;
-        setHasNews(unseenNews);
-        if (!tourDone) {
-          setTourOpen(true); // первый визит — краткий тур
-        } else if (unseenNews) {
-          setNewsOpen(true); // вернувшийся пользователь + новая версия
-        }
-      } catch {
-        /* localStorage недоступен — попапы просто не покажутся */
-      }
-    }, 900);
-    return () => clearTimeout(timer);
-  }, []);
-
-  const closeTour = (done: boolean) => {
-    setTourOpen(false);
-    if (done) {
-      try {
-        localStorage.setItem(TOUR_KEY, "1");
-        // новичку «Что нового» сразу после тура не показываем — тихо запоминаем версию
-        localStorage.setItem(SEEN_VERSION_KEY, APP_VERSION);
-      } catch {
-        /* ignore */
-      }
-      setHasNews(false);
-    }
-  };
-
-  const closeNews = (open: boolean) => {
-    setNewsOpen(open);
-    if (!open) {
-      try {
-        localStorage.setItem(SEEN_VERSION_KEY, APP_VERSION);
-      } catch {
-        /* ignore */
-      }
-      setHasNews(false);
-    }
-  };
-
-  const reopenTour = () => {
-    setNewsOpen(false);
-    setTourOpen(true);
-  };
-
   return (
     <footer className="mt-auto border-t bg-muted/30">
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
@@ -427,30 +427,6 @@ function Footer() {
             <span>
               BikeSnap · образовательный инструмент для велосипедистов
             </span>
-            {/* Версия — крупнее и кликабельная: открывает «Что нового» */}
-            <button
-              onClick={() => setNewsOpen(true)}
-              title="Что нового в этой версии"
-              className="relative inline-flex items-center gap-1.5 rounded-full border bg-background px-3 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
-            >
-              <Info className="size-3.5 text-orange-500" />
-              {APP_VERSION}
-              {hasNews && (
-                <span className="absolute -right-0.5 -top-0.5 flex size-2.5">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-orange-400 opacity-75" />
-                  <span className="relative inline-flex size-2.5 rounded-full bg-orange-500" />
-                </span>
-              )}
-            </button>
-            {/* Повторный запуск тура по приложению */}
-            <button
-              onClick={reopenTour}
-              title="Краткий тур по приложению"
-              className="inline-flex items-center gap-1.5 rounded-full border bg-background px-3 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
-            >
-              <HelpCircle className="size-3.5 text-orange-500" />
-              Тур
-            </button>
           </div>
           <p className="max-w-md text-center text-xs text-muted-foreground sm:text-right">
             Инструмент носит рекомендательный характер. Для профессионального
@@ -458,10 +434,6 @@ function Footer() {
           </p>
         </div>
       </div>
-
-      {/* Попапы приложения: тур + что нового */}
-      <AppTour open={tourOpen} onClose={closeTour} />
-      <WhatsNewDialog open={newsOpen} onOpenChange={closeNews} />
     </footer>
   );
 }
