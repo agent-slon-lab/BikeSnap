@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { User, Plus, Trash2, Ruler, Activity, Info } from "lucide-react";
+import { User, Plus, Trash2, Ruler, Activity, Info, Target, Heart, Check } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,7 +15,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { useBikeStore } from "@/lib/bike-store";
+import {
+  useBikeStore,
+  COMPLAINTS,
+  type Complaint,
+} from "@/lib/bike-store";
 import { calcSaddleHeightLeMond, type BodyMeasurements } from "@/lib/bike-calculations";
 import {
   getRiders,
@@ -87,8 +91,36 @@ function InfoTip({
   );
 }
 
+// ============================================================
+// ЦЕЛЬ ПОСАДКИ (v1.12.0 — переехала из убранного шага «Контекст»)
+// ============================================================
+const GOALS = [
+  {
+    id: "comfort" as const,
+    label: "Комфорт",
+    emoji: "🛋️",
+    description:
+      "Длительные поездки без боли. Приоритет комфорту над скоростью.",
+  },
+  {
+    id: "sport" as const,
+    label: "Спорт",
+    emoji: "🏆",
+    description:
+      "Тренировки, любительские гонки. Баланс между скоростью и выносливостью.",
+  },
+  {
+    id: "race" as const,
+    label: "Гонки",
+    emoji: "🚀",
+    description:
+      "Максимальная аэродинамика и мощность. Готов жертвовать комфортом ради скорости.",
+  },
+];
+
 export function OnboardingBody() {
-  const { body, setBody } = useBikeStore();
+  const { body, setBody, goal, setGoal, complaints, toggleComplaint } =
+    useBikeStore();
   const [riders, setRiders] = useState<Rider[]>([]);
   const [activeRider, setActiveRiderState] = useState<Rider | null>(null);
   const [showNew, setShowNew] = useState(false);
@@ -490,6 +522,115 @@ export function OnboardingBody() {
           </CardContent>
         </Card>
       )}
+
+      {/* Цель посадки (v1.12.0 — переехала из убранного шага «Контекст») */}
+      <Card className="border-orange-200 dark:border-orange-900">
+        <CardContent className="p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <Target className="size-4 text-orange-500" />
+            <span className="text-sm font-semibold">Цель посадки</span>
+            <InfoTip
+              what="Что такое цель посадки?"
+              howTo="Цель определяет компромисс между аэродинамикой (низкая посадка = выше скорость) и комфортом (высокая посадка = меньше усталость). От цели зависят рекомендации по высоте седла, длине выноса, углу наклона корпуса."
+            />
+            {!goal && (
+              <Badge className="bg-orange-100 text-orange-700 dark:bg-orange-950/40 dark:text-orange-400 text-[10px]">
+                обязательно для «Далее»
+              </Badge>
+            )}
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {GOALS.map((g) => {
+              const selected = goal === g.id;
+              return (
+                <Card
+                  key={g.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setGoal(g.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setGoal(g.id);
+                    }
+                  }}
+                  className={cn(
+                    "cursor-pointer gap-2 py-3 transition-all hover:scale-[1.01] hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500",
+                    selected
+                      ? "border-orange-500 ring-2 ring-orange-500/30 bg-orange-50/50 dark:bg-orange-950/20"
+                      : "hover:border-orange-300"
+                  )}
+                >
+                  <CardContent className="px-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xl">{g.emoji}</span>
+                        <p className="font-semibold text-sm">{g.label}</p>
+                      </div>
+                      {selected && <Check className="size-4 text-orange-500 shrink-0" />}
+                    </div>
+                    <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                      {g.description}
+                    </p>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Жалобы и дискомфорт (v1.12.0 — переехали из убранного шага «Контекст») */}
+      <Card className="border-orange-200 dark:border-orange-900">
+        <CardContent className="p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <Heart className="size-4 text-orange-500" />
+            <span className="text-sm font-semibold">
+              Жалобы и дискомфорт
+            </span>
+            <span className="text-xs text-muted-foreground">
+              можно выбрать несколько · по желанию
+            </span>
+            <InfoTip
+              what="Зачем указывать жалобы?"
+              howTo="Жалобы — главный сигнал для байк-фиттера. По ним определяются приоритетные настройки. Например, боль в колене спереди = седло слишком низко. Боль в шее = вынос слишком низко или посадка растянута."
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {COMPLAINTS.map((c) => {
+              const selected = complaints.includes(c.id as Complaint);
+              return (
+                <Card
+                  key={c.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => toggleComplaint(c.id as Complaint)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      toggleComplaint(c.id as Complaint);
+                    }
+                  }}
+                  className={cn(
+                    "cursor-pointer gap-2 py-3 transition-all hover:scale-[1.01] hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500",
+                    selected
+                      ? "border-orange-500 ring-2 ring-orange-500/30 bg-orange-50/50 dark:bg-orange-950/20"
+                      : "hover:border-orange-300"
+                  )}
+                >
+                  <CardContent className="px-3">
+                    <div className="flex flex-col items-center text-center gap-1">
+                      <span className="text-xl">{c.emoji}</span>
+                      <p className="text-xs font-medium leading-tight">{c.label}</p>
+                      {selected && <Check className="size-4 text-orange-500 mt-0.5" />}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
     </div>
     </TooltipProvider>
   );

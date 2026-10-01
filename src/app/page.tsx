@@ -23,7 +23,6 @@ import {
 } from "@/lib/bike-store";
 import { APP_VERSION } from "@/lib/app-version";
 import { WhatsNewDialog } from "@/components/whats-new/whats-new-dialog";
-import { OnboardingContext } from "@/components/bike-fit/OnboardingContext";
 import { OnboardingBody } from "@/components/bike-fit/OnboardingBody";
 import { BikeParametersForm } from "@/components/bike-fit/BikeParametersForm";
 import { SummaryScreen } from "@/components/bike-fit/SummaryScreen";
@@ -40,25 +39,18 @@ const STEPS: Array<{
   description: string;
 }> = [
   {
-    id: "context",
-    label: "Тип велосипеда и цель",
-    shortLabel: "Контекст",
-    icon: Bike,
-    description: "Какой велосипед и для чего настраиваем",
-  },
-  {
     id: "body",
     label: "Параметры тела",
     shortLabel: "Тело",
     icon: User,
-    description: "Рост, inseam и другие измерения",
+    description: "Рост, inseam, цель и жалобы",
   },
   {
     id: "bike",
     label: "Параметры велосипеда",
     shortLabel: "Велосипед",
     icon: Settings,
-    description: "Размеры рамы и компоненты",
+    description: "Тип велика, размеры рамы и компоненты",
   },
   {
     id: "summary",
@@ -80,16 +72,19 @@ function isStepAccessible(
   step: OnboardingStep,
   state: ReturnType<typeof useBikeStore.getState>
 ): boolean {
-  if (step === "context") return true;
-  if (step === "body")
-    return !!state.bikeType && !!state.goal;
-  if (step === "bike") return state.body.height > 0 && state.body.inseam > 0;
-  // Для summary/analysis нужно 3 обязательных поля (без любого из них «Далее» неактивен):
+  // v1.12.0: шаг «Контекст» убран — его поля переехали:
+  // цель и жалобы → в «Тело», тип велика → в «Велосипед».
+  if (step === "body") return true;
+  if (step === "bike")
+    return state.body.height > 0 && state.body.inseam > 0 && !!state.goal;
+  // Для summary/analysis нужно: 3 обязательных поля (SH/WB/WH) + тип велика
+  // (от него зависят диапазоны нормы геометрии и рекомендации):
   // - saddleHeight (SH) — строгий primary масштаб (userOverride) + проверка положения ног
   // - wheelbase (WB) — fallback масштаба фото (пиксели → мм)
   // - wheelHeight (WH) — dual scale (компенсация перспективы по двум колёсам)
   // Остальные (ETT, Stem, α, CR, BBH) — опциональны, алгоритм высчитает по фото
   const requiredBikeFields =
+    !!state.bikeType &&
     !!state.bike.saddleHeight &&
     !!state.bike.wheelbase &&
     !!state.bike.wheelHeight;
@@ -279,8 +274,8 @@ export default function Home() {
       </div>
 
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-10">
-        {/* Hero (только на первом шаге) */}
-        {step === "context" && (
+        {/* Hero (только на первом шаге — теперь это «Тело») */}
+        {step === "body" && (
           <section className="mb-8 text-center">
             <h1 className="mx-auto max-w-3xl text-3xl font-bold tracking-tight sm:text-4xl">
               Настройте посадку на велосипеде
@@ -289,16 +284,15 @@ export default function Home() {
               </span>
             </h1>
             <p className="mx-auto mt-4 max-w-2xl text-base text-muted-foreground sm:text-lg">
-              Пройдите 4 шага онбординга: тип велосипеда → параметры тела →
-              размеры велосипеда → фотоанализ позы. Получите конкретные
-              рекомендации в миллиметрах.
+              Пройдите 4 шага онбординга: параметры тела → размеры велосипеда
+              → сводка → фотоанализ позы. Получите конкретные рекомендации в
+              миллиметрах.
             </p>
           </section>
         )}
 
         {/* Контент шага */}
         <div className="mb-8">
-          {step === "context" && <OnboardingContext />}
           {step === "body" && <OnboardingBody />}
           {step === "bike" && <BikeParametersForm />}
           {step === "summary" && <SummaryScreen />}

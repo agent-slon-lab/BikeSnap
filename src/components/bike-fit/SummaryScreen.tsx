@@ -215,46 +215,12 @@ export function SummaryScreen() {
             </div>
           </div>
 
-          {/* Контекст */}
-          <button
-            onClick={() => goToStep("context")}
-            className="w-full text-left"
-          >
-            <Card className="hover:border-orange-300 hover:shadow-sm transition-all">
-              <CardContent className="py-4">
-                <div className="flex items-start gap-3">
-                  <Bike className="size-5 text-orange-500 mt-0.5 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      Контекст
-                    </p>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      {bikeType && (
-                        <Badge variant="secondary">
-                          {BIKE_TYPES[bikeType].emoji} {BIKE_TYPES[bikeType].label}
-                        </Badge>
-                      )}
-                      {goal && (
-                        <Badge variant="secondary">
-                          {goalLabels[goal].emoji} {goalLabels[goal].label}
-                        </Badge>
-                      )}
-                      {complaints.length > 0 && (
-                        <Badge variant="outline">
-                          Жалоб: {complaints.length}
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </button>
-
+          {/* Контекстные бейджи распределены по карточкам (v1.12.0,
+              шаг «Контекст» убран): цель и жалобы → в «Тело», тип → в «Велосипед» */}
           {/* Тело */}
           <button
             onClick={() => goToStep("body")}
-            className="mt-3 w-full text-left"
+            className="w-full text-left"
           >
             <Card className="hover:border-orange-300 hover:shadow-sm transition-all">
               <CardContent className="py-4">
@@ -264,6 +230,23 @@ export function SummaryScreen() {
                     <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Тело райдера
                     </p>
+                    {/* Цель и жалобы (v1.12.0 — переехали из убранного «Контекста») */}
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                      {goal ? (
+                        <Badge variant="secondary">
+                          {goalLabels[goal].emoji} {goalLabels[goal].label}
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-muted-foreground">
+                          Цель не выбрана
+                        </Badge>
+                      )}
+                      {complaints.length > 0 && (
+                        <Badge variant="outline">
+                          Жалоб: {complaints.length}
+                        </Badge>
+                      )}
+                    </div>
                     <div className="mt-1.5 grid grid-cols-2 gap-2 sm:grid-cols-3">
                       <DataCell label="Рост" value={body.height} unit="см" />
                       <DataCell label="Inseam" value={body.inseam} unit="см" />
@@ -315,6 +298,18 @@ export function SummaryScreen() {
                     <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                       Велосипед
                     </p>
+                    {/* Тип велика (v1.12.0 — переехал из убранного «Контекста») */}
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                      {bikeType ? (
+                        <Badge variant="secondary">
+                          {BIKE_TYPES[bikeType].emoji} {BIKE_TYPES[bikeType].label}
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-muted-foreground">
+                          Тип не выбран
+                        </Badge>
+                      )}
+                    </div>
                     <div className="mt-1.5 grid grid-cols-2 gap-2 sm:grid-cols-3">
                       <DataCell
                         label="SH"

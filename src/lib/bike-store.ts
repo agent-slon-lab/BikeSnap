@@ -9,9 +9,8 @@ import type { BikeType } from "@/lib/bike-params";
 import type { BodyMeasurements, BikeMeasurements, RiderGoal } from "@/lib/bike-calculations";
 
 export type OnboardingStep =
-  | "context" // тип велосипеда, цель, жалобы
-  | "body" // рост, inseam и т.д.
-  | "bike" // параметры велосипеда
+  | "body" // рост, inseam, цель, жалобы (v1.12.0: сюда переехали цель+жалобы из убранного «Контекста»)
+  | "bike" // параметры велосипеда + тип велика (v1.12.0: тип переехал из убранного «Контекста»)
   | "summary" // сводка
   | "analysis"; // видеоанализ позы
 
@@ -152,7 +151,7 @@ export const useBikeStore = create<AppState>()(
   persist(
     (set, get) => ({
       mode: null,
-      step: "context",
+      step: "body",
       bikeType: null,
       goal: null,
       complaints: [],
@@ -161,7 +160,7 @@ export const useBikeStore = create<AppState>()(
       wheelSizeId: "26",
 
       setMode: (mode) => set({ mode }),
-      resetMode: () => set({ mode: null, step: "context" }),
+      resetMode: () => set({ mode: null, step: "body" }),
 
       setStep: (step) => set({ step }),
       setBikeType: (bikeType) => set({ bikeType }),
@@ -197,7 +196,7 @@ export const useBikeStore = create<AppState>()(
       // Библиотеки великов/райдеров (localStorage bikefit-*) не трогает.
       reset: () =>
         set({
-          step: "context",
+          step: "body",
           bikeType: null,
           goal: null,
           complaints: [],

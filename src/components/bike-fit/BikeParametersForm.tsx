@@ -135,7 +135,7 @@ const BIKE_GUIDE_STEPS: GuideStepDef[] = [
 ];
 
 export function BikeParametersForm() {
-  const { bike, setBike, setWheelSizeId } = useBikeStore();
+  const { bike, setBike, setWheelSizeId, setBikeType } = useBikeStore();
   const [bikes, setBikes] = useState<BikeRecord[]>([]);
   const [activeBike, setActiveBikeState] = useState<BikeRecord | null>(null);
   const [showNew, setShowNew] = useState(false);
@@ -157,8 +157,10 @@ export function BikeParametersForm() {
     setActiveBikeState(active);
     if (active) {
       setBike(active.measurements);
+      // v1.12.0: тип велика едет вместе с карточкой (шаг «Контекст» убран)
+      setBikeType(active.type);
     }
-  }, [setBike]);
+  }, [setBike, setBikeType]);
 
   useEffect(() => {
     reload();
@@ -216,6 +218,9 @@ export function BikeParametersForm() {
     // старое фото, точки и рассчитанные метрики уничтожаются вместе с компонентом.
     setBike({});
     setWheelSizeId("26");
+    // v1.12.0: тип велика синхронизируется из карточки — шаг «Контекст» убран,
+    // тип выбирается здесь, при создании велика (newType в форме)
+    setBikeType(newType);
     lastSavedJsonRef.current = ""; // автосейв не должен записать старый JSON в новый велик
     setBikes(getBikes());
     setActiveBikeState(bike);
@@ -228,6 +233,8 @@ export function BikeParametersForm() {
     setActiveBike(bike.id);
     setActiveBikeState(bike);
     setBike(bike.measurements);
+    // v1.12.0: тип велика едет вместе с карточкой (шаг «Контекст» убран)
+    setBikeType(bike.type);
     lastSavedJsonRef.current = JSON.stringify(bike.measurements);
     setCalibratorKey(k => k + 1);
   };
