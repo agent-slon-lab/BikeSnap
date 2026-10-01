@@ -1,8 +1,9 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "next-themes";
+import RegisterSW from "@/components/pwa/register-sw";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -28,15 +29,33 @@ export const metadata: Metadata = {
     "велофиттинг",
   ],
   authors: [{ name: "BikeSnap" }],
-  icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "BikeSnap",
+    statusBarStyle: "black-translucent",
   },
+  icons: {
+    icon: [
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
+  formatDetection: { telephone: false },
   openGraph: {
     title: "BikeSnap",
     description: "Анализ посадки на велосипеде с помощью AI",
     siteName: "BikeSnap",
     type: "website",
   },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#121214",
 };
 
 export default function RootLayout({
@@ -57,6 +76,7 @@ export default function RootLayout({
         >
           {children}
           <Toaster />
+          <RegisterSW />
         </ThemeProvider>
       </body>
     </html>

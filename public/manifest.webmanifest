@@ -1,0 +1,35 @@
+{
+  "name": "BikeSnap — Анализ посадки на велосипеде",
+  "short_name": "BikeSnap",
+  "description": "AI-анализ посадки велосипедиста по фото и видео: углы колена, бедра, спины и рекомендации по настройке седла и руля.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#121214",
+  "theme_color": "#121214",
+  "lang": "ru",
+  "dir": "ltr",
+  "categories": ["sports", "health", "utilities"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
