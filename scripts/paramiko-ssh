@@ -1,0 +1,103 @@
+#!/home/z/.venv/bin/python
+"""
+SSH-транспорт для git в песочнице (нет /usr/bin/ssh).
+
+Минимальная имитация CLI openssh: `[-p port] [-o opt] [-i key] host command…`.
+Используется через: git -c core.sshCommand=/home/z/my-project/scripts/paramiko-ssh push …
+Ключ: ~/.ssh/id_ed25519 (deploy-ключ репозитория BikeSnap).
+"""
+import sys
+import threading
+
+import paramiko
+
+KEY_PATH = "/home/z/.ssh/id_ed25519"
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    port = 22
+    user = "git"
+
+    while args and args[0].startswith("-"):
+        a = args.pop(0)
+        if a == "-p":
+            port = int(args.pop(0))
+        elif a == "-l":
+            user = args.pop(0)
+        elif a in ("-o", "-i", "-L", "-R"):
+            args.pop(0)  # значение игнорируем
+        # прочие флаги (-T, -q, …) игнорируем
+
+    if not args:
+        print("paramiko-ssh: no host", file=sys.stderr)
+        return 255
+    host = args.pop(0)
+    if "@" in host:  # git@github.com → user=git, host=github.com
+        user, _, host = host.partition("@")
+    if ":" in host and host.endswith("]:"):  # [host]:port
+        host, _, p = host[:-1].rpartition("[")
+        port = int(p)
+    command = " ".join(args)
+
+    pkey = paramiko.Ed25519Key.from_private_key_file(KEY_PATH)
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+        host,
+        port=port,
+        username=user,
+        pkey=pkey,
+        look_for_keys=False,
+        allow_agent=False,
+        timeout=20,
+    )
+    stdin, stdout, stderr = client.exec_command(command, get_pty=False)
+    chan = stdout.channel
+
+    def pump_stdin() -> None:
+        try:
+            while True:
+                data = sys.stdin.buffer.read(65536)
+                if not data:
+                    break
+                chan.sendall(data)
+        except Exception:
+            pass
+        finally:
+            try:
+                chan.shutdown_write()
+            except Exception:
+                pass
+
+    def pump_stderr() -> None:
+        try:
+            while True:
+                data = stderr.channel.recv_stderr(65536)
+                if not data:
+                    break
+                sys.stderr.buffer.write(data)
+                sys.stderr.buffer.flush()
+        except Exception:
+            pass
+
+    threading.Thread(target=pump_stdin, daemon=True).start()
+    threading.Thread(target=pump_stderr, daemon=True).start()
+
+    try:
+        while True:
+            data = chan.recv(65536)
+            if not data:
+                break
+            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.flush()
+    except Exception as exc:
+        print(f"paramiko-ssh: {exc}", file=sys.stderr)
+
+    code = chan.recv_exit_status() if not chan.closed else 255
+    client.close()
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
