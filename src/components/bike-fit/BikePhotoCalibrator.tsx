@@ -1434,23 +1434,22 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
               </div>
             )}
 
-            {/* Продолжить/поправить разметку, когда точки УЖЕ есть (частично или
-                полностью) — раньше тут был мёртвый угол: кнопка разметки
-                исчезала, а клики по фото ставили только уже существующие точки */}
+            {/* Продолжить разметку — ТОЛЬКО когда точки ещё не все стоят.
+                Когда все 10 стоят — никакой кнопки не нужно: точки и так
+                можно перетаскивать мышкой прямо на фото. */}
             {keyPoints !== null && !loading && !placementMode && (() => {
               const nullCount = PLACEMENT_ORDER.filter((k) => {
                 const pt = keyPoints[k];
                 return !pt || pt.x == null || pt.y == null;
               }).length;
+              if (nullCount === 0) return null;
               return (
                 <Button
                   onClick={continuePlacement}
                   className="w-full bg-emerald-500 hover:bg-emerald-600"
                   size="lg"
                 >
-                  {nullCount > 0
-                    ? `✏️ Продолжить разметку — осталось точек: ${nullCount}`
-                    : "✏️ Поправить точки"}
+                  ✏️ Продолжить разметку — осталось точек: {nullCount}
                 </Button>
               );
             })()}
@@ -1479,9 +1478,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                         <p className="text-[11px] text-rose-600/80 dark:text-rose-400/70 mt-0.5 leading-relaxed">
                           Так велосипед не устроен. Пока эти точки не исправлены,
                           все вычисленные числа — мусор и записывать их в карточку
-                          велика нельзя. Войдите в разметку (кнопка «Поправить точки»
-                          выше), переставьте отмеченные точки и снова нажмите
-                          «Вычислить все параметры».
+                          велика нельзя. Перетащите отмеченные точки прямо на фото
+                          в правильные места и снова нажмите «Вычислить все параметры».
                         </p>
                       </div>
                     </div>

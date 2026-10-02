@@ -10,7 +10,7 @@
  *  - остальное GET     → сеть-первым с фолбэком на кэш
  * Имя кэша синхронизировано с APP_VERSION: при релизе обновлять вместе с ней.
  */
-const CACHE = "bikesnap-v1.14.1";
+const CACHE = "bikesnap-v1.14.2";
 const SHELL = [
   "/",
   "/manifest.webmanifest",
