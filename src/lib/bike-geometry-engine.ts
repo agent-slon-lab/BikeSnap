@@ -174,7 +174,8 @@ export interface ExtendedMetricsMm {
   forkLength: number;
   /** перпендикуляр от frontAxle к оси рулевой трубы */
   forkOffset: number;
-  /** перпендикуляр от saddleMount к оси подседельной трубы */
+  /** горизонтальный сдвиг седла относительно каретки (мм; + = седло позади BB) —
+   *  байкфит-определение setback в выровненной системе */
   setback: number;
   /** BB → rearAxle */
   rearCenter: number;
@@ -391,7 +392,12 @@ export function calculateBikeGeometry(
   // 2. РАСЧЁТ МАСШТАБА (px → мм) С ЖЁСТКИМ ПРИОРИТЕТОМ
   //
   // Отрезки калибровки в ВЫРОВНЕННОЙ системе:
-  //   - saddleHeight: BB → saddleMount (гипотенуза, поворот не меняет длину);
+  //   - saddleHeight: от центра BB ДО ВЕРХА СЕДЛА СТРОГО ПО ЛИНИИ
+  //     подседельной трубы (мировой стандарт байкфита): saddleMount
+  //     проецируется на ось bb → stTop, меряется длина проекции.
+  //     Так мелкий боковой промах точки (нос/зад седла — у сёдел разная
+  //     толщина набивки) не искажает высоту. Поворот кадра длину
+  //     осевого отрезка не меняет;
   //   - wheelbase: строго по X (оси теперь горизонтальны);
   //   - ett: ПЕРЕСЕЧЕНИЕ горизонтали htTop с осью подседельной трубы
   //     (тот же определение, что у метрики ETT ниже — иначе калибровка
@@ -415,8 +421,19 @@ export function calculateBikeGeometry(
     ettFallbackUsed = true;
   }
 
+  // SH-px: длина проекции saddleMount на ось подседельной трубы (bb → stTop).
+  // Если stTop вырожден — ось штыря bb → saddleMount (проекция = сама точка).
+  const stAxisLen = distance(rot.bb, rot.stTop);
+  const shPx =
+    stAxisLen >= MIN_CALIB_PX
+      ? Math.abs(
+          ((rot.stTop.x - rot.bb.x) * (rot.saddleMount.x - rot.bb.x) +
+            (rot.stTop.y - rot.bb.y) * (rot.saddleMount.y - rot.bb.y)) / stAxisLen
+        )
+      : distance(rot.bb, rot.saddleMount);
+
   const pxFor: Record<CalibrationKey, number> = {
-    saddleHeight: distance(rot.bb, rot.saddleMount),
+    saddleHeight: shPx,
     wheelbase: Math.abs(rot.frontAxle.x - rot.rearAxle.x),
     ett: ettPx,
     wheelDiameter: 0,
@@ -700,8 +717,22 @@ export function calculateBikeGeometry(
   // (перед нормализован вправо → положительный)
   const reachMm = (rot.htTop.x - rot.bb.x) * scaleMmPerPx;
 
-  // Saddle Height: BB → Saddle Mount (гипотенуза)
+  // Saddle Height: BB → верх седла ВДОЛЬ линии подседельной трубы
+  // (проекция saddleMount на ось bb → stTop — см. shPx выше)
   const saddleHeightMm = pxFor.saddleHeight * scaleMmPerPx;
+
+  // Точка седла должна лежать НА линии трубы (верх седла над штырём).
+  // Большое боковое отклонение = точка на носу/заде седла: у сёдел разная
+  // длина и форма, мерять по ним нельзя — SH и масштаб уедут.
+  if (stAxisLen >= MIN_CALIB_PX) {
+    const saddleOffAxisMm =
+      perpendicularDistance(rot.saddleMount, rot.bb, rot.stTop) * scaleMmPerPx;
+    if (saddleOffAxisMm > 15) {
+      warnings.push(
+        `Точка «Верх седла» отклонилась от линии подседельной трубы на ${Math.round(saddleOffAxisMm)} мм — она должна стоять РОВНО НАД штырём, где линия трубы пересекает верх седла (не нос и не зад седла). SH меряется вдоль трубы, поэтому промах искажает высоту и масштаб.`
+      );
+    }
+  }
 
   // ETT (Effective Top Tube):
   // Проекция от верха рулевого стакана по горизонтали до пересечения
@@ -720,7 +751,7 @@ export function calculateBikeGeometry(
   // 6. ВАЛИДАЦИЯ И ПРЕДУПРЕЖДЕНИЯ (sanity checks)
   if (Number.isFinite(saddleHeightMm) && (saddleHeightMm < 400 || saddleHeightMm > 950)) {
     warnings.push(
-      `Высота седла (${Math.round(saddleHeightMm)} мм) выходит за пределы нормы 400-950 мм. Проверьте точку saddleMount (верх седла с подседелом — самая высокая точка седла на штыре, не нос и не кромка штыря).`
+      `Высота седла (${Math.round(saddleHeightMm)} мм) выходит за пределы нормы 400-950 мм. Проверьте точку saddleMount: верх седла РОВНО НАД линией подседельного штыря (не нос, не зад седла — у сёдел разная толщина набивки), SH меряется от каретки вдоль трубы.`
     );
   }
   if (Math.abs(frameTiltDeg) > 8) {
@@ -875,7 +906,10 @@ export function computeExtendedBikeParams(
   const headTubeLength = dist(rot.htTop, rot.htBottom);
   const forkLength = dist(rot.htBottom, rot.frontAxle);
   const forkOffset = perp(rot.frontAxle, rot.htTop, rot.htBottom);
-  const setback = perp(rot.saddleMount, rot.bb, rot.stTop);
+  // Setback (байкфит): горизонтальный сдвиг седла относительно каретки
+  // в выровненной системе. Перед нормализован вправо → седло позади BB
+  // (saddleMount.x < bb.x) даёт положительный сетбэк.
+  const setback = (rot.bb.x - rot.saddleMount.x) * s;
   const rearCenter = dist(rot.bb, rot.rearAxle);
   const frontCenter = dist(rot.bb, rot.frontAxle);
   const bbDrop = vert(rot.bb, rot.rearAxle);
