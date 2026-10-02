@@ -13,6 +13,16 @@ export interface WhatsNewEntry {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: "1.13.3",
+    date: "2026-10-02",
+    title: "Починена ошибка «module factory is not available» после правок",
+    items: [
+      "Если после обновления появлялась красная ошибка «Module … was deleted in an HMR update» — виноват service worker: он отдавал устаревший код из кэша",
+      "Теперь dev-чанки всегда приходят по сети, а кэш используется только офлайн",
+      "Service worker в режиме разработки больше не регистрируется — старый сносится автоматически",
+    ],
+  },
+  {
     version: "1.13.2",
     date: "2026-10-02",
     title: "Жалобы и цель — часть райдера: больше не забываются никогда",

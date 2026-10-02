@@ -1,14 +1,16 @@
 /*
- * BikeSnap service worker (v1.13.1)
+ * BikeSnap service worker (v1.13.3)
  * Стратегии:
  *  - /api/*            → только сеть (анализ/калибровка не кэшируются)
  *  - навигация         → сеть-первым, офлайн-фолбэк на "/"
- *  - /_next/static/*   → кэш-первым (immutable, хэши в имени)
- *  - иконки/манифест   → кэш-первым
+ *  - /_next/static/*   → сеть-первым с фолбэком на кэш (v1.13.3: НЕ кэш-первым —
+ *                        в dev Turbopack меняет контент чанков под теми же URL,
+ *                        cache-first отдавал мёртвый код после HMR)
+ *  - иконки/манифест   → кэш-первым (по-настоящему immutable)
  *  - остальное GET     → сеть-первым с фолбэком на кэш
  * Имя кэша синхронизировано с APP_VERSION: при релизе обновлять вместе с ней.
  */
-const CACHE = "bikesnap-v1.13.2";
+const CACHE = "bikesnap-v1.13.3";
 const SHELL = [
   "/",
   "/manifest.webmanifest",
@@ -61,9 +63,12 @@ self.addEventListener("fetch", (event) => {
   // HMR/EventSource в dev — не перехватываем
   if (url.pathname.startsWith("/_next/webpack-hmr")) return;
 
-  // Иммутабельные статики Next (хэш в имени) и наши иконки — кэш-первым
+  // Иконки/манифест — по-настоящему immutable → кэш-первым.
+  // v1.13.3: /_next/static ИСКЛЮЧЁН из cache-first — в dev Turbopack меняет
+  // контент чанков под теми же URL (HMR), кэш-первым отдавал мёртвый код
+  // («module factory is not available»). Теперь они идут по сети-первой
+  // стратегией внизу (фолбэк на кэш — только для офлайна).
   const cacheFirst =
-    url.pathname.startsWith("/_next/static/") ||
     url.pathname === "/manifest.webmanifest" ||
     url.pathname.startsWith("/icon-") ||
     url.pathname === "/apple-touch-icon.png";

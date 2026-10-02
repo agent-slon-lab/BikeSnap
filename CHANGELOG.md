@@ -7,6 +7,31 @@
 
 ---
 
+## [1.13.3] — 2026-10-02 — «Module factory is not available»: SW больше не подсовывает мёртвые dev-чанки
+
+### Контекст
+Runtime Error в dev-превью: `lucide-react/.../history.js … was instantiated
+because it was required from ModeSelectionScreen.tsx, but the module factory
+is not available. It might have been deleted in an HMR update`. Исходники
+чистые (History удалён ещё в v1.13.2) — браузер исполнял СТАРЫЙ граф модулей:
+SW держал `/_next/static/*` по cache-first, а Turbopack в dev меняет контент
+чанков под теми же URL после HMR-правок → кэш отдавал мёртвый код, refresh
+не лечил.
+
+### Исправлено
+- `sw.js`: `/_next/static/*` исключён из cache-first → сеть-первым с фолбэком
+  на кэш (кэш теперь только для офлайна). Иконки/манифест — по-прежнему
+  cache-first (по-настоящему immutable).
+- `register-sw.tsx`: в `NODE_ENV === "development"` SW НЕ регистрируется,
+  наоборот — unregister всех ранее зарегистрированных SW + удаление
+  `bikesnap-*` кэшей (лечит браузеры, уже зараженные dev-SW из прошлых сессий).
+
+### Версии
+- `app-version.ts` → v1.13.3, `package.json` → 1.13.3, `sw.js` CACHE →
+  `bikesnap-v1.13.3`, `whats-new.ts` + запись, `CHANGELOG.md` + запись.
+
+---
+
 ## [1.13.2] — 2026-10-02 — Жалобы — атрибут райдера; карточки продолжают, а не стирают
 
 ### Контекст
