@@ -67,3 +67,6 @@ server.log
 # Sandbox tool artifacts
 /tool-results
 /STATE.md
+
+# Deploy key + git helpers (НИКОГДА не коммитить, но живёт в воркспейсе и переживает пересборку)
+/git-helpers/

@@ -4,14 +4,39 @@ SSH-транспорт для git в песочнице (нет /usr/bin/ssh).
 
 Минимальная имитация CLI openssh: `[-p port] [-o opt] [-i key] host command…`.
 Используется через: git -c core.sshCommand=/home/z/my-project/scripts/paramiko-ssh push …
-Ключ: ~/.ssh/id_ed25519 (deploy-ключ репозитория BikeSnap).
+
+Ключ ищется в порядке:
+  1. /home/z/my-project/git-helpers/deploy_key — постоянное хранилище ВНУТРИ
+     воркспейса: переживает пересборку контейнера (в отличие от ~/.ssh).
+  2. ~/.ssh/id_ed25519 — fallback.
+Если ключа нигде нет: bash scripts/git-restore.sh (он подскажет).
 """
+import os
 import sys
 import threading
 
 import paramiko
 
-KEY_PATH = "/home/z/.ssh/id_ed25519"
+KEY_CANDIDATES = (
+    "/home/z/my-project/git-helpers/deploy_key",
+    os.path.expanduser("~/.ssh/id_ed25519"),
+)
+
+
+def load_key() -> paramiko.PKey:
+    last_exc: Exception | None = None
+    for path in KEY_CANDIDATES:
+        if not os.path.exists(path):
+            continue
+        try:
+            return paramiko.Ed25519Key.from_private_key_file(path)
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+    raise SystemExit(
+        "paramiko-ssh: deploy-ключ не найден ни в одном из путей: "
+        f"{', '.join(KEY_CANDIDATES)} ({last_exc}). "
+        "Запусти: bash /home/z/my-project/scripts/git-restore.sh"
+    )
 
 
 def main() -> int:
@@ -40,7 +65,7 @@ def main() -> int:
         port = int(p)
     command = " ".join(args)
 
-    pkey = paramiko.Ed25519Key.from_private_key_file(KEY_PATH)
+    pkey = load_key()
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     client.connect(
