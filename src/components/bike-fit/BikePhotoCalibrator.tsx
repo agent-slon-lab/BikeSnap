@@ -631,6 +631,9 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         x: (p.x ?? 0) * imgSize.width,
         y: (p.y ?? 0) * imgSize.height,
       });
+      const capPlaced = !!(
+        pts.htTopCap && pts.htTopCap.x != null && pts.htTopCap.y != null
+      );
       const enginePts: EngineKeypoints = {
         rearAxle: toPxPt(pts.rearAxle as NullablePoint),
         frontAxle: toPxPt(pts.frontAxle as NullablePoint),
@@ -639,6 +642,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         saddleMount: toPxPt(pts.saddleMount as NullablePoint),
         htBottom: toPxPt(pts.htBottom as NullablePoint),
         htTop: toPxPt(pts.htTop as NullablePoint),
+        // Топкап — опорная точка Stack/Reach (если размечен)
+        ...(capPlaced ? { htTopCap: toPxPt(pts.htTopCap) } : {}),
       };
 
       // КОНСЕНСУС-МАСШТАБ v2.1: в ядро уходят ВСЕ введённые размеры (не только
@@ -851,8 +856,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         `    SH (BB→верх седла вдоль трубы) = ${params.saddleHeight ?? "null"} мм`,
         `    ETT (пересечение горизонали HT с осью ST) = ${params.ett ?? "null"} мм`,
         `    ETT прямой (горизонталь ST→HT) = ${params.ettDirect ?? "null"} мм`,
-        `    Reach (горизонталь BB→HT) = ${params.reach ?? "null"} мм`,
-        `    Stack (вертикаль BB→HT) = ${params.stack ?? "null"} мм`,
+        `    Reach (горизонталь BB→${capPlaced ? "топкап" : "верх стакана — топкап не размечен"}) = ${params.reach ?? "null"} мм`,
+        `    Stack (вертикаль BB→${capPlaced ? "топкап" : "верх стакана — топкап не размечен"}) = ${params.stack ?? "null"} мм`,
         `    WB (rear→front ось) = ${params.wheelbase ?? "null"} мм`,
         `    Setback (горизонталь BB→седло, + = позади) = ${params.setback ?? "null"} мм`,
         `    BB Drop (вертикаль BB→ось колеса) = ${params.bbDrop ?? "null"} мм`,
@@ -1464,9 +1469,9 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                     { key: "bb", label: "Каретка", color: "#ef4444", hint: "Центр каретки (ось педалей) — центр вала между шатунами", optional: false },
                     { key: "stTop", label: "Верх подседельной трубы", color: "#f97316", hint: "Верх подседельной трубы (хомут) — где штырь входит в раму", optional: false },
                     { key: "saddleMount", label: "Верх седла с подседелом", color: "#eab308", hint: "Верх седла над линией штыря — не нос и не зад седла", optional: false },
-                    { key: "htTop", label: "Верх рулевого стакана", color: "#22c55e", hint: "Верхний торец самой рулевой трубы рамы — не крышка и не вынос", optional: false },
+                    { key: "htTop", label: "Верх рулевого стакана", color: "#22c55e", hint: "Верхний торец самой рулевой трубы рамы — для HTA и ETT (Stack/Reach идут до крышки)", optional: false },
                     { key: "htBottom", label: "Низ рулевого стакана", color: "#3b82f6", hint: "Низ рулевого стакана = корона вилки (стык вилки с рамой)", optional: false },
-                    { key: "htTopCap", label: "Крышка рулевой", color: "#10b981", hint: "Верхняя крышка рулевой колонки с болтом (для расчёта посадки)", optional: false },
+                    { key: "htTopCap", label: "Крышка рулевой", color: "#10b981", hint: "Крышка рулевой (топкап) — ИМЕННО до неё считаются Stack и Reach", optional: false },
                     { key: "rearAxle", label: "Ось заднего колеса", color: "#a855f7", hint: "Центр оси заднего колеса", optional: false },
                     { key: "frontAxle", label: "Ось переднего колеса", color: "#ec4899", hint: "Центр оси переднего колеса", optional: false },
                     { key: "rearWheelTop", label: "Верх заднего колеса", color: "#7c3aed", hint: "ОПЦИОНАЛЬНО: верх покрышки заднего колеса (для dual scale)", optional: true },

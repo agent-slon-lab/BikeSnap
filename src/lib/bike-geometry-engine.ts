@@ -93,6 +93,12 @@ export interface BikeKeypoints {
   htBottom: Point2D;
   /** верхний торец рулевого стакана */
   htTop: Point2D;
+  /**
+   * TOP CAP — верхняя крышка рулевой: опорная точка Stack/Reach
+   * (куда реально тянется райдер). Опциональна: без неё Stack/Reach
+   * считаются до верха стакана (htTop).
+   */
+  htTopCap?: Point2D;
 }
 
 export type CalibrationKey =
@@ -421,6 +427,7 @@ export function calculateBikeGeometry(
     saddleMount: transform(pts.saddleMount),
     htBottom: transform(pts.htBottom),
     htTop: transform(pts.htTop),
+    ...(pts.htTopCap ? { htTopCap: transform(pts.htTopCap) } : {}),
   };
 
   // 2. РАСЧЁТ МАСШТАБА (px → мм) С ЖЁСТКИМ ПРИОРИТЕТОМ
@@ -859,13 +866,20 @@ export function calculateBikeGeometry(
   const wheelbaseMm =
     pxFor.wheelbase * scaleAt((rot.rearAxle.x + rot.frontAxle.x) / 2);
 
-  // Stack: вертикаль от BB до верха рулевого стакана.
-  // В canvas Y растёт ВНИЗ, поэтому (bb.y - htTop.y) > 0 для стоящего велосипеда.
-  const stackMm = (rot.bb.y - rot.htTop.y) * scaleAt((rot.bb.x + rot.htTop.x) / 2);
+  // Stack/Reach: байкфит-опорная точка — ТОПКАП (верхняя крышка рулевой,
+  // куда реально тянется райдер). Крышка не размечена → fallback на верх
+  // стакана рамы (htTop).
+  const srRef = rot.htTopCap ?? rot.htTop;
+  const srPointName = rot.htTopCap
+    ? "«Крышка рулевой» (top cap)"
+    : "«Рулевой верх»";
+  // Stack: вертикаль от BB до опорной точки.
+  // В canvas Y растёт ВНИЗ, поэтому (bb.y - srRef.y) > 0 для стоящего велосипеда.
+  const stackMm = (rot.bb.y - srRef.y) * scaleAt((rot.bb.x + srRef.x) / 2);
 
-  // Reach: горизонталь от BB до верха рулевого стакана
+  // Reach: горизонталь от BB до опорной точки
   // (перед нормализован вправо → положительный)
-  const reachMm = (rot.htTop.x - rot.bb.x) * scaleAt((rot.bb.x + rot.htTop.x) / 2);
+  const reachMm = (srRef.x - rot.bb.x) * scaleAt((rot.bb.x + srRef.x) / 2);
 
   // Saddle Height: BB → верх седла ВДОЛЬ линии подседельной трубы
   // (проекция saddleMount на ось bb → stTop — см. shPx выше)
@@ -912,12 +926,12 @@ export function calculateBikeGeometry(
   }
   if (Number.isFinite(reachMm) && (reachMm < 300 || reachMm > 550)) {
     warnings.push(
-      `Значение Reach (${Math.round(reachMm)} мм) нетипично (норма 300-550 мм). Проверьте точки bb и htTop.`
+      `Значение Reach (${Math.round(reachMm)} мм) нетипично (норма 300-550 мм). Проверьте точки bb и ${srPointName}.`
     );
   }
   if (Number.isFinite(stackMm) && (stackMm < 350 || stackMm > 800)) {
     warnings.push(
-      `Значение Stack (${Math.round(stackMm)} мм) нетипично (норма 350-800 мм). Проверьте точки bb и htTop.`
+      `Значение Stack (${Math.round(stackMm)} мм) нетипично (норма 350-800 мм). Проверьте точки bb и ${srPointName}.`
     );
   }
   if (Number.isFinite(wheelbaseMm) && (wheelbaseMm < 850 || wheelbaseMm > 1500)) {
@@ -990,16 +1004,16 @@ export function calculateBikeGeometry(
   }
   if (reachMm <= 0) {
     physicsViolations.push({
-      point: "htTop",
+      point: rot.htTopCap ? "htTopCap" : "htTop",
       title: "Руль ПОЗАДИ каретки — так не бывает",
-      fix: "Верх рулевого стакана всегда впереди каретки. Проверьте точки «Каретка (BB)» и «Рулевой верх» (и то, что переднее колесо отмечено спереди).",
+      fix: `Опорная точка Stack/Reach ${srPointName} всегда впереди каретки. Проверьте точки «Каретка (BB)» и ${srPointName} (и то, что переднее колесо отмечено спереди).`,
     });
   }
   if (stackMm <= 0) {
     physicsViolations.push({
-      point: "htTop",
+      point: rot.htTopCap ? "htTopCap" : "htTop",
       title: `Руль НИЖЕ каретки (Stack = ${Math.round(stackMm)} мм) — так не бывает`,
-      fix: "Верх рулевого стакана всегда ВЫШЕ каретки. Чаще всего виновата точка «Каретка (BB)» — она стоит слишком высоко на фото; перенесите её вниз, к педальному узлу.",
+      fix: `Опорная точка Stack/Reach ${srPointName} всегда ВЫШЕ каретки. Чаще всего виновата точка «Каретка (BB)» — она стоит слишком высоко на фото; перенесите её вниз, к педальному узлу.`,
     });
   }
 
@@ -1076,8 +1090,11 @@ export function computeExtendedBikeParams(
   const bbDrop = vert(rot.bb, rot.rearAxle);
   const ettDirect = horiz(rot.stTop, rot.htTop);
 
-  const reachMm = (rot.htTop.x - rot.bb.x) * scaleAt(midX(rot.bb, rot.htTop));
-  const stackMm = (rot.bb.y - rot.htTop.y) * scaleAt(midX(rot.bb, rot.htTop));
+  // Stack/Reach — та же опорная точка, что в основных метриках:
+  // топкап, если размечен, иначе верх стакана (fallback)
+  const srRef = rot.htTopCap ?? rot.htTop;
+  const reachMm = (srRef.x - rot.bb.x) * scaleAt(midX(rot.bb, srRef));
+  const stackMm = (rot.bb.y - srRef.y) * scaleAt(midX(rot.bb, srRef));
   const stackReachRatio =
     reachMm > 0 && stackMm > 0
       ? Math.round((stackMm / reachMm) * 100) / 100
