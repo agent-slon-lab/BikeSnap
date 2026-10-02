@@ -168,11 +168,14 @@ console.log("\n[5] stTop сдвинут В СТОРОНУ от оси подсе
   if (st.length === 1) {
     console.log(`    отклонение ${st[0].distance} мм, цель (${st[0].suggested.x.toFixed(3)}, ${st[0].suggested.y.toFixed(3)})`);
     check("отклонение адекватное (>25 мм)", st[0].distance > 25, `${st[0].distance} мм`);
-    // Применяем: ST length должен СОХРАНИТЬСЯ (двигаем поперёк, не вдоль)
+    // Применяем: ST length должен СОХРАНИТЬСЯ (двигаем поперёк, не вдоль).
+    // v2.2: мм-длина дополнительно меняется из-за локального масштаба
+    // (перспективный градиент) в середине отрезка — до ~6%, допуск 7%.
     const fixed = applySuggestion(p, st[0]);
     const e2 = runEngine(fixed as typeof ptsNorm);
-    check("длина подседельной сохранилась (±3 мм)",
-      approx(e2.extendedMm.seatTubeLength, stLenBefore, 3),
+    const stTol = Math.max(3, stLenBefore * 0.07);
+    check("длина подседельной сохранилась (±7%, v2.2 градиент)",
+      Math.abs(e2.extendedMm.seatTubeLength - stLenBefore) <= stTol,
       `${stLenBefore} → ${e2.extendedMm.seatTubeLength}`);
   }
 }

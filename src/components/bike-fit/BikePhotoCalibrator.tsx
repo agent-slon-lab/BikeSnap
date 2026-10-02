@@ -63,6 +63,7 @@ import {
   type CalibrationResult,
 } from "@/lib/bike-calibration-helper";
 import type { BikeMeasurements } from "@/lib/bike-calculations";
+import { classifyStackReachRatio } from "@/lib/bike-calculations";
 import { findWheelSize } from "@/lib/bike-perspective";
 import { useBikeStore } from "@/lib/bike-store";
 import { validateBikeMeasurements } from "@/lib/bike-validation";
@@ -847,6 +848,14 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         scale: engine.scaleMmPerPx,
         calibratedBy: knownKey,
       };
+      // BB Drop: приоритет у рулеточных вводов (спека: WH − BBH).
+      // Фото-оценка (вертикаль BB→ось) остаётся в движке и его предупреждениях.
+      const bbHeightIn = measured.bbHeight ?? null;
+      let bbDropSource = "вертикаль BB→ось по фото";
+      if (bbHeightIn && bbHeightIn > 0 && wheelHeightMm && wheelHeightMm > 0) {
+        params.bbDrop = Math.round(wheelHeightMm - bbHeightIn);
+        bbDropSource = `ввод WH−BBH (${wheelHeightMm}−${bbHeightIn})`;
+      }
       setComputed(params);
 
       setDebugLog((prev) => [
@@ -860,14 +869,14 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         `    Stack (вертикаль BB→${capPlaced ? "топкап" : "верх стакана — топкап не размечен"}) = ${params.stack ?? "null"} мм`,
         `    WB (rear→front ось) = ${params.wheelbase ?? "null"} мм`,
         `    Setback (горизонталь BB→седло, + = позади) = ${params.setback ?? "null"} мм`,
-        `    BB Drop (вертикаль BB→ось колеса) = ${params.bbDrop ?? "null"} мм`,
+        `    BB Drop = ${params.bbDrop ?? "null"} мм [${bbDropSource}]`,
         `    ST (BB→верх ST) = ${params.seatTubeLength ?? "null"} мм`,
         `    RC (BB→задняя ось) = ${params.rearCenter ?? "null"} мм`,
         `    FC (BB→передняя ось) = ${params.frontCenter ?? "null"} мм`,
         `    HT length (HTверх→HTниз) = ${params.headTubeLength ?? "null"} мм`,
         `    Fork length (HTниз→передняя ось) = ${params.forkLength ?? "null"} мм`,
         `    Fork offset = ${params.forkOffset ?? "null"} мм`,
-        `    Stack/Reach = ${params.stackReachRatio ?? "—"}`,
+        `    Stack/Reach = ${params.stackReachRatio ?? "—"}${params.stackReachRatio != null ? ` — ${classifyStackReachRatio(params.stackReachRatio)}` : ""}`,
         `    STA = ${params.sta ?? "null"}° (угол подседельной трубы)`,
         `    HTA = ${params.hta ?? "null"}° (угол рулевой трубы)`,
         ``,

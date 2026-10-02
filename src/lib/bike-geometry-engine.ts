@@ -913,10 +913,18 @@ export function calculateBikeGeometry(
   // 5. РАСШИРЕННЫЕ МЕТРИКИ (в выровненной системе, с локальным масштабом)
   const extended = computeExtendedBikeParams(rot, scaleAt);
 
-  // 6. ВАЛИДАЦИЯ И ПРЕДУПРЕЖДЕНИЯ (sanity checks)
-  if (Number.isFinite(saddleHeightMm) && (saddleHeightMm < 400 || saddleHeightMm > 950)) {
+  // BB Drop: норма 40-90 мм (спека валидации). Фото-оценка — вертикаль BB→ось.
+  if (Number.isFinite(extended.bbDrop) && (extended.bbDrop < 40 || extended.bbDrop > 90)) {
     warnings.push(
-      `Высота седла (${Math.round(saddleHeightMm)} мм) выходит за пределы нормы 400-950 мм. Проверьте точку saddleMount: верх седла РОВНО НАД линией подседельного штыря (не нос, не зад седла — у сёдел разная толщина набивки), SH меряется от каретки вдоль трубы.`
+      `BB Drop (${extended.bbDrop} мм) вне нормы 40-90 мм. Чаще всего виновата точка «Каретка (BB)» — она должна быть чуть ниже осей колёс; проверьте также точки осей.`
+    );
+  }
+
+  // 6. ВАЛИДАЦИЯ И ПРЕДУПРЕЖДЕНИЯ (sanity checks по спеке:
+  // Reach > 250, Stack > 400, SH > 600, STA 60-80°, HTA 65-75°)
+  if (Number.isFinite(saddleHeightMm) && saddleHeightMm < 600) {
+    warnings.push(
+      `Высота седла (${Math.round(saddleHeightMm)} мм) ниже нормы 600 мм. Проверьте точку saddleMount: верх седла РОВНО НАД линией подседельного штыря (не нос, не зад седла), SH меряется от каретки вдоль трубы.`
     );
   }
   if (Math.abs(frameTiltDeg) > 8) {
@@ -924,14 +932,14 @@ export function calculateBikeGeometry(
       `Сильный наклон оси колёс (${frameTiltDeg.toFixed(1)}°). Кадр выровнен математически, но лучше переснять фото ровнее — уменьшатся перспективные искажения.`
     );
   }
-  if (Number.isFinite(reachMm) && (reachMm < 300 || reachMm > 550)) {
+  if (Number.isFinite(reachMm) && reachMm < 250) {
     warnings.push(
-      `Значение Reach (${Math.round(reachMm)} мм) нетипично (норма 300-550 мм). Проверьте точки bb и ${srPointName}.`
+      `Значение Reach (${Math.round(reachMm)} мм) ниже нормы 250 мм. Проверьте точки bb и ${srPointName}.`
     );
   }
-  if (Number.isFinite(stackMm) && (stackMm < 350 || stackMm > 800)) {
+  if (Number.isFinite(stackMm) && stackMm < 400) {
     warnings.push(
-      `Значение Stack (${Math.round(stackMm)} мм) нетипично (норма 350-800 мм). Проверьте точки bb и ${srPointName}.`
+      `Значение Stack (${Math.round(stackMm)} мм) ниже нормы 400 мм. Проверьте точки bb и ${srPointName}.`
     );
   }
   if (Number.isFinite(wheelbaseMm) && (wheelbaseMm < 850 || wheelbaseMm > 1500)) {
@@ -939,14 +947,14 @@ export function calculateBikeGeometry(
       `Колёсная база (${Math.round(wheelbaseMm)} мм) вне типичного диапазона 850-1500 мм. Проверьте точки осей колёс.`
     );
   }
-  if (Number.isFinite(seatTubeAngleDeg) && (seatTubeAngleDeg < 60 || seatTubeAngleDeg > 85)) {
+  if (Number.isFinite(seatTubeAngleDeg) && (seatTubeAngleDeg < 60 || seatTubeAngleDeg > 80)) {
     warnings.push(
-      `Угол подседельной трубы (${seatTubeAngleDeg.toFixed(1)}°) вне типичного диапазона 60-85°. Проверьте точки bb/stTop (или saddleMount).`
+      `Угол подседельной трубы (${seatTubeAngleDeg.toFixed(1)}°) вне нормы 60-80°. Проверьте точки bb/stTop (или saddleMount).`
     );
   }
-  if (Number.isFinite(headTubeAngleDeg) && (headTubeAngleDeg < 60 || headTubeAngleDeg > 85)) {
+  if (Number.isFinite(headTubeAngleDeg) && (headTubeAngleDeg < 65 || headTubeAngleDeg > 75)) {
     warnings.push(
-      `Угол рулевой трубы (${headTubeAngleDeg.toFixed(1)}°) вне типичного диапазона 60-85°. Проверьте точки htTop/htBottom.`
+      `Угол рулевой трубы (${headTubeAngleDeg.toFixed(1)}°) вне нормы 65-75°. Проверьте точки htTop/htBottom.`
     );
   }
   // Инвертированные/невозможные точки — ЖЁСТКИЕ физические гейты (v2.1).

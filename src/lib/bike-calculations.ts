@@ -180,21 +180,21 @@ export function calcTargetReach(
   // Базовая эмпирика для шоссе: Reach ≈ height + 200
   let base = height + 200;
 
-  // Корректировка по типу велосипеда (на основе базы моделей)
+  // Корректировка по типу велосипеда (спека/база моделей)
   const bikeAdjust: Record<BikeType, number> = {
     road: 0,
     gravel: -5,      // грэвел немного короче
     mtb: 25,         // MTB имеет больший Reach
     hybrid: -15,     // гибриды короче
-    city: -25,       // городские самые короткие
+    city: -15,       // городские короче
   };
   base += bikeAdjust[bikeType];
 
-  // Корректировка по цели
+  // Корректировка по цели (спека: ±10 мм)
   const goalAdjust: Record<"comfort" | "sport" | "race", number> = {
-    comfort: -8,    // комфорт = короче (более вертикальная посадка)
+    comfort: -10,   // комфорт = короче (более вертикальная посадка)
     sport: 0,
-    race: +8,       // гонки = длиннее (более вытянутая)
+    race: +10,      // гонки = длиннее (более вытянутая)
   };
   base += goalAdjust[goal];
 
@@ -244,6 +244,18 @@ export function recommendStem(
 }
 
 /**
+ * Классификация посадки по соотношению Stack/Reach (спека):
+ *   < 1.40  — агрессивная/гоночная;
+ *   1.40–1.50 — спортивная/универсальная;
+ *   > 1.50  — комфортная/вертикальная.
+ */
+export function classifyStackReachRatio(ratio: number): string {
+  if (ratio < 1.4) return "агрессивная/гоночная посадка";
+  if (ratio <= 1.5) return "спортивная/универсальная посадка";
+  return "комфортная/вертикальная посадка";
+}
+
+/**
  * Полный расчёт всех производных параметров
  */
 export function calculateAll(
@@ -267,15 +279,16 @@ export function calculateAll(
     );
 
     if (bike.saddleHeight && bike.saddleHeight > 0) {
-      saddleHeightDelta = bike.saddleHeight - recommendedSaddleHeight;
+      // Дельта строго по LeMond (спека: SH − targetSH, targetSH = inseam × 0.883)
+      saddleHeightDelta = bike.saddleHeight - targetSaddleHeightLemond;
       if (Math.abs(saddleHeightDelta) > 5) {
         const direction =
           saddleHeightDelta > 0 ? "опустить" : "поднять";
         notes.push(
-          `Высота седла: рекомендуется ${direction} на ${Math.abs(saddleHeightDelta)} мм (цель ${recommendedSaddleHeight} мм, текущая ${bike.saddleHeight} мм).`
+          `Высота седла: рекомендуется ${direction} на ${Math.abs(saddleHeightDelta)} мм (цель по LeMond ${targetSaddleHeightLemond} мм, текущая ${bike.saddleHeight} мм).`
         );
       } else {
-        notes.push("Высота седла близка к рекомендуемой по LeMond.");
+        notes.push("Высота седла близка к рекомендуемой по LeMond (дельта ≤ 5 мм).");
       }
     }
   }
@@ -310,6 +323,9 @@ export function calculateAll(
   let stackReachRatio: number | null = null;
   if (bike.stack && bike.reach && bike.reach > 0) {
     stackReachRatio = round2(bike.stack / bike.reach);
+    notes.push(
+      `Stack/Reach = ${stackReachRatio} — ${classifyStackReachRatio(stackReachRatio)}.`
+    );
   }
 
   // 5. Целевой Reach (по эмпирической формуле)
@@ -324,8 +340,9 @@ export function calculateAll(
     reachDelta = reach - targetReach;
     if (Math.abs(reachDelta) > 15) {
       const direction = reachDelta > 0 ? "длинный" : "короткий";
+      const stemFix = reachDelta > 0 ? "короче" : "длиннее";
       notes.push(
-        `Reach велосипеда (${reach} мм) ${direction} относительно рекомендованного (${targetReach} мм). Дельта: ${Math.abs(reachDelta)} мм.`
+        `Reach велосипеда (${reach} мм) ${direction} относительно рекомендованного (${targetReach} мм). Дельта: ${Math.abs(reachDelta)} мм. Рекомендация: изменить длину выноса на ~${Math.abs(reachDelta)} мм (${stemFix}).`
       );
     }
   }
@@ -352,6 +369,12 @@ export function calculateAll(
   let bbDrop: number | null = null;
   if (bike.wheelHeight && bike.bbHeight && bike.wheelHeight > 0 && bike.bbHeight > 0) {
     bbDrop = calcBBDrop(bike.wheelHeight, bike.bbHeight);
+    // Жёсткая валидация по спеке: BB Drop должен быть 40-90 мм
+    if (bbDrop < 40 || bbDrop > 90) {
+      notes.push(
+        `⚠ BB Drop ${bbDrop} мм вне нормы 40–90 мм — проверьте измерения Wheel Height и BB Height (рулеткой от земли).`
+      );
+    }
     const typical: Record<BikeType, [number, number]> = {
       road: [65, 75],
       gravel: [70, 80],

@@ -181,8 +181,21 @@ function makeResult(
 }
 
 /**
+ * Опциональные параметры анализа: если передан масштаб ЭТОГО ЖЕ кадра,
+ * KOPS считается в миллиметрах (спека: норма ±10 мм); иначе — в условных
+ * единицах (доля ширины кадра × 100, как раньше).
+ */
+export interface AnalyzeFitOptions {
+  /** Ширина кадра, px */
+  imgWidthPx?: number;
+  /** Масштаб мм/px калибровки этого же кадра */
+  mmPerPx?: number;
+}
+
+/**
  * Полный анализ посадки по keypoints
  * @param landmarks массив из 33 точек MediaPipe
+ * @param opts опционально: масштаб кадра для KOPS в мм
  * @returns набор результатов
  */
 export interface BikeFitAnalysis {
@@ -196,7 +209,10 @@ export interface BikeFitAnalysis {
   side: "left" | "right";
 }
 
-export function analyzeBikeFit(landmarks: Landmarks): BikeFitAnalysis | null {
+export function analyzeBikeFit(
+  landmarks: Landmarks,
+  opts?: AnalyzeFitOptions
+): BikeFitAnalysis | null {
   // Определяем, какая сторона тела лучше видна
   // На боковой съёмке одна сторона ближе к камере и лучше определяется
   const leftVis =
@@ -246,6 +262,13 @@ export function analyzeBikeFit(landmarks: Landmarks): BikeFitAnalysis | null {
       ? "Колено слишком прямое — поднимите седло на 1–2 см. Это увеличит сгибание."
       : "Колено слишком согнуто — опустите седло на 1–2 см. Это позволит ноге полностью разгибаться."
   );
+  // Sanity по спеке: < 20° или > 50° — не норма, а ошибка распознавания
+  if (kneeAngleValue < 20 || kneeAngleValue > 50) {
+    kneeAngle.status = "bad";
+    kneeAngle.color = STATUS_COLORS.bad;
+    kneeAngle.recommendation =
+      "Ошибка распознавания позы или экстремальная настройка — проверьте кадр: НМТ должна быть снята в нижней фазе педалирования.";
+  }
 
   // 2. Угол бедра (shoulder-hip-knee) — должен быть 40-50°
   const hipAngleValue = angleBetween(shoulder, hip, knee);
@@ -303,20 +326,27 @@ export function analyzeBikeFit(landmarks: Landmarks): BikeFitAnalysis | null {
       : "Руки слишком разведены — проверьте ширину хвата руля."
   );
 
-  // 6. KOPS — горизонтальное смещение колена относительно оси педали
-  // Норма: колено над осью педали (отклонение ±1-2 см от вертикали)
-  // В нормализованных координатах 0.02 ≈ 2-3 см в зависимости от масштаба
-  const kopsValue = horizontalOffset(knee, ankle) * 100; // в условных единицах
+  // 6. KOPS — горизонтальное смещение колена относительно оси педали.
+  // Спека: норма ±10 мм, > 0 — колено впереди оси. В мм считается ТОЛЬКО
+  // при переданном масштабе этого же кадра (opts), иначе — условные
+  // единицы (доля ширины кадра × 100), как раньше.
+  const kopsRaw = horizontalOffset(knee, ankle); // доля ширины кадра
+  const hasScale = !!(opts?.imgWidthPx && opts?.mmPerPx);
+  const kopsValue = hasScale
+    ? kopsRaw * opts!.imgWidthPx! * opts!.mmPerPx! // мм
+    : kopsRaw * 100; // условные единицы
+  const kopsLimit = hasScale ? 10 : 3;
+  const kopsUnit = hasScale ? "мм" : "у.е.";
   const kops = makeResult(
     Math.abs(kopsValue),
     0,
-    3,
-    "KOPS (колено над осью педали)",
-    "Горизонтальное смещение колена относительно оси педали. Идеал — колено ровно над осью.",
-    kopsValue > 3
-      ? "Колено слишком впереди оси педали — сдвиньте седло назад на 5–10 мм."
-      : kopsValue < -3
-        ? "Колено слишком позади оси педали — сдвиньте седло вперёд на 5–10 мм."
+    kopsLimit,
+    `KOPS (колено над осью педали, ${kopsUnit})`,
+    "Горизонтальное смещение колена относительно оси педали. Идеал — колено ровно над осью (норма ±10 мм).",
+    kopsValue > kopsLimit
+      ? `Колено впереди оси педали на ${Math.abs(kopsValue).toFixed(0)} ${kopsUnit} — сдвиньте седло назад на 5–10 мм.`
+      : kopsValue < -kopsLimit
+        ? `Колено позади оси педали на ${Math.abs(kopsValue).toFixed(0)} ${kopsUnit} — сдвиньте седло вперёд на 5–10 мм.`
         : "Отличное положение колена над осью педали."
   );
 
