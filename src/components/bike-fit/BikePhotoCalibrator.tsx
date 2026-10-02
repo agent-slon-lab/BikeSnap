@@ -746,6 +746,18 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         ...(auxScaleCandidates.length > 0
           ? [`    Кандидаты от колёс: ${auxScaleCandidates.map((a) => `${a.key} = ${(a.valueMm / a.px).toFixed(3)} мм/пикс`).join(", ")}`]
           : []),
+        ...(engine.perspective
+          ? [
+              `    📐 Перспективный градиент: сила ${engine.perspective.severityPct.toFixed(1)}% — ПРИМЕНЁН (v2.2)`,
+              `      Локальный масштаб по X: зад ${engine.perspective.scaleRearAxle.toFixed(4)} мм/пикс → пер ${engine.perspective.scaleFrontAxle.toFixed(4)} мм/пикс`,
+              `      (сырые от колёс: rear ${engine.perspective.wheelScaleRear.toFixed(4)} / front ${engine.perspective.wheelScaleFront.toFixed(4)}; якорь: ${engine.perspective.anchor})`,
+              `      Каждая метрика умножается на масштаб в середине СВОЕГО отрезка — калибровка остаётся точной в точке калибровки.`,
+            ]
+          : auxScaleCandidates.length >= 2
+            ? [
+                `    📐 Перспективный градиент НЕ применён (сила < 3% или колёса не согласованы с рабочим масштабом) — единый масштаб для всех метрик.`,
+              ]
+            : []),
       ]);
 
       // === ПЕРЕКРЁСТНАЯ ПРОВЕРКА (справочно; на рабочий масштаб НЕ влияет) ===
@@ -924,8 +936,9 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
 
       // === 🛞 ВИДЕНИЕ КОЛЁС: что движок «видит» по каждой колёсной паре ===
       // Прямой ответ на вопрос «корректно ли считаны масштаб и перспектива»:
-      // радиусы в px и мм при рабочем масштабе, расхождение с WH, соотношение
-      // перед/зад (перспектива) и контроль физического диапазона.
+      // радиусы в px и мм при ЛОКАЛЬНОМ масштабе на оси колеса (градиент v2.2),
+      // расхождение с WH, соотношение перед/зад (перспектива) и контроль
+      // физического диапазона.
       {
         const wheelRows: string[] = [];
         const pairs = [
@@ -950,13 +963,19 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
             (top.y - axle.y) * imgSize.height
           );
           radiiPx.push({ label: w.label, rPx });
-          const rMm = rPx * engine.scaleMmPerPx;
+          // v2.2: мм-радиус считаем по ЛОКАЛЬНОМУ масштабу на оси этого колеса
+          // (перспективный градиент), а не по единому якорному масштабу
+          const localScale =
+            w.axleKey === "rearAxle"
+              ? (engine.perspective?.scaleRearAxle ?? engine.scaleMmPerPx)
+              : (engine.perspective?.scaleFrontAxle ?? engine.scaleMmPerPx);
+          const rMm = rPx * localScale;
           const dev = wheelHeightMm ? ((rMm - wheelHeightMm) / wheelHeightMm) * 100 : null;
           wheelRows.push(
             `    ${w.label}: ось (${(axle.x * imgSize.width).toFixed(0)}, ${(axle.y * imgSize.height).toFixed(0)}) px → верх (${(top.x * imgSize.width).toFixed(0)}, ${(top.y * imgSize.height).toFixed(0)}) px`,
-            `      радиус = ${rPx.toFixed(1)} px = ${Math.round(rMm)} мм при рабочем масштабе ${engine.scaleMmPerPx.toFixed(3)} мм/пикс` +
+            `      радиус = ${rPx.toFixed(1)} px = ${Math.round(rMm)} мм при локальном масштабе ${localScale.toFixed(3)} мм/пикс` +
               (dev != null
-                ? ` → расхождение с WH ${wheelHeightMm} мм: ${dev > 0 ? "+" : ""}${dev.toFixed(1)}%${Math.abs(dev) > 15 ? " ⚠ большое — проверьте точку верха покрышки" : " (в норме: перспектива/точность разметки)"}`
+                ? ` → расхождение с WH ${wheelHeightMm} мм: ${dev > 0 ? "+" : ""}${dev.toFixed(1)}%${Math.abs(dev) > 15 ? " ⚠ большое — проверьте точку верха покрышки" : " (в норме: точность разметки)"}`
                 : " (WH не задан — сравнение в мм недоступно)"),
             Math.round(rMm) < 280 || Math.round(rMm) > 420
               ? `      ⚠ радиус ${Math.round(rMm)} мм вне типичного диапазона 280–420 мм — проверьте пару ось/верх этого колеса`
@@ -972,7 +991,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                 ? `заднее кажется на ${diffPct.toFixed(1)}% БОЛЬШЕ переднего (нетипично: обычно переднее ближе к камере — проверьте, не перепутаны ли верха колёс)`
                 : `переднее кажется на ${diffPct.toFixed(1)}% больше заднего — обычная перспектива (перед ближе к камере)`
             }`,
-            `    Эту разницу ядро компенсирует: consensus-масштаб учитывает обоих кандидатов от колёс, dual scale даёт локальный масштаб на каждой оси.`
+            `    Эту разницу ядро компенсирует перспективным градиентом (v2.2): consensus-масштаб учитывает обоих кандидатов от колёс, а каждая метрика берёт локальный масштаб в середине своего отрезка.`
           );
         } else if (radiiPx.length === 1) {
           wheelRows.push(

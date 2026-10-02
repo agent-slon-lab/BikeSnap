@@ -53,6 +53,19 @@
  *    и блокирует запись в карточку велика, пока разметка физически
  *    невозможна.
  * h) stackReachRatio = null (а не фейковый 0), когда Stack/Reach невалидны.
+ *
+ * v2.2 (перспективный градиент масштаба — интеграция dual-scale идеи):
+ * i) Единый масштаб консенсуса — это масштаб В ТОЧКЕ отрезка-источника
+ *    (калибровки). Между осями колёс масштаб плавно меняется: переднее
+ *    колесо ближе к камере и кажется больше. Если оба колёсных кандидата
+ *    (радиусы по верхам покрышек) согласованы с рабочим масштабом, а сила
+ *    перспективы >= 3%, движок интерполирует масштаб по X между осями
+ *    (градиент формы — от колёс) и нормирует его на ЯКОРЬ — отрезок
+ *    кандидата-источника рабочего масштаба. Каждая метрика умножается на
+ *    локальный масштаб в середине СВОЕГО отрезка: Reach/Stack — у рулевой,
+ *    RC — у задней оси, FC — у передней. Калибровка (напр. SH=690 мм)
+ *    остаётся точной ровно в точке калибровки — строгий override не
+ *    нарушается, а метрики между осями перестают наследовать чужой масштаб.
  */
 
 // ============================================================
@@ -130,6 +143,25 @@ export interface PhysicsViolation {
   fix: string;
 }
 
+/**
+ * Информация о применённом перспективном градиенте масштаба (v2.2).
+ * В результате движка поле perspective = null, когда градиент НЕ применён
+ * (нет обоих колёсных кандидатов / они не согласованы / сила перспективы < 3%).
+ */
+export interface PerspectiveGradientInfo {
+  /** Локальный масштаб на передней оси, мм/px (нормирован на якорь) */
+  scaleFrontAxle: number;
+  /** Локальный масштаб на задней оси, мм/px (нормирован на якорь) */
+  scaleRearAxle: number;
+  /** Сырые масштабы от колёс (мм/px) — до нормировки на якорь */
+  wheelScaleFront: number;
+  wheelScaleRear: number;
+  /** Сила перспективы |scaleF−scaleR| / среднее, % */
+  severityPct: number;
+  /** Что принято за якорь рабочего масштаба (отрезок-источник) */
+  anchor: string;
+}
+
 export interface BikeGeometryResult {
   scaleMmPerPx: number;
   scaleSource: string;
@@ -161,6 +193,8 @@ export interface BikeGeometryResult {
   rotated: BikeKeypoints;
   /** Расширенные метрики в выровненной системе (для интеграции с UI) */
   extendedMm: ExtendedMetricsMm;
+  /** Перспективный градиент масштаба — null, если не применён (v2.2) */
+  perspective: PerspectiveGradientInfo | null;
 }
 
 export interface ExtendedMetricsMm {
@@ -410,14 +444,18 @@ export function calculateBikeGeometry(
   const ettAxisDyUp = Math.abs(rot.bb.y - rot.stTop.y);
   let ettPx: number;
   let ettFallbackUsed = false;
+  /** Середина ETT-отрезка по X — точка, в которой берётся локальный масштаб (v2.2) */
+  let ettMidX: number;
   if (ettAxisDyUp > 1e-6) {
     // Наклон оси: на каждый px подъёма ось уходит назад на ettBackPerUp
     const ettBackPerUp = ettAxisDx / ettAxisDyUp;
     const ettIntersectX = rot.bb.x - ettBackPerUp * (rot.bb.y - rot.htTop.y);
     ettPx = Math.abs(rot.htTop.x - ettIntersectX);
+    ettMidX = (rot.htTop.x + ettIntersectX) / 2;
   } else {
     // Вырожденный случай — вертикальная подседельная: ETT = горизонталь ST→HT
     ettPx = Math.abs(rot.htTop.x - rot.stTop.x);
+    ettMidX = (rot.htTop.x + rot.stTop.x) / 2;
     ettFallbackUsed = true;
   }
 
@@ -469,6 +507,30 @@ export function calculateBikeGeometry(
   // >= 3 — находим крупнейший кластер согласленных (±15%) и берём его медиану.
   // Override-выброс отклоняется с громким предупреждением и адресной
   // подсказкой; override в кластере — применяется СТРОГО (консенсус подтверждает).
+  //
+  // Середина колёсной базы в выровненной системе — якорь по умолчанию
+  // (WB-кандидат «живёт» ровно здесь).
+  const midSpanX = (rot.rearAxle.x + rot.frontAxle.x) / 2;
+  /**
+   * X-координата точки, в которой «живёт» масштаб кандидата (v2.2):
+   * каждый кандидат измеряет отрезок в своём месте кадра, и локальный
+   * масштаб там свой. Используется перспективным градиентом как якорь.
+   */
+  const anchorXFor = (key: string): number => {
+    switch (key) {
+      case "saddleHeight":
+        return (rot.bb.x + rot.saddleMount.x) / 2;
+      case "ett":
+        return (rot.stTop.x + rot.htTop.x) / 2;
+      case "wheelFront":
+        return rot.frontAxle.x;
+      case "wheelRear":
+        return rot.rearAxle.x;
+      default:
+        return midSpanX; // wheelbase и прочие — середина базы
+    }
+  };
+
   const scaleCandidates: Array<{
     key: string;
     label: string;
@@ -477,6 +539,8 @@ export function calculateBikeGeometry(
     px: number;
     isOverride: boolean;
     suspectPoints?: string;
+    /** Где на оси X «живёт» этот кандидат (v2.2, перспективный градиент) */
+    anchorX: number;
   }> = [];
 
   if (
@@ -493,6 +557,7 @@ export function calculateBikeGeometry(
       px: pxFor[config.userOverrideKey],
       isOverride: true,
       suspectPoints: OVERRIDE_SUSPECTS[config.userOverrideKey],
+      anchorX: anchorXFor(config.userOverrideKey),
     });
   }
   // Прямая горизонталь stTop→htTop: стабильный ETT-кандидат (пересечение
@@ -513,6 +578,7 @@ export function calculateBikeGeometry(
       px,
       isOverride: false,
       suspectPoints: OVERRIDE_SUSPECTS[key],
+      anchorX: anchorXFor(key),
     });
   }
   for (const aux of config.auxScaleCandidates ?? []) {
@@ -527,6 +593,7 @@ export function calculateBikeGeometry(
       px: aux.px,
       isOverride: false,
       suspectPoints: aux.suspectPoints,
+      anchorX: anchorXFor(aux.key),
     });
   }
 
@@ -642,6 +709,84 @@ export function calculateBikeGeometry(
     scaleSource = `FALLBACK_AUTO (Wheelbase = ${defaultWB}mm)`;
   }
 
+  // --- ПЕРСПЕКТИВНЫЙ ГРАДИЕНТ МАСШТАБА (v2.2) ----------------------------
+  // Единый scaleMmPerPx — это масштаб в точке отрезка-ИСТОЧНИКА (якоря).
+  // Между осями колёс масштаб плавно меняется (перед ближе к камере).
+  // Если оба колёсных кандидата согласованы с рабочим масштабом и сила
+  // перспективы >= 3% — строим локальный масштаб по X:
+  //     scaleAt(x) = scaleMmPerPx × wheelScaleAt(x) / wheelScaleAt(якорь),
+  // где wheelScaleAt — линейная интерполяция между масштабами колёс
+  // (идея bike-dual-scale / bike-perspective, интегрированная в ядро).
+  // Итог: калибровка точна в точке калибровки, метрики между осями берут
+  // локальный масштаб вместо чужого.
+  let scaleAt: (x: number) => number = () => scaleMmPerPx;
+  let perspective: PerspectiveGradientInfo | null = null;
+
+  const wheelFrontCand = scaleCandidates.find((c) => c.key === "wheelFront");
+  const wheelRearCand = scaleCandidates.find((c) => c.key === "wheelRear");
+  if (wheelFrontCand && wheelRearCand && scaleMmPerPx > 0) {
+    const sF = wheelFrontCand.scale;
+    const sR = wheelRearCand.scale;
+    const avgWheel = (sF + sR) / 2;
+    const severity = Math.abs(sF - sR) / avgWheel;
+    const bothConsistent =
+      Math.abs(sF - scaleMmPerPx) <= CLUSTER_REL_TOL * scaleMmPerPx &&
+      Math.abs(sR - scaleMmPerPx) <= CLUSTER_REL_TOL * scaleMmPerPx;
+    if (bothConsistent && severity >= 0.03) {
+      const frontX = rot.frontAxle.x;
+      const rearX = rot.rearAxle.x;
+      const wheelScaleAt = (x: number): number => {
+        if (Math.abs(rearX - frontX) < 1e-6) return avgWheel;
+        const t = Math.max(0, Math.min(1, (x - frontX) / (rearX - frontX)));
+        return sF + t * (sR - sF);
+      };
+
+      // Якорь = отрезок-источник рабочего масштаба (где масштаб ТОЧНО
+      // равен scaleMmPerPx): строгий override — его отрезок; медиана
+      // консенсуса — кандидат, ближайший к медиане; иначе середина базы.
+      let anchorX = midSpanX;
+      let anchorLabel = "середина колёсной базы";
+      if (
+        scaleSource.startsWith("USER_OVERRIDE") &&
+        config.userOverrideKey &&
+        config.userOverrideKey !== "wheelDiameter"
+      ) {
+        anchorX = anchorXFor(config.userOverrideKey);
+        anchorLabel = `калибровка ${OVERRIDE_LABELS[config.userOverrideKey]}`;
+      } else if (scaleSource.startsWith("CONSENSUS")) {
+        let best: (typeof scaleCandidates)[number] | null = null;
+        for (const idx of clusterIdx) {
+          const c = scaleCandidates[idx];
+          if (!best || Math.abs(c.scale - scaleMmPerPx) < Math.abs(best.scale - scaleMmPerPx)) {
+            best = c;
+          }
+        }
+        if (best) {
+          anchorX = best.anchorX;
+          anchorLabel = `медиана консенсуса (${best.label})`;
+        }
+      }
+
+      const anchorScale = wheelScaleAt(anchorX);
+      if (anchorScale > 0) {
+        scaleAt = (x: number) => scaleMmPerPx * (wheelScaleAt(x) / anchorScale);
+        const scaleFrontAxle = scaleAt(frontX);
+        const scaleRearAxle = scaleAt(rearX);
+        perspective = {
+          scaleFrontAxle,
+          scaleRearAxle,
+          wheelScaleFront: sF,
+          wheelScaleRear: sR,
+          severityPct: severity * 100,
+          anchor: anchorLabel,
+        };
+        warnings.push(
+          `📐 Перспективная компенсация: масштаб градиентом между осями — ${scaleRearAxle.toFixed(3)} мм/px на задней оси → ${scaleFrontAxle.toFixed(3)} мм/px на передней (якорь: ${anchorLabel}); сила перспективы ${(severity * 100).toFixed(1)}%.${severity > 0.2 ? " Перспектива сильная — лучше переснять строго сбоку." : ""}`
+        );
+      }
+    }
+  }
+
   // Перекрёстная проверка «строгого» режима: если ручной ввод и известный WB
   // противоречат друг другу (только когда override реально применён и
   // консенсус НЕ решал исход — иначе сообщение дублирует вердикт консенсуса)
@@ -706,27 +851,33 @@ export function calculateBikeGeometry(
 
   // 4. РАСЧЁТ МЕТРИК ГЕОМЕТРИИ (мм, в выровненной системе)
   //
+  // v2.2: каждая метрика умножается на ЛОКАЛЬНЫЙ масштаб в середине
+  // СВОЕГО отрезка (перспективный градиент scaleAt). Без градиента
+  // scaleAt(x) ≡ scaleMmPerPx — поведение идентично прежнему.
+  //
   // Колёсная база: строго по X (оси горизонтальны после поворота)
-  const wheelbaseMm = pxFor.wheelbase * scaleMmPerPx;
+  const wheelbaseMm =
+    pxFor.wheelbase * scaleAt((rot.rearAxle.x + rot.frontAxle.x) / 2);
 
   // Stack: вертикаль от BB до верха рулевого стакана.
   // В canvas Y растёт ВНИЗ, поэтому (bb.y - htTop.y) > 0 для стоящего велосипеда.
-  const stackMm = (rot.bb.y - rot.htTop.y) * scaleMmPerPx;
+  const stackMm = (rot.bb.y - rot.htTop.y) * scaleAt((rot.bb.x + rot.htTop.x) / 2);
 
   // Reach: горизонталь от BB до верха рулевого стакана
   // (перед нормализован вправо → положительный)
-  const reachMm = (rot.htTop.x - rot.bb.x) * scaleMmPerPx;
+  const reachMm = (rot.htTop.x - rot.bb.x) * scaleAt((rot.bb.x + rot.htTop.x) / 2);
 
   // Saddle Height: BB → верх седла ВДОЛЬ линии подседельной трубы
   // (проекция saddleMount на ось bb → stTop — см. shPx выше)
-  const saddleHeightMm = pxFor.saddleHeight * scaleMmPerPx;
+  const saddleHeightMm =
+    pxFor.saddleHeight * scaleAt((rot.bb.x + rot.saddleMount.x) / 2);
 
   // Точка седла должна лежать НА линии трубы (верх седла над штырём).
   // Большое боковое отклонение = точка на носу/заде седла: у сёдел разная
   // длина и форма, мерять по ним нельзя — SH и масштаб уедут.
   if (stAxisLen >= MIN_CALIB_PX) {
     const saddleOffAxisMm =
-      perpendicularDistance(rot.saddleMount, rot.bb, rot.stTop) * scaleMmPerPx;
+      perpendicularDistance(rot.saddleMount, rot.bb, rot.stTop) * scaleAt(rot.saddleMount.x);
     if (saddleOffAxisMm > 15) {
       warnings.push(
         `Точка «Верх седла» отклонилась от линии подседельной трубы на ${Math.round(saddleOffAxisMm)} мм — она должна стоять РОВНО НАД штырём, где линия трубы пересекает верх седла (не нос и не зад седла). SH меряется вдоль трубы, поэтому промах искажает высоту и масштаб.`
@@ -738,15 +889,15 @@ export function calculateBikeGeometry(
   // Проекция от верха рулевого стакана по горизонтали до пересечения
   // с осью подседельной трубы — ettPx уже рассчитан выше (единое
   // определение для калибровки по ETT и для метрики).
-  const ettMm = ettPx * scaleMmPerPx;
+  const ettMm = ettPx * scaleAt(ettMidX);
   if (ettFallbackUsed) {
     warnings.push(
       "Подседельная ось вертикальна — ETT принят равным горизонтали ST→HT."
     );
   }
 
-  // 5. РАСШИРЕННЫЕ МЕТРИКИ (в выровненной системе)
-  const extended = computeExtendedBikeParams(rot, scaleMmPerPx);
+  // 5. РАСШИРЕННЫЕ МЕТРИКИ (в выровненной системе, с локальным масштабом)
+  const extended = computeExtendedBikeParams(rot, scaleAt);
 
   // 6. ВАЛИДАЦИЯ И ПРЕДУПРЕЖДЕНИЯ (sanity checks)
   if (Number.isFinite(saddleHeightMm) && (saddleHeightMm < 400 || saddleHeightMm > 950)) {
@@ -878,6 +1029,7 @@ export function calculateBikeGeometry(
     frame,
     rotated: rot,
     extendedMm: extended,
+    perspective,
   };
 }
 
@@ -890,17 +1042,25 @@ export function calculateBikeGeometry(
  * (после Isolated Rotation). Все проекции честные: X — вдоль оси колёс,
  * Y — перпендикулярно ей. Это устраняет погрешность наклона кадра
  * для ВСЕХ метрик, а не только для Stack/Reach/ETT.
+ *
+ * v2.2: вместо скалярного масштаба принимается ЧИСЛО ИЛИ ФУНКЦИЯ
+ * scaleAt(x) — локальный масштаб в точке X (перспективный градиент).
+ * Каждая метрика берёт масштаб в середине СВОЕГО отрезка (перпендикуляр
+ * форка — в точке передней оси). Скаляр сохранён для обратной
+ * совместимости: без функции поведение идентично прежнему.
  */
 export function computeExtendedBikeParams(
   rot: BikeKeypoints,
-  scaleMmPerPx: number
+  scale: number | ((x: number) => number)
 ): ExtendedMetricsMm {
-  const s = scaleMmPerPx;
-  const dist = (a: Point2D, b: Point2D) => distance(a, b) * s;
-  const vert = (a: Point2D, b: Point2D) => Math.abs(a.y - b.y) * s;
-  const horiz = (a: Point2D, b: Point2D) => Math.abs(a.x - b.x) * s;
+  const scaleAt = typeof scale === "function" ? scale : () => scale as number;
+  const midX = (a: Point2D, b: Point2D) => (a.x + b.x) / 2;
+  const dist = (a: Point2D, b: Point2D) => distance(a, b) * scaleAt(midX(a, b));
+  const vert = (a: Point2D, b: Point2D) => Math.abs(a.y - b.y) * scaleAt(midX(a, b));
+  const horiz = (a: Point2D, b: Point2D) => Math.abs(a.x - b.x) * scaleAt(midX(a, b));
+  // Перпендикуляр «живёт» в точке p (напр. fork offset — у передней оси)
   const perp = (p: Point2D, a: Point2D, b: Point2D) =>
-    perpendicularDistance(p, a, b) * s;
+    perpendicularDistance(p, a, b) * scaleAt(p.x);
 
   const seatTubeLength = dist(rot.bb, rot.stTop);
   const headTubeLength = dist(rot.htTop, rot.htBottom);
@@ -909,14 +1069,15 @@ export function computeExtendedBikeParams(
   // Setback (байкфит): горизонтальный сдвиг седла относительно каретки
   // в выровненной системе. Перед нормализован вправо → седло позади BB
   // (saddleMount.x < bb.x) даёт положительный сетбэк.
-  const setback = (rot.bb.x - rot.saddleMount.x) * s;
+  const setback =
+    (rot.bb.x - rot.saddleMount.x) * scaleAt(midX(rot.bb, rot.saddleMount));
   const rearCenter = dist(rot.bb, rot.rearAxle);
   const frontCenter = dist(rot.bb, rot.frontAxle);
   const bbDrop = vert(rot.bb, rot.rearAxle);
   const ettDirect = horiz(rot.stTop, rot.htTop);
 
-  const reachMm = (rot.htTop.x - rot.bb.x) * s;
-  const stackMm = (rot.bb.y - rot.htTop.y) * s;
+  const reachMm = (rot.htTop.x - rot.bb.x) * scaleAt(midX(rot.bb, rot.htTop));
+  const stackMm = (rot.bb.y - rot.htTop.y) * scaleAt(midX(rot.bb, rot.htTop));
   const stackReachRatio =
     reachMm > 0 && stackMm > 0
       ? Math.round((stackMm / reachMm) * 100) / 100
