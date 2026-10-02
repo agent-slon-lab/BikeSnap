@@ -1464,7 +1464,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                     { key: "bb", label: "Каретка", color: "#ef4444", hint: "Центр каретки (ось педалей) — центр вала между шатунами", optional: false },
                     { key: "stTop", label: "Верх подседельной трубы", color: "#f97316", hint: "Верх подседельной трубы (хомут) — где штырь входит в раму", optional: false },
                     { key: "saddleMount", label: "Верх седла с подседелом", color: "#eab308", hint: "Верх седла над линией штыря — не нос и не зад седла", optional: false },
-                    { key: "htTop", label: "Верх рулевого стакана", color: "#22c55e", hint: "Верх рулевого стакана рамы — стык выноса с рамой", optional: false },
+                    { key: "htTop", label: "Верх рулевого стакана", color: "#22c55e", hint: "Верхний торец самой рулевой трубы рамы — не крышка и не вынос", optional: false },
                     { key: "htBottom", label: "Низ рулевого стакана", color: "#3b82f6", hint: "Низ рулевого стакана = корона вилки (стык вилки с рамой)", optional: false },
                     { key: "htTopCap", label: "Крышка рулевой", color: "#10b981", hint: "Верхняя крышка рулевой колонки с болтом (для расчёта посадки)", optional: false },
                     { key: "rearAxle", label: "Ось заднего колеса", color: "#a855f7", hint: "Центр оси заднего колеса", optional: false },

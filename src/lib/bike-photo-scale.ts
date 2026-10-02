@@ -35,7 +35,7 @@ export interface BikeKeyPoints {
   stTop: NullablePoint;
   /** Точка крепления седла к подседельному штырю (для расчёта SH и Setback) */
   saddleMount: NullablePoint;
-  /** ВЕРХ стакана РАМЫ = НИЗ ВЫНОСА — для расчёта Reach/Stack по стандарту */
+  /** ВЕРХ стакана РАМЫ — верхний торец самой рулевой трубы рамы — для расчёта Reach/Stack по стандарту */
   htTop: NullablePoint;
   /** НИЗ стакана РАМЫ = КОРОНА ВИЛКИ — для расчёта длины рулевой и вилки */
   htBottom: NullablePoint;
