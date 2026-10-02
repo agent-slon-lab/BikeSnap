@@ -157,7 +157,9 @@ export function BikeSchemaDiagram({ className, values, showSourceHint = true }: 
         >
           {/* ST */}
           <text x="738" y="275">ST</text>
-          {v?.saddleHeight != null && v.saddleHeight > 0 && (
+          {v?.seatTube != null && v.seatTube > 0 ? (
+            <text x="738" y="295" fontSize="10" fontWeight="normal" fill="#0284c7">{v.seatTube}</text>
+          ) : v?.saddleHeight != null && v.saddleHeight > 0 && (
             <text x="738" y="295" fontSize="10" fontWeight="normal" fill="#666">—</text>
           )}
           {/* ETT */}
@@ -182,6 +184,9 @@ export function BikeSchemaDiagram({ className, values, showSourceHint = true }: 
           )}
           {/* STA */}
           <text x="755" y="370">STA</text>
+          {v?.sta != null && v.sta > 0 && (
+            <text x="755" y="385" fontSize="10" fontWeight="normal" fill="#0284c7">{v.sta}°</text>
+          )}
           {/* Reach — вычислен из фото (синий цвет = фотоисточник) */}
           <text x="905" y="78">Reach</text>
           {v?.reach != null && v.reach > 0 && (
@@ -194,12 +199,24 @@ export function BikeSchemaDiagram({ className, values, showSourceHint = true }: 
           )}
           {/* HTA */}
           <text x="1051" y="307">HTA</text>
+          {v?.hta != null && v.hta > 0 && (
+            <text x="1051" y="322" fontSize="10" fontWeight="normal" fill="#0284c7">{v.hta}°</text>
+          )}
           {/* FC */}
           <text x="955" y="430">FC</text>
+          {v?.frontCenter != null && v.frontCenter > 0 && (
+            <text x="955" y="445" fontSize="10" fontWeight="normal" fill="#0284c7">{v.frontCenter}</text>
+          )}
           {/* RC */}
           <text x="707" y="427">RC</text>
+          {v?.rearCenter != null && v.rearCenter > 0 && (
+            <text x="707" y="442" fontSize="10" fontWeight="normal" fill="#0284c7">{v.rearCenter}</text>
+          )}
           {/* BB Drop */}
           <text x="924" y="378">BB</text>
+          {v?.bbDrop != null && v.bbDrop > 0 && (
+            <text x="924" y="393" fontSize="10" fontWeight="normal" fill="#0284c7">{v.bbDrop}</text>
+          )}
           {/* BBH */}
           <text x="789" y="455">BBH</text>
           {v?.bbHeight != null && v.bbHeight > 0 && (

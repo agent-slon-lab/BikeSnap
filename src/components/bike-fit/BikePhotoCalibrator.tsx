@@ -210,6 +210,9 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
   const [comparisons, setComparisons] = useState<ComparisonResult[]>([]);
   const [pointsMissing, setPointsMissing] = useState<string[]>([]);
   const [debugLog, setDebugLog] = useState<string[]>([]);
+  // v1.13.5: мгновенная обратная связь под кнопкой «Записать в параметры велика» —
+  // перечисляем, что именно ушло в карточку (лечит «нажимаю — и ничего не происходит»).
+  const [appliedSummary, setAppliedSummary] = useState<string | null>(null);
   const [placementMode, setPlacementMode] = useState(false);
   const [placementPointKey, setPlacementPointKey] = useState<keyof BikeKeyPoints | null>(null);
   // Перспектива: только ИНФОРМАЦИЯ для dual scale — интерактивная коррекция
@@ -487,6 +490,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
   const runCalibration = useCallback(
     (pts: BikeKeyPoints, knownVal: number) => {
       const ts = new Date().toLocaleTimeString();
+      // Пересчёт обесценивает прошлую запись — убираем сводку под кнопкой.
+      setAppliedSummary(null);
 
       // === ЗАЩИТА ОТ МУСОРНОГО МАСШТАБА (кейс «SH = 8» вместо «800») ===
       // Значение ВНЕ физического диапазона не допускается до строгого масштаба:
@@ -1185,8 +1190,33 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     // введённое вручную значение никогда не перезаписывается.
     if (engineResult) {
       averaged.wheelbase = engineResult.metricsMm.wheelbase;
+      // v1.13.5: углы — справочные, в форме не редактируются, так что
+      // перезапись вручную введённого невозможна по построению.
+      averaged.sta = Math.round(engineResult.anglesDeg.seatTubeAngle * 10) / 10;
+      averaged.hta = Math.round(engineResult.anglesDeg.headTubeAngle * 10) / 10;
     }
+    // Сводка того, что уйдёт в карточку — рендерится под кнопкой.
+    // Setback в карточку НЕ переносим: там это отсылка седла (нос седла от BB,
+    // влияет на фит-предупреждения), а из фото считается сетбэк рамы
+    // (BB → крепление седла) — семантика разная, смешивать нельзя.
+    const parts: string[] = [];
+    const push = (label: string, val: number | null | undefined, unit = "мм") => {
+      if (val != null && val > 0) parts.push(`${label} ${val}${unit}`);
+    };
+    push("Reach", averaged.reach);
+    push("Stack", averaged.stack);
+    push("STA", averaged.sta, "°");
+    push("HTA", averaged.hta, "°");
+    push("FC", averaged.frontCenter);
+    push("RC", averaged.rearCenter);
+    push("ST", averaged.seatTubeLength);
+    push("BB Drop", averaged.bbDrop);
     onAveraged(averaged);
+    setAppliedSummary(
+      parts.length > 0
+        ? `✓ Записано в карточку велика: ${parts.join(", ")}`
+        : null
+    );
   }, [comparisons, onAveraged, engineResult]);
 
   const overall = comparisons.length > 0 ? getOverallMatch(comparisons) : null;
@@ -1916,9 +1946,15 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                       <CheckCircle2 className="size-4" />
                       Записать в параметры велика
                     </Button>
+                    {appliedSummary && (
+                      <p className="text-[11px] text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-md px-2 py-1.5 text-center leading-snug">
+                        {appliedSummary}
+                      </p>
+                    )}
                     <p className="text-[10px] text-muted-foreground text-center leading-relaxed">
-                      Шаг 2: переносит Reach и Stack (в форме не вводятся) в карточку
-                      велика; WB дозаполняется, только если поле пустое. Введённое
+                      Шаг 2: переносит в карточку велика Reach, Stack и справочную
+                      геометрию (STA, HTA, FC, RC, ST, BB Drop) — она появится на
+                      схеме. WB дозаполняется, только если поле пустое. Введённое
                       вручную — эталон и не перезаписывается. Сохраняется автоматически.
                     </p>
                   </div>

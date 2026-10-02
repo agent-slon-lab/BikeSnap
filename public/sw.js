@@ -1,5 +1,5 @@
 /*
- * BikeSnap service worker (v1.13.4)
+ * BikeSnap service worker (v1.13.5)
  * Стратегии:
  *  - /api/*            → только сеть (анализ/калибровка не кэшируются)
  *  - навигация         → сеть-первым, офлайн-фолбэк на "/"
@@ -10,7 +10,7 @@
  *  - остальное GET     → сеть-первым с фолбэком на кэш
  * Имя кэша синхронизировано с APP_VERSION: при релизе обновлять вместе с ней.
  */
-const CACHE = "bikesnap-v1.13.4";
+const CACHE = "bikesnap-v1.13.5";
 const SHELL = [
   "/",
   "/manifest.webmanifest",

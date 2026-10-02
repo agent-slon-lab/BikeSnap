@@ -465,11 +465,21 @@ export function BikeParametersForm() {
               // ПРИНЦИП «ЭТАЛОН»: всё, что пользователь ввёл вручную (SH, WB, WH,
               // ETT, Stem, α, CR, BBH) — эталон ± погрешность измерений и НИГДЕ
               // не перезаписывается автоматически, по нему ведётся расчёт.
-              // Применяем только: reach/stack (в форме не вводятся вовсе) и WB —
-              // исключительно дозаполнением ПУСТОГО поля.
-              if (avg.wheelbase != null && !bike.wheelbase) setBike({ wheelbase: avg.wheelbase });
+              // Применяем: reach/stack (в форме не вводятся вовсе) и справочную
+              // геометрию рамы из фото (sta, hta, FC, RC, ST, BB Drop) — этих
+              // полей в форме нет, перезапись ручного ввода невозможна.
+              // WB — исключительно дозаполнением ПУСТОГО поля.
+              // Setback не трогаем: в карточке это отсылка седла (нос от BB),
+              // а фото считает сетбэк рамы (BB → крепление седла).
               if (avg.reach != null) setBike({ reach: avg.reach });
               if (avg.stack != null) setBike({ stack: avg.stack });
+              if (avg.sta != null) setBike({ sta: avg.sta });
+              if (avg.hta != null) setBike({ hta: avg.hta });
+              if (avg.frontCenter != null) setBike({ frontCenter: avg.frontCenter });
+              if (avg.rearCenter != null) setBike({ rearCenter: avg.rearCenter });
+              if (avg.seatTubeLength != null) setBike({ seatTube: avg.seatTubeLength });
+              if (avg.bbDrop != null) setBike({ bbDrop: avg.bbDrop });
+              if (avg.wheelbase != null && !bike.wheelbase) setBike({ wheelbase: avg.wheelbase });
             }}
           />
 
