@@ -1125,7 +1125,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
           extraChecks.push(
             `    ⚠️ SH: измерено ${measured.saddleHeight}, по фото ${params.saddleHeight} (Δ ${delta > 0 ? "+" : ""}${delta}, ${pct}%). ` +
             `SH измерен верно (доверяем), но точки BB/saddleMount на фото стоят слишком далеко друг от друга. ` +
-            `Возможно saddleMount стоит на верхней кромке штыря, а не на хомуте крепления седла.`
+            `Возможно saddleMount стоит не на самой верхней точке седла — проверьте, что точка на верхе седла там, где оно сидит на подседельном штыре.`
           );
         } else {
           extraChecks.push(`    ⚠️ SH: измерено ${measured.saddleHeight}, по фото ${params.saddleHeight} (Δ ${delta > 0 ? "+" : ""}${delta}, ${pct}%) — расхождение > 2%, проверьте точки BB/saddleMount`);
@@ -1351,7 +1351,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                   {([
                     { key: "bb", label: "Каретка", color: "#ef4444", hint: "Центр каретки (ось педалей) — центр вала между шатунами", optional: false },
                     { key: "stTop", label: "Верх подседельной трубы", color: "#f97316", hint: "Верх подседельной трубы (хомут) — где штырь входит в раму", optional: false },
-                    { key: "saddleMount", label: "Зажим рельсов седла", color: "#eab308", hint: "Зажим рамок (рельсов) под седлом — центр хомута, не нос седла", optional: false },
+                    { key: "saddleMount", label: "Верх седла с подседелом", color: "#eab308", hint: "Верх седла на подседельном штыре — не нос и не зад седла", optional: false },
                     { key: "htTop", label: "Верх рулевого стакана", color: "#22c55e", hint: "Верх рулевого стакана рамы — стык выноса с рамой", optional: false },
                     { key: "htBottom", label: "Низ рулевого стакана", color: "#3b82f6", hint: "Низ рулевого стакана = корона вилки (стык вилки с рамой)", optional: false },
                     { key: "htTopCap", label: "Крышка рулевой", color: "#10b981", hint: "Верхняя крышка рулевой колонки с болтом (для расчёта посадки)", optional: false },
@@ -1413,7 +1413,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                   <div>{error}</div>
                   {pointsMissing.length > 0 && (
                     <div className="text-[11px] text-rose-600/80 dark:text-rose-400/70 border-t border-rose-200/50 dark:border-rose-900/50 pt-1 mt-1">
-                      <div>Обязательные точки (7): обе оси колёс, каретка, верх подседельной трубы, зажим седла, верх и низ рулевого стакана</div>
+                      <div>Обязательные точки (7): обе оси колёс, каретка, верх подседельной трубы, верх седла с подседелом, верх и низ рулевого стакана</div>
                       <div>Отсутствуют: <b>{pointsMissing.map((k) => pointFullLabel(k)).join(", ")}</b></div>
                     </div>
                   )}
@@ -1479,8 +1479,9 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                         <p className="text-[11px] text-rose-600/80 dark:text-rose-400/70 mt-0.5 leading-relaxed">
                           Так велосипед не устроен. Пока эти точки не исправлены,
                           все вычисленные числа — мусор и записывать их в карточку
-                          велика нельзя. Нажмите «Поправить точку» у нарушения,
-                          переставьте точку на фото и снова нажмите «Вычислить все параметры».
+                          велика нельзя. Войдите в разметку (кнопка «Поправить точки»
+                          выше), переставьте отмеченные точки и снова нажмите
+                          «Вычислить все параметры».
                         </p>
                       </div>
                     </div>
@@ -1496,18 +1497,6 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                           <p className="text-[11px] text-muted-foreground leading-relaxed">
                             → {v.fix}
                           </p>
-                          {v.point && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-6 px-2 text-[10px]"
-                              onClick={() =>
-                                selectPointForPlacement(v.point as keyof BikeKeyPoints)
-                              }
-                            >
-                              Поправить точку: {pointFullLabel(v.point)}
-                            </Button>
-                          )}
                         </li>
                       ))}
                     </ul>

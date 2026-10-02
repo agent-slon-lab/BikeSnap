@@ -11,7 +11,7 @@
 export const POINT_FULL_LABELS: Record<string, string> = {
   bb: "Центр каретки (ось педалей)",
   stTop: "Верх подседельной трубы (хомут)",
-  saddleMount: "Зажим рамок (рельсов) под седлом",
+  saddleMount: "Верх седла с подседелом",
   htTop: "Верх рулевого стакана рамы",
   htBottom: "Низ рулевого стакана (корона вилки)",
   htTopCap: "Крышка рулевой колонки (top cap)",
