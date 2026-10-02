@@ -37,6 +37,21 @@
  * e) wheelDiameter остался в типе API по ТЗ, но по 7-точечной схеме он не
  *    измерим (нужны точки обода) — при использовании даётся честный warning
  *    и срабатывает fallback.
+ *
+ * v2.1 (консенсус-масштаб + физические гейты):
+ * f) Слепое «СТРОГО userOverride» давало чушь, когда сам override был
+ *    выбросом (кейс: SH=690 мм → 2.13 мм/px, тогда как WB/ETT/радиусы колёс
+ *    дружно дают ≈1.5 мм/px — расхождение 40% уезжало во ВСЕ метрики).
+ *    Теперь собираются ВСЕ кандидаты масштаба (primary-override, остальные
+ *    введённые размеры, радиусы колёс), находится крупнейший кластер
+ *    согласленных (±15%) и берётся медиана кластера; override-выброс
+ *    отклоняется с громким предупреждением и адресной подсказкой.
+ * g) Физические гейты: нарушения типа «каретка выше седла», «каретка выше
+ *    осей», «руль ниже каретки» возвращаются отдельным полем
+ *    physicsViolations (не текстом warning) — UI показывает красную
+ *    карточку с кнопками «Поправить точку» и блокирует запись в карточку
+ *    велика, пока разметка физически невозможна.
+ * h) stackReachRatio = null (а не фейковый 0), когда Stack/Reach невалидны.
  */
 
 // ============================================================
@@ -73,11 +88,45 @@ export type CalibrationKey =
   | "wheelDiameter";
 
 export interface CalibrationConfig {
-  /** Если пользователь задал точное значение вручную — СТРОГОЕ приоритет */
+  /** Если пользователь задал точное значение вручную — приоритетный кандидат */
   userOverrideKey?: CalibrationKey;
   userOverrideValueMm?: number;
   /** Запасной fallback (например, заводская колёсная база) */
   fallbackWheelbaseMm?: number;
+  /**
+   * Остальные введённые пользователем размеры (мм) — участвуют в
+   * консенсусе масштаба. Кандидат с ключом = userOverrideKey игнорируется
+   * (он уже представлен override-кандидатом).
+   */
+  extraMeasurements?: Partial<Record<Exclude<CalibrationKey, "wheelDiameter">, number>>;
+  /**
+   * Произвольные дополнительные кандидаты масштаба (напр. радиусы колёс
+   * по точкам верха покрышек). px — длина отрезка в пикселях фото.
+   */
+  auxScaleCandidates?: AuxScaleCandidate[];
+}
+
+/** Дополнительный (не primary) кандидат масштаба */
+export interface AuxScaleCandidate {
+  key: string;
+  /** Человекочитаемое имя для предупреждений: «радиус переднего колеса» */
+  label: string;
+  /** Реальное значение отрезка, мм */
+  valueMm: number;
+  /** Длина отрезка на фото, пиксели */
+  px: number;
+  /** Какие точки проверить, если кандидат — выброс */
+  suspectPoints?: string;
+}
+
+/** Жёсткое нарушение физики в разметке — блокирует достоверность расчёта */
+export interface PhysicsViolation {
+  /** Ключ точки BikeKeypoints, которую надо поправить (для кнопки «Поправить») */
+  point: string | null;
+  /** Что физически невозможно */
+  title: string;
+  /** Куда переставить точку */
+  fix: string;
 }
 
 export interface BikeGeometryResult {
@@ -99,6 +148,9 @@ export interface BikeGeometryResult {
     frameTilt: number;
   };
   warnings: string[];
+  /** Жёсткие физические нарушения разметки — результаты недостоверны, пока
+   *  не исправлены (UI показывает красную карточку и блокирует запись) */
+  physicsViolations: PhysicsViolation[];
   /** Параметры выровненной системы координат — позволяет спроецировать
    *  произвольную дополнительную точку (например, top cap) тем же
    *  преобразованием (см. makeAlignedTransform) */
@@ -129,7 +181,8 @@ export interface ExtendedMetricsMm {
   frontCenter: number;
   /** вертикаль BB ниже оси колёс (в выровненной системе) */
   bbDrop: number;
-  stackReachRatio: number;
+  /** null, когда Stack/Reach невалидны (отрицательные/нулевые) */
+  stackReachRatio: number | null;
 }
 
 /**
@@ -252,6 +305,30 @@ export function isPlausibleOverrideMm(
   return valueMm >= range.min && valueMm <= range.max;
 }
 
+/** Человекочитаемые названия отрезков калибровки (для предупреждений консенсуса) */
+const OVERRIDE_LABELS: Record<Exclude<CalibrationKey, "wheelDiameter">, string> = {
+  saddleHeight: "высота седла (SH)",
+  ett: "ETT",
+  wheelbase: "колёсная база (WB)",
+};
+
+/** Какие точки проверить, если отрезок калибровки — выброс */
+const OVERRIDE_SUSPECTS: Record<Exclude<CalibrationKey, "wheelDiameter">, string> = {
+  saddleHeight: "точки bb/saddleMount",
+  ett: "точки stTop/htTop",
+  wheelbase: "точки осей колёс",
+};
+
+/** Допуск согласованности кандидатов масштаба (15% — терпит погрешность радиуса покрышки) */
+const CLUSTER_REL_TOL = 0.15;
+
+/** Медиана набора чисел */
+function median(nums: number[]): number {
+  const s = [...nums].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  return s.length % 2 !== 0 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
 export function calculateBikeGeometry(
   pts: BikeKeypoints,
   config: CalibrationConfig
@@ -364,15 +441,146 @@ export function calculateBikeGeometry(
   if (overrideRequested && !overridePlausible && config.userOverrideKey !== "wheelDiameter") {
     const range = OVERRIDE_PHYSICAL_RANGE_MM[config.userOverrideKey as Exclude<CalibrationKey, "wheelDiameter">];
     warnings.push(
-      `❌ МАСШТАБ ПО ${config.userOverrideKey} = ${config.userOverrideValueMm} мм ОТКЛОНЁН: вне физического диапазона ${range.min}–${range.max} мм (опечатка в поле калибровки?). Применён fallback по колёсной базе — метрики ниже НЕ соответствуют этому мусорному значению.`
+      `❌ МАСШТАБ ПО ${config.userOverrideKey} = ${config.userOverrideValueMm} мм ОТКЛОНЁН: вне физического диапазона ${range.min}–${range.max} мм (опечатка в поле калибровки?). Применён fallback по остальным измерениям — метрики ниже НЕ соответствуют этому мусорному значению.`
     );
   }
 
+  // --- КОНСЕНСУС-МАСШТАБ v2.1 -------------------------------------------
+  // Собираем ВСЕХ кандидатов: primary-override, остальные введённые размеры
+  // (extraMeasurements), радиусы колёс (auxScaleCandidates). Если кандидатов
+  // >= 3 — находим крупнейший кластер согласленных (±15%) и берём его медиану.
+  // Override-выброс отклоняется с громким предупреждением и адресной
+  // подсказкой; override в кластере — применяется СТРОГО (консенсус подтверждает).
+  const scaleCandidates: Array<{
+    key: string;
+    label: string;
+    scale: number;
+    valueMm: number;
+    px: number;
+    isOverride: boolean;
+    suspectPoints?: string;
+  }> = [];
+
   if (
+    overridePlausible &&
+    config.userOverrideKey &&
+    config.userOverrideKey !== "wheelDiameter" &&
+    pxFor[config.userOverrideKey] >= MIN_CALIB_PX
+  ) {
+    scaleCandidates.push({
+      key: config.userOverrideKey,
+      label: OVERRIDE_LABELS[config.userOverrideKey],
+      scale: config.userOverrideValueMm! / pxFor[config.userOverrideKey],
+      valueMm: config.userOverrideValueMm!,
+      px: pxFor[config.userOverrideKey],
+      isOverride: true,
+      suspectPoints: OVERRIDE_SUSPECTS[config.userOverrideKey],
+    });
+  }
+  // Прямая горизонталь stTop→htTop: стабильный ETT-кандидат (пересечение
+  // через ось ST взрывается при кривой STA, поэтому для консенсуса не годится)
+  const ettDirectPx = Math.abs(rot.htTop.x - rot.stTop.x);
+  const extraMeasurements = config.extraMeasurements ?? {};
+  for (const key of ["saddleHeight", "ett", "wheelbase"] as const) {
+    if (key === config.userOverrideKey) continue;
+    const mm = extraMeasurements[key];
+    if (mm == null || !Number.isFinite(mm) || !isPlausibleOverrideMm(key, mm)) continue;
+    const px = key === "ett" ? ettDirectPx : pxFor[key];
+    if (px < MIN_CALIB_PX) continue;
+    scaleCandidates.push({
+      key,
+      label: OVERRIDE_LABELS[key],
+      scale: mm / px,
+      valueMm: mm,
+      px,
+      isOverride: false,
+      suspectPoints: OVERRIDE_SUSPECTS[key],
+    });
+  }
+  for (const aux of config.auxScaleCandidates ?? []) {
+    if (!aux) continue;
+    if (!Number.isFinite(aux.px) || aux.px < MIN_CALIB_PX) continue;
+    if (!Number.isFinite(aux.valueMm) || aux.valueMm <= 0) continue;
+    scaleCandidates.push({
+      key: aux.key,
+      label: aux.label,
+      scale: aux.valueMm / aux.px,
+      valueMm: aux.valueMm,
+      px: aux.px,
+      isOverride: false,
+      suspectPoints: aux.suspectPoints,
+    });
+  }
+
+  const overrideIdx = scaleCandidates.findIndex((c) => c.isOverride);
+  // Кластер = максимальное окно в отсортированном по scale списке, где
+  // каждый следующий кандидат отстоит от НАИМЕНЬШЕГО в окне не более чем
+  // на CLUSTER_REL_TOL. Ничья → окно, содержащее override.
+  let clusterIdx: number[] = [];
+  if (scaleCandidates.length >= 3) {
+    const order = scaleCandidates
+      .map((c, i) => ({ c, i }))
+      .sort((a, b) => a.c.scale - b.c.scale);
+    for (let a = 0; a < order.length; a++) {
+      let b = a;
+      while (
+        b + 1 < order.length &&
+        order[b + 1].c.scale - order[a].c.scale <= CLUSTER_REL_TOL * order[a].c.scale
+      ) {
+        b++;
+      }
+      const win = order.slice(a, b + 1).map((o) => o.i);
+      const winHasOverride = win.some((i) => scaleCandidates[i].isOverride);
+      const bestHasOverride = clusterIdx.some((i) => scaleCandidates[i].isOverride);
+      if (
+        win.length > clusterIdx.length ||
+        (win.length === clusterIdx.length && winHasOverride && !bestHasOverride)
+      ) {
+        clusterIdx = win;
+      }
+    }
+  }
+
+  if (clusterIdx.length >= 2) {
+    const clusterScales = clusterIdx.map((i) => scaleCandidates[i].scale);
+    const clusterLabels = clusterIdx.map((i) => scaleCandidates[i].label).join(", ");
+    if (overrideIdx >= 0 && clusterIdx.includes(overrideIdx)) {
+      const o = scaleCandidates[overrideIdx];
+      scaleMmPerPx = o.scale;
+      scaleSource = `USER_OVERRIDE (${o.key} = ${o.valueMm}mm) — СТРОГО (консенсус подтверждает: ${clusterIdx.length}/${scaleCandidates.length} кандидатов согласованы)`;
+    } else {
+      scaleMmPerPx = median(clusterScales);
+      scaleSource = `CONSENSUS (медиана ${clusterIdx.length} измерений: ${clusterLabels})`;
+      if (overrideIdx >= 0) {
+        const o = scaleCandidates[overrideIdx];
+        const photoMm = o.px * scaleMmPerPx;
+        const devPct = ((o.valueMm - photoMm) / photoMm) * 100;
+        warnings.push(
+          `❗ МАСШТАБ ПО «${o.label}» = ${o.valueMm} мм ОТВЕРГНУТ: по фото этот отрезок равен ≈${Math.round(photoMm)} мм — расхождение ${Math.abs(devPct).toFixed(0)}% с ${clusterIdx.length} другими измерениями (${clusterLabels}). Использован консенсус-масштаб ${scaleMmPerPx.toFixed(3)} мм/px. Проверьте ${o.suspectPoints ?? "точки"} или само значение.`
+        );
+      } else {
+        warnings.push(
+          `Масштаб = консенсус-медиана ${clusterIdx.length} измерений (${clusterLabels}) — надёжнее одного отрезка.`
+        );
+      }
+    }
+    // Отчёт по каждому кандидату-выбросу вне кластера (кроме override — он отчитан выше)
+    for (let i = 0; i < scaleCandidates.length; i++) {
+      if (clusterIdx.includes(i)) continue;
+      const c = scaleCandidates[i];
+      if (c.isOverride) continue;
+      const photoMm = c.px * scaleMmPerPx;
+      const devPct = ((c.valueMm - photoMm) / photoMm) * 100;
+      warnings.push(
+        `↳ ${c.label}: вы ввели ${c.valueMm} мм, а по рабочему масштабу этот отрезок на фото ≈ ${Math.round(photoMm)} мм (Δ${devPct > 0 ? "+" : ""}${Math.round(devPct)}%). Проверьте ${c.suspectPoints ?? "точки"} или значение.`
+      );
+    }
+  } else if (
     overrideRequested &&
     overridePlausible &&
     config.userOverrideKey
   ) {
+    // Кандидатов мало для консенсуса — прежнее поведение: СТРОГО по override.
     if (config.userOverrideKey === "wheelDiameter") {
       warnings.push(
         "Калибровка по wheelDiameter требует точек обода — в 7-точечной схеме недоступна. Применён fallback по колёсной базе."
@@ -416,9 +624,11 @@ export function calculateBikeGeometry(
     scaleSource = `FALLBACK_AUTO (Wheelbase = ${defaultWB}mm)`;
   }
 
-  // Перекрёстная проверка: если ручной ввод и известный WB противоречат друг другу
-  // (только для ПРИНЯТОГО override — отклонённый мусор сравнивать бессмысленно)
+  // Перекрёстная проверка «строгого» режима: если ручной ввод и известный WB
+  // противоречат друг другу (только когда override реально применён и
+  // консенсус НЕ решал исход — иначе сообщение дублирует вердикт консенсуса)
   if (
+    scaleSource.startsWith("USER_OVERRIDE") &&
     overridePlausible &&
     config.userOverrideKey &&
     config.userOverrideKey !== "wheelDiameter" &&
@@ -542,21 +752,72 @@ export function calculateBikeGeometry(
       `Угол рулевой трубы (${headTubeAngleDeg.toFixed(1)}°) вне типичного диапазона 60-85°. Проверьте точки htTop/htBottom.`
     );
   }
-  // Инвертированные точки (частые ошибки разметки)
-  if (rot.saddleMount.y > rot.stTop.y) {
-    warnings.push(
-      "saddleMount НИЖЕ stTop — так не бывает. Точка крепления седла должна быть ВЫШЕ верха подседельной трубы."
-    );
+  // Инвертированные/невозможные точки — ЖЁСТКИЕ физические гейты (v2.1).
+  // Это не «предупреждение», а признак мусорной разметки: результаты
+  // недостоверны, пока точки не исправлены. UI показывает красную карточку
+  // с адресной подсказкой и кнопкой «Поправить точку», запись в карточку
+  // велика блокируется.
+  const pxPerMm = 1 / scaleMmPerPx;
+  const physicsViolations: PhysicsViolation[] = [];
+
+  if (rot.bb.y <= rot.saddleMount.y + 2 * pxPerMm) {
+    physicsViolations.push({
+      point: "bb",
+      title: "Каретка (BB) стоит ВЫШЕ седла — так не бывает",
+      fix: "Точка «Каретка (BB)» должна стоять у каретки — в центре шатунного узла, где крутятся педали. Это самая низкая точка рамы между колёсами, обычно чуть ниже осей колёс. Сейчас она отмечена гораздо выше — вероятно, на раме или руле.",
+    });
   }
-  if (rot.htTop.y > rot.htBottom.y) {
-    warnings.push(
-      "htTop НИЖЕ htBottom — так не бывает. Верх рулевого стакана должен быть ВЫШЕ низа."
-    );
+  if (rot.bb.y < rot.rearAxle.y - 15 * pxPerMm) {
+    physicsViolations.push({
+      point: "bb",
+      title: `Каретка ВЫШЕ оси колёс на ${Math.round((rot.rearAxle.y - rot.bb.y) * scaleMmPerPx)} мм — так не бывает`,
+      fix: "Каретка всегда НИЖЕ осей колёс (BB Drop обычно 20–80 мм). Точка «Каретка (BB)» должна быть примерно на уровне осей или чуть ниже.",
+    });
   }
-  if (rot.bb.y < rot.rearAxle.y) {
-    warnings.push(
-      "Каретка ВЫШЕ оси колёс — так не бывает (BB всегда ниже осей). Проверьте точку bb."
-    );
+  if (
+    rot.bb.x < rot.rearAxle.x - 15 * pxPerMm ||
+    rot.bb.x > rot.frontAxle.x + 15 * pxPerMm
+  ) {
+    physicsViolations.push({
+      point: "bb",
+      title: "Каретка вне колёсной базы (позади задней или впереди передней оси)",
+      fix: "Каретка всегда МЕЖДУ осями колёс, ближе к задней. Поправьте точку «Каретка (BB)».",
+    });
+  }
+  if (rot.saddleMount.y > rot.rearAxle.y - 5 * pxPerMm) {
+    physicsViolations.push({
+      point: "saddleMount",
+      title: "Седло ниже осей колёс — так не бывает",
+      fix: "Седло всегда существенно ВЫШЕ осей колёс. Точка «Зажим седла» должна стоять на подседельном штыре там, где крепятся рельсы седла.",
+    });
+  }
+  if (rot.saddleMount.y > rot.stTop.y + 2 * pxPerMm) {
+    physicsViolations.push({
+      point: "saddleMount",
+      title: "Зажим седла НИЖЕ верха подседельной трубы — так не бывает",
+      fix: "Точка «Зажим седла» должна быть ВЫШЕ верха подседельной трубы: седло стоит на штыре, вставленном в трубу.",
+    });
+  }
+  if (rot.htTop.y > rot.htBottom.y + 2 * pxPerMm) {
+    physicsViolations.push({
+      point: "htTop",
+      title: "Верх рулевого стакана НИЖЕ низа — так не бывает",
+      fix: "Точка «Рулевой верх» должна быть ВЫШЕ «Рулевой низ»: стакан наклонён назад, но его верх всегда выше низа.",
+    });
+  }
+  if (reachMm <= 0) {
+    physicsViolations.push({
+      point: "htTop",
+      title: "Руль ПОЗАДИ каретки — так не бывает",
+      fix: "Верх рулевого стакана всегда впереди каретки. Проверьте точки «Каретка (BB)» и «Рулевой верх» (и то, что переднее колесо отмечено спереди).",
+    });
+  }
+  if (stackMm <= 0) {
+    physicsViolations.push({
+      point: "htTop",
+      title: `Руль НИЖЕ каретки (Stack = ${Math.round(stackMm)} мм) — так не бывает`,
+      fix: "Верх рулевого стакана всегда ВЫШЕ каретки. Чаще всего виновата точка «Каретка (BB)» — она стоит слишком высоко на фото; перенесите её вниз, к педальному узлу.",
+    });
   }
 
   const r = (v: number) => Math.round(v);
@@ -581,6 +842,7 @@ export function calculateBikeGeometry(
       frameTilt: Number(frameTiltDeg.toFixed(1)),
     },
     warnings,
+    physicsViolations,
     frame,
     rotated: rot,
     extendedMm: extended,
@@ -623,7 +885,7 @@ export function computeExtendedBikeParams(
   const stackReachRatio =
     reachMm > 0 && stackMm > 0
       ? Math.round((stackMm / reachMm) * 100) / 100
-      : 0;
+      : null;
 
   return {
     ettDirect: Math.round(ettDirect),

@@ -172,12 +172,15 @@ function confidenceForValue(
  * @param bikeType Тип велосипеда (road/gravel/mtb/hybrid/city)
  * @param dualScale Dual scale (если есть wheelTop точки и wheelHeight)
  * @param photoDistorted True если detectPerspective показал искажение, но dual scale недоступен
+ * @param physicsViolationCount Число жёстких физических нарушений разметки
+ *   (каретка выше седла/осей, руль ниже каретки и т.п.) — сразу «low»
  */
 export function assessConfidence(
   params: ComputedBikeParams,
   bikeType?: string,
   dualScale?: DualScale | null,
-  photoDistorted: boolean = false
+  photoDistorted: boolean = false,
+  physicsViolationCount: number = 0
 ): ConfidenceAssessment {
   const result: ParamConfidence[] = [];
 
@@ -210,12 +213,19 @@ export function assessConfidence(
     if (p.confidence === "medium") { overall = "medium"; }
   }
 
+  // Физические нарушения разметки обесценивают ВСЁ сразу
+  if (physicsViolationCount > 0) {
+    overall = "low";
+  }
+
   // Сводное сообщение
   let summary: string;
   const lowCount = result.filter((p) => p.confidence === "low").length;
   const mediumCount = result.filter((p) => p.confidence === "medium").length;
 
-  if (overall === "high") {
+  if (physicsViolationCount > 0) {
+    summary = `Разметка физически невозможна (${physicsViolationCount} нарушен.): каретка/седло/руль стоят не там, где бывают на велосипеде. Исправьте точки из красной карточки и пересчитайте — сейчас числа недостоверны.`;
+  } else if (overall === "high") {
     summary = "Все параметры в типичных диапазонах — фото качественное, расчёты точные.";
   } else if (overall === "medium") {
     summary = mediumCount > 0

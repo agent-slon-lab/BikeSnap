@@ -46,6 +46,7 @@ import {
   type CalibrationConfig as EngineCalibrationConfig,
   type CalibrationKey as EngineCalibrationKey,
   type BikeGeometryResult,
+  type AuxScaleCandidate,
 } from "@/lib/bike-geometry-engine";
 import {
   calculateDualScale,
@@ -213,6 +214,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
   // v1.13.5: мгновенная обратная связь под кнопкой «Записать в параметры велика» —
   // перечисляем, что именно ушло в карточку (лечит «нажимаю — и ничего не происходит»).
   const [appliedSummary, setAppliedSummary] = useState<string | null>(null);
+  // v1.14.0: авто-скролл к результатам после «Вычислить все параметры»
+  const resultsRef = useRef<HTMLDivElement | null>(null);
   const [placementMode, setPlacementMode] = useState(false);
   const [placementPointKey, setPlacementPointKey] = useState<keyof BikeKeyPoints | null>(null);
   // Перспектива: только ИНФОРМАЦИЯ для dual scale — интерактивная коррекция
@@ -638,8 +641,54 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         htTop: toPxPt(pts.htTop as NullablePoint),
       };
 
-      // STRICT-иерархия масштаба: ручной ввод — приоритет, WB — только fallback
+      // КОНСЕНСУС-МАСШТАБ v2.1: в ядро уходят ВСЕ введённые размеры (не только
+      // primary) + радиусы колёс из точек верха покрышек. Ядро само выбирает
+      // надёжный масштаб: primary СТРОГО, если он согласован с остальными,
+      // иначе — медиана согласного кластера (выброс отбрасывается с подсказкой).
       const SUPPORTED_OVERRIDE_KEYS = new Set(["saddleHeight", "wheelbase", "ett"]);
+      const shMmIn = getCalibValue("saddleHeight");
+      const ettMmIn = getCalibValue("ett");
+      const wbMmIn = getCalibValue("wheelbase");
+
+      // Радиус колеса: ввод WH или типоразмер из стора (та же логика, что у dual scale)
+      const wheelHeightInput = getCalibValue("wheelHeight" as any) ?? measured.wheelHeight ?? null;
+      let wheelHeightMm = wheelHeightInput;
+      let wheelHeightSource = wheelHeightInput ? "ввод" : null;
+      if (!wheelHeightMm) {
+        const ws = findWheelSize(useBikeStore.getState().wheelSizeId);
+        if (ws) {
+          wheelHeightMm = ws.radiusMm;
+          wheelHeightSource = `типоразмер ${ws.label} (R≈${ws.radiusMm} мм)`;
+        }
+      }
+      const auxScaleCandidates: AuxScaleCandidate[] = [];
+      if (wheelHeightMm && wheelHeightMm > 0 && imgSize) {
+        const pxOf = (a?: NullablePoint, b?: NullablePoint) => {
+          if (!a || !b || a.x == null || a.y == null || b.x == null || b.y == null) return 0;
+          return Math.hypot((a.x - b.x) * imgSize.width, (a.y - b.y) * imgSize.height);
+        };
+        const frontR = pxOf(pts.frontWheelTop, pts.frontAxle);
+        const rearR = pxOf(pts.rearWheelTop, pts.rearAxle);
+        if (frontR > 20) {
+          auxScaleCandidates.push({
+            key: "wheelFront",
+            label: "радиус переднего колеса",
+            valueMm: wheelHeightMm,
+            px: frontR,
+            suspectPoints: "точки frontWheelTop/frontAxle",
+          });
+        }
+        if (rearR > 20) {
+          auxScaleCandidates.push({
+            key: "wheelRear",
+            label: "радиус заднего колеса",
+            valueMm: wheelHeightMm,
+            px: rearR,
+            suspectPoints: "точки rearWheelTop/rearAxle",
+          });
+        }
+      }
+
       const wbFallbackMm = getCalibValue("wheelbase");
       const engineConfig: EngineCalibrationConfig = {
         userOverrideKey: SUPPORTED_OVERRIDE_KEYS.has(knownKey)
@@ -647,12 +696,18 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
           : undefined,
         userOverrideValueMm: effectiveKnown,
         fallbackWheelbaseMm: wbFallbackMm ?? undefined,
+        extraMeasurements: {
+          saddleHeight: shMmIn ?? undefined,
+          ett: ettMmIn ?? undefined,
+          wheelbase: wbMmIn ?? undefined,
+        },
+        auxScaleCandidates,
       };
       if (!SUPPORTED_OVERRIDE_KEYS.has(knownKey)) {
         setDebugLog((prev) => [
           ...prev,
           ``,
-          `  ⚠ knownKey=${knownKey} не поддерживается ядром — масштаб по fallback WB`,
+          `  ⚠ knownKey=${knownKey} не поддерживается ядром — масштаб по консенсусу остальных измерений`,
         ]);
       }
 
@@ -683,11 +738,14 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
       setDebugLog((prev) => [
         ...prev,
         ``,
-        `  ЯДРО v2 (rotation-first, strict scale):`,
+        `  ЯДРО v2.1 (rotation-first, consensus scale):`,
         `    Направление: ${engine.frame.facingRight ? "вправо" : "влево → зеркалено (нормализовано вправо)"}`,
         `    Наклон оси колёс: ${engine.anglesDeg.frameTilt.toFixed(2)}° — ПОВОРОТ применён ДО всех расчётов`,
         `    МАСШТАБ: ${engine.scaleMmPerPx.toFixed(4)} мм/пикс`,
         `    Источник масштаба: ${engine.scaleSource}`,
+        ...(auxScaleCandidates.length > 0
+          ? [`    Кандидаты от колёс: ${auxScaleCandidates.map((a) => `${a.key} = ${(a.valueMm / a.px).toFixed(3)} мм/пикс`).join(", ")}`]
+          : []),
       ]);
 
       // === ПЕРЕКРЁСТНАЯ ПРОВЕРКА (справочно; на рабочий масштаб НЕ влияет) ===
@@ -792,7 +850,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         `    HT length (HTверх→HTниз) = ${params.headTubeLength ?? "null"} мм`,
         `    Fork length (HTниз→передняя ось) = ${params.forkLength ?? "null"} мм`,
         `    Fork offset = ${params.forkOffset ?? "null"} мм`,
-        `    Stack/Reach = ${params.stackReachRatio ?? "null"}`,
+        `    Stack/Reach = ${params.stackReachRatio ?? "—"}`,
         `    STA = ${params.sta ?? "null"}° (угол подседельной трубы)`,
         `    HTA = ${params.hta ?? "null"}° (угол рулевой трубы)`,
         ``,
@@ -800,6 +858,13 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         ...(engine.warnings.length > 0
           ? engine.warnings.map((w) => `    ⚠ ${w}`)
           : [`    ✓ нет`]),
+        ...(engine.physicsViolations.length > 0
+          ? [
+              ``,
+              `  🛑 ФИЗИЧЕСКИЕ НАРУШЕНИЯ (${engine.physicsViolations.length}) — разметка недостоверна:`,
+              ...engine.physicsViolations.map((v) => `    ❌ ${v.title}`),
+            ]
+          : [``, `  ✓ Физических нарушений разметки нет`]),
         ``,
         `  Проверки (что физически возможно):`,
         ...buildValidationChecks(params),
@@ -809,19 +874,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
       setComparisons(cmp);
 
       // === DUAL SCALE (компенсация перспективы по двум колёсам) ===
-      // WH берём из ввода; если не введён — фолбэк на радиус из типоразмера
-      // колеса (wheelSizeId из стора, напр. 26" → 334 мм). Это позволяет
-      // dual scale работать сразу после разметки верхов колёс, без ручного WH.
-      const wheelHeightInput = getCalibValue("wheelHeight" as any) ?? measured.wheelHeight ?? null;
-      let wheelHeightMm = wheelHeightInput;
-      let wheelHeightSource = wheelHeightInput ? "ввод" : null;
-      if (!wheelHeightMm) {
-        const ws = findWheelSize(useBikeStore.getState().wheelSizeId);
-        if (ws) {
-          wheelHeightMm = ws.radiusMm;
-          wheelHeightSource = `типоразмер ${ws.label} (R≈${ws.radiusMm} мм)`;
-        }
-      }
+      // wheelHeightMm уже вычислен выше (для консенсуса масштаба) —
+      // тут только сам расчёт dual scale по точкам верха колёс.
       let computedDualScale: DualScale | null = null;
       if (imgSize && wheelHeightMm && wheelHeightMm > 0) {
         computedDualScale = calculateDualScale(pts, wheelHeightMm, {
@@ -877,7 +931,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         params,
         bikeType ?? undefined,
         computedDualScale,
-        photoDistorted
+        photoDistorted,
+        engine.physicsViolations.length
       );
       setConfidenceAssessment(assessment);
       setDebugLog((prev) => [
@@ -905,6 +960,11 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
       `  knownKey = ${knownKey}, knownValue = ${knownValue} мм`,
     ]);
     runCalibration(keyPoints, knownValue);
+    // Результат рендерится ниже — плавно показываем его, чтобы не было
+    // ощущения «нажал — ничего не произошло».
+    setTimeout(() => {
+      resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 150);
   }, [keyPoints, knownValue, runCalibration, knownKey]);
 
   // Подсказки для точек — что и где нужно поправить.
@@ -1180,6 +1240,19 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
 
   const handleApplyAveraged = useCallback(() => {
     if (comparisons.length === 0 || !onAveraged) return;
+    // ГЕЙТ: физически невозможная разметка → числа мусор, в карточку не пишем.
+    if (engineResult && engineResult.physicsViolations.length > 0) {
+      setError(
+        `Запись заблокирована: разметка физически невозможна (${engineResult.physicsViolations.length} наруш. — красная карточка выше). Исправьте отмеченные точки и снова нажмите «Вычислить все параметры».`
+      );
+      const ts = new Date().toLocaleTimeString();
+      setDebugLog((prev) => [
+        ...prev.slice(-80),
+        `[${ts}] 🛡 Запись в карточку велика ЗАБЛОКИРОВАНА: ${engineResult.physicsViolations.length} физических нарушений разметки.`,
+        ...engineResult.physicsViolations.map((v) => `  ❌ ${v.title}`),
+      ]);
+      return;
+    }
     const averaged: Record<string, number | null> = {};
     for (const c of comparisons) {
       averaged[c.key] = c.averaged;
@@ -1391,6 +1464,53 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                     <span>
                       Не удалось определить точки: {pointsMissing.map((k) => pointFullLabel(k)).join(", ")}
                     </span>
+                  </div>
+                )}
+
+                {/* ===== ФИЗИЧЕСКИЕ ГЕЙТЫ — разметка невозможна ===== */}
+                {engineResult && engineResult.physicsViolations.length > 0 && (
+                  <div className="rounded-lg border-l-4 border-rose-500 dark:border-rose-600 bg-rose-50 dark:bg-rose-950/30 p-3 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="size-4 mt-0.5 shrink-0 text-rose-500" />
+                      <div className="flex-1">
+                        <p className="text-sm font-bold text-rose-700 dark:text-rose-400">
+                          🛑 Разметка физически невозможна ({engineResult.physicsViolations.length})
+                        </p>
+                        <p className="text-[11px] text-rose-600/80 dark:text-rose-400/70 mt-0.5 leading-relaxed">
+                          Так велосипед не устроен. Пока эти точки не исправлены,
+                          все вычисленные числа — мусор и записывать их в карточку
+                          велика нельзя. Нажмите «Поправить точку» у нарушения,
+                          переставьте точку на фото и снова нажмите «Вычислить все параметры».
+                        </p>
+                      </div>
+                    </div>
+                    <ul className="space-y-1.5">
+                      {engineResult.physicsViolations.map((v, i) => (
+                        <li
+                          key={i}
+                          className="rounded-md border border-rose-300 dark:border-rose-800 bg-white dark:bg-rose-950/20 p-2 space-y-1"
+                        >
+                          <p className="text-xs font-semibold text-rose-700 dark:text-rose-400">
+                            ❌ {v.title}
+                          </p>
+                          <p className="text-[11px] text-muted-foreground leading-relaxed">
+                            → {v.fix}
+                          </p>
+                          {v.point && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-6 px-2 text-[10px]"
+                              onClick={() =>
+                                selectPointForPlacement(v.point as keyof BikeKeyPoints)
+                              }
+                            >
+                              Поправить точку: {pointFullLabel(v.point)}
+                            </Button>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 )}
 
@@ -1754,14 +1874,16 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                             Как считается масштаб
                           </p>
                           <p className="text-[10px] text-muted-foreground mt-0.5">
-                            Рабочий масштаб — строго по вашему primary-размеру.
+                            Рабочий масштаб — по вашему primary-размеру, если он согласуется
+                            с остальными введёнными размерами и радиусами колёс; при противоречии
+                            — медиана согласных измерений (выброс отбрасывается с подсказкой).
                             Все проекции (Stack/Reach/ETT) считаются после авто-выравнивания кадра.
                           </p>
                         </div>
                       </div>
                       <div className="text-[10px] space-y-0.5">
                         <div className="text-violet-700 dark:text-violet-400">
-                          Рабочий масштаб: <b>{scaleSourceInfo.source.startsWith("USER_OVERRIDE") ? "строго по вашему вводу" : "по колёсной базе (fallback)"}</b>
+                          Рабочий масштаб: <b>{scaleSourceInfo.source.startsWith("USER_OVERRIDE") ? "строго по вашему вводу (консенсус согласен)" : scaleSourceInfo.source.startsWith("CONSENSUS") ? "консенсус-медиана согласных измерений" : "по колёсной базе (fallback)"}</b>
                         </div>
                       </div>
                       {autoCalibration?.candidates && autoCalibration.candidates.length > 1 && (
@@ -1819,7 +1941,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
 
                 {/* Результаты сравнения */}
                 {comparisons.length > 0 && overall && (
-                  <div className="space-y-3">
+                  <div ref={resultsRef} className="space-y-3 scroll-mt-4">
                     <div className="flex items-center justify-between">
                       <p className="text-sm font-semibold">Сравнение: измерено vs вычислено</p>
                       <div className="flex gap-2 text-xs">
@@ -1844,7 +1966,11 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                     {computed && (
                       <div className="text-xs text-muted-foreground bg-muted/30 rounded-md p-2">
                         Масштаб по фото: {KNOWN_DIM_OPTIONS.find((o) => o.key === computed.calibratedBy)?.label}
-                        {scaleSourceInfo?.source.includes("USER_OVERRIDE") ? " — строго, по вашему вводу" : " — по колёсной базе (fallback)"}
+                        {scaleSourceInfo?.source.includes("USER_OVERRIDE")
+                          ? " — строго, по вашему вводу"
+                          : scaleSourceInfo?.source.startsWith("CONSENSUS")
+                            ? " — консенсус измерений (выбросы отброшены)"
+                            : " — по колёсной базе (fallback)"}
                       </div>
                     )}
 
@@ -1940,12 +2066,18 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                     {/* Кнопка применить усреднённые */}
                     <Button
                       onClick={handleApplyAveraged}
+                      disabled={!!engineResult && engineResult.physicsViolations.length > 0}
                       className="w-full bg-emerald-600 hover:bg-emerald-700"
                       size="sm"
                     >
                       <CheckCircle2 className="size-4" />
                       Записать в параметры велика
                     </Button>
+                    {engineResult && engineResult.physicsViolations.length > 0 && (
+                      <p className="text-[11px] text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 rounded-md px-2 py-1.5 text-center leading-snug">
+                        ⛔ Запись заблокирована: сначала исправьте физические нарушения разметки (красная карточка выше)
+                      </p>
+                    )}
                     {appliedSummary && (
                       <p className="text-[11px] text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-md px-2 py-1.5 text-center leading-snug">
                         {appliedSummary}

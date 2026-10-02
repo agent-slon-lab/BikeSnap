@@ -135,7 +135,7 @@ const mRows: Row[] = [
   ["HT length, мм",     148, res.extendedMm.headTubeLength, 3],
   ["Fork length, мм",   466, res.extendedMm.forkLength,  4],
   ["Fork offset, мм",   31,  res.extendedMm.forkOffset,  3],
-  ["Stack/Reach",       1.5, res.extendedMm.stackReachRatio, 0.02],
+  ["Stack/Reach",       1.5, res.extendedMm.stackReachRatio ?? 0, 0.02],
 ];
 for (const [label, logV, gotV, tol] of mRows) {
   ok(Math.abs(gotV - logV) <= tol, label.padEnd(20), `лог ${logV} → ядро ${gotV}`);
