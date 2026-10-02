@@ -69,6 +69,8 @@ export interface FitReport {
     captureMeta: CaptureMeta | null;
     /** JPEG dataURL ≤1280px (или null, если фото прочитать не удалось) */
     photo: string | null;
+    /** Путь к фото в репозитории (заполняется при заливке на GitHub) */
+    photoFile?: string | null;
   }>;
 }
 

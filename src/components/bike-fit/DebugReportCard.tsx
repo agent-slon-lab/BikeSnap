@@ -1,12 +1,18 @@
 "use client";
 
 /**
- * КАРТОЧКА «ОТЧЁТ ДЛЯ ОТЛАДКИ» (v1.6.0)
- * Идея пользователя: кнопка «отправка отчёта — для корректирования кода».
- * Собирает фото + landmarks + анализ/ошибку + гироскоп в момент снимка
- * и отдаёт одним .json (share-меню или скачивание). Появляется в шаге
- * «Анализ», как только загружено хотя бы одно фото — и при успехе, и при
- * ошибке анализа (ошибочные кейсы как раз ценнее всего для отладки).
+ * КАРТОЧКА «ОТЧЁТ ДЛЯ ОТЛАДКИ» (v2.0.0)
+ * Идея пользователя: «создай на гите issue и когда пользов отправляет отчет
+ * из анализа, то он автоматом там формируется и заливается на гит. а ты гит
+ * мониторишь, скачиваешь и анализируешь и правишь».
+ *
+ * Одна кнопка «Отправить отчёт» делает всё:
+ *   1. Заливает фото и JSON в user-reports/ репозитория BikeSnap (Contents API).
+ *   2. Создаёт issue со сводкой (версия, ошибки, гироскоп, ссылки на файлы).
+ *   3. Фолбэк/бонус: системное «Поделиться» файлом .json или скачивание.
+ *
+ * Репозиторий открытый — фото и данные отчёта публикуются. Токен вшит в
+ * сборку (NEXT_PUBLIC_GITHUB_TOKEN, fine-grained PAT одного репозитория).
  */
 
 import { useState } from "react";
@@ -20,13 +26,14 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { buildFitReport, sendReport, type ReportViewInput } from "@/lib/fit-report";
+import { githubConfigured, uploadReportToGithub, type GithubUploadResult } from "@/lib/report-upload";
 import { useBikeStore } from "@/lib/bike-store";
 
 interface DebugReportCardProps {
   views: ReportViewInput[];
 }
 
-type Status = { tone: "info" | "ok" | "error"; text: string } | null;
+type Status = { tone: "info" | "ok" | "error"; text: string; link?: string } | null;
 
 export function DebugReportCard({ views }: DebugReportCardProps) {
   const [busy, setBusy] = useState(false);
@@ -37,28 +44,70 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
 
   const handleSend = async () => {
     setBusy(true);
-    setStatus({ tone: "info", text: "Готовим отчёт — упаковываем фото и данные…" });
+    const canGithub = githubConfigured();
+    setStatus({
+      tone: "info",
+      text: canGithub
+        ? "Собираем отчёт и заливаем на GitHub…"
+        : "Готовим отчёт — упаковываем фото и данные…",
+    });
     try {
-      const { json, filename } = await buildFitReport(views, {
+      const { report, json, filename } = await buildFitReport(views, {
         bikeType,
         goal,
         complaints,
         body,
         bike,
       });
-      const result = await sendReport(json, filename);
-      if (result === "shared") {
+
+      // 1. GitHub: файлы в user-reports/ + issue. Ошибка не останавливает
+      //    локальную доставку — отчёт всё равно уйдёт в share/скачивание.
+      let gh: GithubUploadResult | null = null;
+      let ghError: string | null = null;
+      if (canGithub) {
+        try {
+          gh = await uploadReportToGithub(report, json, filename);
+        } catch (e) {
+          ghError = e instanceof Error ? e.message : String(e);
+        }
+      }
+
+      // 2. Локальная копия пользователю (share-меню на телефоне / файл на десктопе)
+      const local = await sendReport(json, filename);
+
+      if (gh) {
+        const localNote =
+          local === "shared"
+            ? " Копия — в меню «Поделиться»."
+            : local === "downloaded"
+              ? ` Копия сохранена в «Загрузки»: ${filename}.`
+              : "";
         setStatus({
-          tone: "ok",
-          text: "Отчёт собран — отправьте его разработчику через выбранное приложение.",
-        });
-      } else if (result === "downloaded") {
-        setStatus({
-          tone: "ok",
-          text: `Отчёт сохранён в «Загрузки»: ${filename}. Перешлите этот файл разработчику.`,
+          tone: ghError ? "error" : "ok",
+          text: ghError
+            ? `Issue #${gh.issueNumber} создан, но часть файлов не долилась: ${ghError}`
+            : `Готово: issue #${gh.issueNumber}, файлов ${gh.files.length} в user-reports/. Разработчик увидит отчёт в GitHub.${localNote}`,
+          link: gh.issueUrl,
         });
       } else {
-        setStatus(null); // пользователь закрыл системное меню — молча
+        if (canGithub && ghError) {
+          setStatus({
+            tone: "error",
+            text: `На GitHub не вышло: ${ghError}. Отчёт собран локально — отправьте его вручную.`,
+          });
+        } else if (local === "shared") {
+          setStatus({
+            tone: "ok",
+            text: "Отчёт собран — отправьте его через выбранное приложение.",
+          });
+        } else if (local === "downloaded") {
+          setStatus({
+            tone: "ok",
+            text: `Отчёт сохранён в «Загрузки»: ${filename}.`,
+          });
+        } else {
+          setStatus(null); // пользователь закрыл системное меню — молча
+        }
       }
     } catch (e) {
       setStatus({
@@ -78,10 +127,10 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
           Отчёт для отладки
         </CardTitle>
         <CardDescription>
-          Один JSON-файл: фото, найденные точки тела, результат анализа (или
-          ошибка) и положение телефона в момент снимка. Нужен, чтобы докручивать
-          алгоритмы по реальным данным. Ничего не уходит в сеть само — файл
-          откроется в меню «Поделиться» или просто скачается.
+          Фото, найденные точки тела, результат анализа (или ошибка) и положение
+          телефона в момент снимка. Отправка заливает отчёт на GitHub — issue + файлы
+          в user-reports/, — разработчик разбирает его там же. Репозиторий
+          открытый: фото и данные будут видны публично.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -93,7 +142,11 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
           className="w-full sm:w-auto border-orange-300 text-orange-600 hover:bg-orange-50 hover:text-orange-700 dark:border-orange-800 dark:text-orange-400 dark:hover:bg-orange-950/40"
         >
           <Send className="size-4" />
-          {busy ? "Готовим отчёт…" : "Отправить отчёт разработчику"}
+          {busy
+            ? "Отправляем…"
+            : githubConfigured()
+              ? "Отправить отчёт на GitHub"
+              : "Отправить отчёт разработчику"}
         </Button>
         {status && (
           <p
@@ -106,7 +159,17 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
                   : "text-muted-foreground")
             }
           >
-            {status.text}
+            {status.text}{" "}
+            {status.link && (
+              <a
+                href={status.link}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium underline underline-offset-2"
+              >
+                открыть issue →
+              </a>
+            )}
           </p>
         )}
       </CardContent>
