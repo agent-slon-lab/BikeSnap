@@ -7,6 +7,7 @@
 
 import type { BikeMeasurements, BodyMeasurements } from "./bike-calculations";
 import type { BikeType } from "./bike-params";
+import type { Complaint } from "./bike-store";
 
 // ============================================================
 // ТИПЫ
@@ -16,6 +17,11 @@ export interface Rider {
   id: string;
   name: string;
   body: BodyMeasurements;
+  // v1.13.2: цель и жалобы — атрибуты райдера (переживают refresh,
+  // переключение райдеров и «Начать заново»).
+  // undefined = профиль создан старой версией — не трогаем store-значения.
+  goal?: "comfort" | "sport" | "race" | null;
+  complaints?: Complaint[];
   createdAt: number;
 }
 
@@ -84,11 +90,15 @@ export function createRider(name: string, body: BodyMeasurements): Rider {
   return rider;
 }
 
-export function updateRider(id: string, body: BodyMeasurements) {
+/** Частичное обновление профиля райдера: тело, цель и/или жалобы */
+export function updateRider(
+  id: string,
+  data: Partial<Pick<Rider, "body" | "goal" | "complaints">>
+) {
   const riders = getRiders();
   const r = riders.find((r) => r.id === id);
   if (r) {
-    r.body = body;
+    Object.assign(r, data);
     save(RIDERS_KEY, riders);
   }
 }

@@ -6,7 +6,8 @@ import {
   Search,
   ChevronRight,
   Sparkles,
-  History,
+  RotateCcw,
+  Smartphone,
 } from "lucide-react";
 import {
   Card,
@@ -48,17 +49,11 @@ export function ModeSelectionScreen() {
   const counts = getModelCountByType();
   const totalModels = BIKE_MODELS.length;
 
-  // Новый сценарий = чистое состояние: сбрасываем ВСЁ, что осталось от
-  // предыдущего прохода (тип/цель/жалобы/тело/параметры велика/колесо),
-  // иначе при «создании нового» протекали старые данные (stale state).
-  // Библиотеки великов и райдеров сохраняются — их подгрузит шаг 2/3.
-  const handleSelectMode = (mode: "fit" | "select") => {
-    reset();
-    setMode(mode);
-  };
-
-  // ===== v1.13.0: «Продолжить с того же места» =====
-  // Прогресс есть? (данные сценариев сохранены в bikefit-storage)
+  // Прогресс сценариев хранится в bikefit-storage. v1.13.2: клик по карточке
+  // с прогрессом ПРОДОЛЖАЕТ сценарий ровно с сохранённого шага (без сброса!)
+  // — раньше карточка вызывала reset() и стирала цель/жалобы, что выглядело
+  // как «приложение забывает жалобы». Сброс теперь только по явной кнопке
+  // «Начать заново» под карточкой.
   const hasSelectProgress =
     selectStep > 0 && (!!bikeType || !!goal || body.height > 0);
   const hasFitProgress =
@@ -69,49 +64,26 @@ export function ModeSelectionScreen() {
     !!bike.saddleHeight ||
     !!bike.wheelbase ||
     !!bike.wheelHeight;
-  // Сценарии взаимоисключаемы (карточка режима сбрасывает всё), но body/goal
-  // общие — при прогрессе подбора рамы показываем только его, чтобы не путать
-  const resumeSelect = hasSelectProgress;
-  const resumeFit = !hasSelectProgress && hasFitProgress;
 
-  const handleResume = () => {
-    // Без reset() — возвращаемся ровно на сохранённый шаг (mode/step/selectStep
-    // восстановились из bikefit-storage при загрузке страницы)
-    setMode(resumeSelect ? "select" : "fit");
+  const handleSelectMode = (mode: "fit" | "select") => {
+    const hasProgress = mode === "select" ? hasSelectProgress : hasFitProgress;
+    if (!hasProgress) {
+      // Чистый сценарий: сбрасываем данные предыдущего прохода (позиция
+      // шагов, параметры велика, тип, колесо). Тело/цель/жалобы reset()
+      // не трогает — это атрибуты райдера, а не сценария.
+      reset();
+    }
+    setMode(mode);
+  };
+
+  // Явный «Начать заново»: новый сценарий с сохранением контекста райдера
+  const handleStartFresh = (mode: "fit" | "select") => {
+    reset();
+    setMode(mode);
   };
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
-      {/* v1.13.0: баннер «Продолжить» — если есть незавершённый сценарий */}
-      {(resumeFit || resumeSelect) && (
-        <div className="mb-6 rounded-xl border border-orange-500/40 bg-orange-500/5 p-4 sm:p-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-start gap-3">
-              <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-orange-500/15">
-                <History className="size-5 text-orange-500" />
-              </div>
-              <div>
-                <p className="text-sm font-bold">
-                  Продолжить с того места, где остановились
-                </p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {resumeSelect
-                    ? `Подбор рамы · шаг ${selectStep + 1} из 4 «${SELECT_STEP_LABELS[selectStep] ?? "—"}» — все данные сохранены`
-                    : `Настройка велосипеда · шаг «${FIT_STEP_LABELS[step]}» — все данные сохранены`}
-                </p>
-              </div>
-            </div>
-            <Button
-              onClick={handleResume}
-              className="shrink-0 bg-orange-500 hover:bg-orange-600"
-            >
-              Продолжить
-              <ChevronRight className="size-4" />
-            </Button>
-          </div>
-        </div>
-      )}
-
       {/* Hero */}
       <div className="mb-10 text-center">
         <div className="mb-4 flex justify-center">
@@ -181,13 +153,25 @@ export function ModeSelectionScreen() {
               </li>
             </ul>
             <Button className="w-full bg-orange-500 hover:bg-orange-600 group-hover:bg-orange-600">
-              Начать настройку
+              {hasFitProgress ? "Продолжить настройку" : "Начать настройку"}
               <ChevronRight className="size-4" />
             </Button>
-            {(resumeFit || resumeSelect) && (
-              <p className="text-center text-[11px] text-muted-foreground">
-                Начать заново — сохранённый прогресс будет удалён
-              </p>
+            {hasFitProgress && (
+              <div className="flex items-center justify-center gap-2">
+                <p className="text-center text-[11px] text-muted-foreground">
+                  Продолжим с шага «{FIT_STEP_LABELS[step]}» — данные сохранены
+                </p>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleStartFresh("fit");
+                  }}
+                  className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground/70 underline-offset-2 transition-colors hover:text-foreground hover:underline"
+                >
+                  <RotateCcw className="size-3" />
+                  Начать заново
+                </button>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -243,13 +227,25 @@ export function ModeSelectionScreen() {
               </li>
             </ul>
             <Button className="w-full bg-emerald-500 hover:bg-emerald-600 group-hover:bg-emerald-600">
-              Подобрать раму
+              {hasSelectProgress ? "Продолжить подбор" : "Подобрать раму"}
               <ChevronRight className="size-4" />
             </Button>
-            {(resumeFit || resumeSelect) && (
-              <p className="text-center text-[11px] text-muted-foreground">
-                Начать заново — сохранённый прогресс будет удалён
-              </p>
+            {hasSelectProgress && (
+              <div className="flex items-center justify-center gap-2">
+                <p className="text-center text-[11px] text-muted-foreground">
+                  Продолжим с шага {selectStep + 1} «{SELECT_STEP_LABELS[selectStep] ?? "—"}» — данные сохранены
+                </p>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleStartFresh("select");
+                  }}
+                  className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground/70 underline-offset-2 transition-colors hover:text-foreground hover:underline"
+                >
+                  <RotateCcw className="size-3" />
+                  Начать заново
+                </button>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -277,6 +273,39 @@ export function ModeSelectionScreen() {
         <p className="mt-2 text-xs text-muted-foreground">
           Мы не продаём велосипеды и не даём рекомендаций о покупке.
           Только геометрические параметры для самостоятельного выбора.
+        </p>
+      </div>
+
+      {/* Как установить приложение (PWA) */}
+      <div className="mt-4 rounded-xl border bg-muted/30 p-4 sm:p-5">
+        <p className="flex items-center justify-center gap-2 text-sm font-semibold">
+          <Smartphone className="size-4 text-orange-500" />
+          Установить BikeSnap как приложение
+        </p>
+        <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+          <div className="rounded-lg bg-background/60 p-2.5">
+            <p className="font-semibold text-foreground">Android · Chrome</p>
+            <p className="mt-1 leading-relaxed">
+              Меню ⋮ → «Установить приложение» (или «Добавить на главный
+              экран»)
+            </p>
+          </div>
+          <div className="rounded-lg bg-background/60 p-2.5">
+            <p className="font-semibold text-foreground">iPhone · Safari</p>
+            <p className="mt-1 leading-relaxed">
+              Кнопка «Поделиться» → «На экран “Домой”» → «Добавить»
+            </p>
+          </div>
+          <div className="rounded-lg bg-background/60 p-2.5">
+            <p className="font-semibold text-foreground">Компьютер · Chrome</p>
+            <p className="mt-1 leading-relaxed">
+              Значок установки в правой части адресной строки
+            </p>
+          </div>
+        </div>
+        <p className="mt-2.5 text-center text-[11px] text-muted-foreground">
+          После установки BikeSnap открывается из меню как обычное приложение
+          и работает офлайн. Все данные хранятся на устройстве.
         </p>
       </div>
     </div>

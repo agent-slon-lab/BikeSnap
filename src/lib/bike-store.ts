@@ -119,6 +119,7 @@ interface AppState {
   setBikeType: (type: BikeType) => void;
   setGoal: (goal: "comfort" | "sport" | "race") => void;
   toggleComplaint: (c: Complaint) => void;
+  setComplaints: (list: Complaint[]) => void;
   setBody: (b: Partial<BodyMeasurements>) => void;
   setBike: (b: Partial<BikeMeasurements>) => void;
   setWheelSizeId: (id: string) => void;
@@ -190,6 +191,9 @@ export const useBikeStore = create<AppState>()(
               : [...withoutNone, c],
           };
         }),
+      // v1.13.2: прямая установка списка (нужна для синхронизации с профилем
+      // райдера в OnboardingBody — жалобы теперь атрибут райдера)
+      setComplaints: (list) => set({ complaints: list }),
       setBody: (b) => set((state) => ({ body: { ...state.body, ...b } })),
       setBike: (b) => set((state) => {
         // Если передан пустой объект или есть флаг reset — полностью очищаем
@@ -199,19 +203,19 @@ export const useBikeStore = create<AppState>()(
 
       setWheelSizeId: (id) => set({ wheelSizeId: id }),
 
-      // ПОЛНЫЙ сброс сценария: вызывается при старте нового сценария
-      // (выбор режима на стартовом экране, создание нового велика).
-      // Чистит ВСЁ, что могло протечь из предыдущего объекта: онбординг,
-      // параметры тела, параметры велика и типоразмер колеса.
-      // Библиотеки великов/райдеров (localStorage bikefit-*) не трогает.
+      // ПОЛНЫЙ сброс сценария: вызывается ТОЛЬКО по явному «Начать заново»
+      // (кнопка на карточке режима). Чистит данные СЦЕНАРИЯ: позицию шагов,
+      // параметры велика и типоразмер колеса.
+      // v1.13.2: тело/цель/жалобы НЕ сбрасываем — это атрибуты РАЙДЕРА, а не
+      // сценария (персистят и в профиле активного райдера в bikefit-riders).
+      // Раньше reset() стирал жалобы/цель — именно их «забывало» приложение
+      // после клика по карточке режима. Библиотеки великов/райдеров
+      // (localStorage bikefit-*) не трогает.
       reset: () =>
         set({
           step: "body",
           selectStep: 0,
           bikeType: null,
-          goal: null,
-          complaints: [],
-          body: initialBody,
           bike: initialBike,
           wheelSizeId: "26",
         }),

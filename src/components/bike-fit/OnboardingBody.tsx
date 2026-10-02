@@ -119,8 +119,14 @@ const GOALS = [
 ];
 
 export function OnboardingBody() {
-  const { body, setBody, goal, setGoal, complaints, toggleComplaint } =
-    useBikeStore();
+  const {
+    body,
+    setBody,
+    goal,
+    setGoal,
+    complaints,
+    setComplaints,
+  } = useBikeStore();
   const [riders, setRiders] = useState<Rider[]>([]);
   const [activeRider, setActiveRiderState] = useState<Rider | null>(null);
   const [showNew, setShowNew] = useState(false);
@@ -128,15 +134,26 @@ export function OnboardingBody() {
   const [newHeight, setNewHeight] = useState("");
   const [newInseam, setNewInseam] = useState("");
 
+  // v1.13.2: применить контекст райдера к store (тело + цель + жалобы).
+  // undefined у старых профилей = поле не хранилось — store не трогаем.
+  const applyRiderContext = useCallback(
+    (rider: Rider) => {
+      setBody(rider.body);
+      if (rider.goal) setGoal(rider.goal);
+      if (rider.complaints !== undefined) setComplaints(rider.complaints);
+    },
+    [setBody, setGoal, setComplaints]
+  );
+
   const reload = useCallback(() => {
     const all = getRiders();
     setRiders(all);
     const active = getActiveRider();
     setActiveRiderState(active);
     if (active) {
-      setBody(active.body);
+      applyRiderContext(active);
     }
-  }, [setBody]);
+  }, [applyRiderContext]);
 
   useEffect(() => {
     reload();
@@ -178,7 +195,7 @@ export function OnboardingBody() {
   const handleSelect = (rider: Rider) => {
     setActiveRider(rider.id);
     setActiveRiderState(rider);
-    setBody(rider.body);
+    applyRiderContext(rider);
   };
 
   const handleDelete = (id: string) => {
@@ -191,7 +208,7 @@ export function OnboardingBody() {
       setActiveRiderState(newActive);
       if (newActive) {
         setActiveRider(newActive.id);
-        setBody(newActive.body);
+        applyRiderContext(newActive);
       }
     }
   };
@@ -208,8 +225,37 @@ export function OnboardingBody() {
     };
     setBody(newBody);
     if (activeRider) {
-      updateRider(activeRider.id, newBody);
+      updateRider(activeRider.id, { body: newBody });
       setActiveRiderState({ ...activeRider, body: newBody });
+      setRiders(getRiders());
+    }
+  };
+
+  // v1.13.2: цель и жалобы сохраняются в ПРОФИЛЬ активного райдера на каждый
+  // клик (правило «всё сохраняется») + в store (для сценариев без райдера)
+  const handleSetGoal = (g: "comfort" | "sport" | "race") => {
+    setGoal(g);
+    if (activeRider) {
+      updateRider(activeRider.id, { goal: g });
+      setActiveRiderState({ ...activeRider, goal: g });
+      setRiders(getRiders());
+    }
+  };
+
+  const handleToggleComplaint = (c: Complaint) => {
+    const next: Complaint[] =
+      c === "none"
+        ? ["none"]
+        : (() => {
+            const withoutNone = complaints.filter((x) => x !== "none");
+            return withoutNone.includes(c)
+              ? withoutNone.filter((x) => x !== c)
+              : [...withoutNone, c];
+          })();
+    setComplaints(next);
+    if (activeRider) {
+      updateRider(activeRider.id, { complaints: next });
+      setActiveRiderState({ ...activeRider, complaints: next });
       setRiders(getRiders());
     }
   };
@@ -547,11 +593,11 @@ export function OnboardingBody() {
                   key={g.id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => setGoal(g.id)}
+                  onClick={() => handleSetGoal(g.id)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      setGoal(g.id);
+                      handleSetGoal(g.id);
                     }
                   }}
                   className={cn(
@@ -604,11 +650,11 @@ export function OnboardingBody() {
                   key={c.id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => toggleComplaint(c.id as Complaint)}
+                  onClick={() => handleToggleComplaint(c.id as Complaint)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      toggleComplaint(c.id as Complaint);
+                      handleToggleComplaint(c.id as Complaint);
                     }
                   }}
                   className={cn(
