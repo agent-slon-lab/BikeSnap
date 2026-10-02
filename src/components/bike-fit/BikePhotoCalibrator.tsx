@@ -92,6 +92,13 @@ interface BikePhotoCalibratorProps {
   initialKeyPoints?: BikeKeyPoints | null;
   /** Callback когда фото/точки изменились — родитель может сохранить */
   onPhotoChange?: (photoDataUrl: string | null, keyPoints: BikeKeyPoints | null) => void;
+  /**
+   * Callback очистки ВЫЧИСЛЕННЫХ значений из карточки велика.
+   * Вызывается при «Удалить фото»/«Очистить»: убирает из карточки всё,
+   * что было записано из фото (Reach/Stack/STA/HTA/FC/RC/ST/BB Drop и
+   * дозаполненный из фото WB), не трогая введённые вручную поля.
+   */
+  onClearComputed?: () => void;
 }
 
 /** Сжать изображение до maxDim по длинной стороне, JPEG quality */
@@ -153,7 +160,7 @@ const MATCH_COLORS = {
   unknown: { bg: "bg-muted/50", border: "border-border", text: "text-muted-foreground", label: "—" },
 };
 
-export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, initialKeyPoints, onPhotoChange }: BikePhotoCalibratorProps) {
+export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, initialKeyPoints, onPhotoChange, onClearComputed }: BikePhotoCalibratorProps) {
   const bikeType = useBikeStore((s) => s.bikeType);
   // Инициализация: если есть сохранённое фото — восстанавливаем
   const [photoUrl, setPhotoUrl] = useState<string | null>(initialPhotoUrl ?? null);
@@ -419,7 +426,11 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
       lastEmittedRef.current = { photoUrl: null, keyPoints: null };
       onPhotoChange(null, null);
     }
-  }, [photoUrl, onPhotoChange]);
+    // v1.14.9: «Очистить» = убрать и вычисленное. Все значения, которые
+    // калибровка записала в карточку велика, стираются; введённые вручную
+    // (SH, ETT, Stem, α, CR, BBH, WB) остаются.
+    onClearComputed?.();
+  }, [photoUrl, onPhotoChange, onClearComputed]);
 
   // Старт ручной разметки — инициализирует точки null-ами и начинает с первой
   const startManualPlacement = useCallback(() => {
@@ -2201,6 +2212,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                       геометрию (STA, HTA, FC, RC, ST, BB Drop) — она появится на
                       схеме. WB дозаполняется, только если поле пустое. Введённое
                       вручную — эталон и не перезаписывается. Сохраняется автоматически.
+                      «Удалить фото»/«Очистить» убирают из карточки все вычисленные
+                      значения — введённые вручную остаются.
                     </p>
                   </div>
                 )}

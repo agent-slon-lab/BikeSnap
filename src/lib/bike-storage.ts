@@ -34,6 +34,15 @@ export interface BikeRecord {
   photoData?: string;
   /** Ключевые точки калибровки (для восстановления) */
   keyPointsData?: string;
+  /**
+   * Провенанс фото-калибровки: ключи measurements, которые были ЗАПИСАНЫ
+   * из фото (например WB, дозаполненный в пустое поле). Нужен, чтобы
+   * «Удалить фото»/«Очистить» в калибраторе убирали из карточки только
+   * ВЫЧИСЛЕННЫЕ значения, не трогая введённые вручную.
+   * Поля, которых в форме нет вообще (reach/stack/sta/hta/FC/RC/ST/BB Drop),
+   * сюда не пишутся — они в любом случае чистятся при удалении фото.
+   */
+  photoDerived?: string[];
   createdAt: number;
   updatedAt: number;
 }
@@ -167,6 +176,24 @@ export function updateBikePhoto(id: string, photoData: string | undefined, keyPo
   if (b) {
     b.photoData = photoData;
     b.keyPointsData = keyPointsData;
+    b.updatedAt = Date.now();
+    save(BIKES_KEY, bikes);
+  }
+}
+
+/**
+ * Запомнить, какие поля карточки записаны из фото-калибровки (провенанс).
+ * keys = null — сбросить провенанс (фото удалено / вычисленные значения очищены).
+ */
+export function updateBikePhotoDerived(id: string, keys: string[] | null) {
+  const bikes = getBikes();
+  const b = bikes.find((b) => b.id === id);
+  if (b) {
+    if (keys && keys.length > 0) {
+      b.photoDerived = keys;
+    } else {
+      delete b.photoDerived;
+    }
     b.updatedAt = Date.now();
     save(BIKES_KEY, bikes);
   }

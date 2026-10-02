@@ -9,9 +9,15 @@ interface BikeSchemaDiagramProps {
   values?: BikeMeasurements;
   /** Показывать ли шапку с источником значений Reach/Stack */
   showSourceHint?: boolean;
+  /**
+   * v1.14.9: очистить ВСЕ вычисленные по фото значения из карточки
+   * (Reach/Stack/STA/HTA/FC/RC/ST/BB Drop + дозаполненный из фото WB).
+   * Если не передана — работает старый фолбэк (только Reach/Stack/Setback).
+   */
+  onClearPhotoComputed?: () => void;
 }
 
-export function BikeSchemaDiagram({ className, values, showSourceHint = true }: BikeSchemaDiagramProps) {
+export function BikeSchemaDiagram({ className, values, showSourceHint = true, onClearPhotoComputed }: BikeSchemaDiagramProps) {
   const { setBike } = useBikeStore();
 
   // Форматирование значения для отображения на схеме
@@ -23,11 +29,36 @@ export function BikeSchemaDiagram({ className, values, showSourceHint = true }: 
   // Значения из формы
   const v = values;
 
-  // Источник Reach/Stack: они НЕ вводятся в форме, а только вычисляются из фото
-  const hasPhotoComputed = (v?.reach != null && v.reach > 0) || (v?.stack != null && v.stack > 0);
+  // Источник Reach/Stack/справочной геометрии: они НЕ вводятся в форме,
+  // а записываются из карточки «Калибровка геометрии по фото»
+  const hasPhotoComputed =
+    (v?.reach != null && v.reach > 0) ||
+    (v?.stack != null && v.stack > 0) ||
+    (v?.sta != null && v.sta > 0) ||
+    (v?.hta != null && v.hta > 0) ||
+    (v?.frontCenter != null && v.frontCenter > 0) ||
+    (v?.rearCenter != null && v.rearCenter > 0) ||
+    (v?.seatTube != null && v.seatTube > 0) ||
+    (v?.bbDrop != null && v.bbDrop > 0);
 
-  // Очистить Reach/Stack (значения из калибровки фото)
+  // Список вычисленных из фото значений для подсказки
+  const photoParts: string[] = [];
+  if (v?.reach != null && v.reach > 0) photoParts.push(`Reach = ${v.reach}`);
+  if (v?.stack != null && v.stack > 0) photoParts.push(`Stack = ${v.stack}`);
+  if (v?.sta != null && v.sta > 0) photoParts.push(`STA = ${v.sta}°`);
+  if (v?.hta != null && v.hta > 0) photoParts.push(`HTA = ${v.hta}°`);
+  if (v?.frontCenter != null && v.frontCenter > 0) photoParts.push(`FC = ${v.frontCenter}`);
+  if (v?.rearCenter != null && v.rearCenter > 0) photoParts.push(`RC = ${v.rearCenter}`);
+  if (v?.seatTube != null && v.seatTube > 0) photoParts.push(`ST = ${v.seatTube}`);
+  if (v?.bbDrop != null && v.bbDrop > 0) photoParts.push(`BB Drop = ${v.bbDrop}`);
+
+  // Очистить все вычисленные по фото значения (введённые вручную остаются)
   const clearPhotoComputed = () => {
+    if (onClearPhotoComputed) {
+      onClearPhotoComputed();
+      return;
+    }
+    // Фолбэк (без родительского purge): стираем хотя бы Reach/Stack/Setback
     setBike({ reach: undefined, stack: undefined, setback: undefined });
   };
 
@@ -38,18 +69,17 @@ export function BikeSchemaDiagram({ className, values, showSourceHint = true }: 
           <Camera className="size-3.5 mt-0.5 shrink-0 text-sky-500" />
           <div className="flex-1">
             <span className="text-sky-700 dark:text-sky-400 font-medium">
-              Reach и Stack вычислены из фото:
+              Вычислено из фото:
             </span>{" "}
             <span className="text-muted-foreground">
-              Reach = <b>{v?.reach}</b>, Stack = <b>{v?.stack}</b>
-              {(v?.setback != null && v.setback > 0) && <>, Setback = <b>{v?.setback}</b></>}
-              . Эти значения не вводятся в форме — они берутся из карточки «Калибровка геометрии по фото» и сохраняются между сессиями.
+              {photoParts.join(", ")}. Эти значения записаны в карточку из
+              калибровки геометрии по фото и сохраняются между сессиями.
             </span>
           </div>
           <button
             onClick={clearPhotoComputed}
             className="shrink-0 inline-flex items-center gap-1 rounded-md border border-sky-300 dark:border-sky-800 bg-white dark:bg-sky-950/50 hover:bg-sky-100 dark:hover:bg-sky-900/50 px-2 py-1 text-[11px] font-medium text-sky-700 dark:text-sky-400 transition-colors"
-            title="Очистить Reach, Stack и Setback"
+            title="Убрать из карточки все вычисленные по фото значения (введённые вручную останутся)"
           >
             <X className="size-3" />
             Очистить

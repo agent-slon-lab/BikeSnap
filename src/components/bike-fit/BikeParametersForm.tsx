@@ -26,10 +26,12 @@ import {
   getActiveBike,
   updateBike,
   updateBikePhoto,
+  updateBikePhotoDerived,
   type BikeRecord,
 } from "@/lib/bike-storage";
 import type { BikeType } from "@/lib/bike-params";
 import type { BikeKeyPoints } from "@/lib/bike-photo-scale";
+import type { BikeMeasurements } from "@/lib/bike-calculations";
 import { WHEEL_SIZES, findWheelSize } from "@/lib/bike-perspective";
 
 interface ParamField {
@@ -132,6 +134,20 @@ const BIKE_GUIDE_STEPS: GuideStepDef[] = [
     title: "Готово! Остальное — по желанию",
     text: "ETT, вынос, угол, шатун и каретку можно не трогать: алгоритм посчитает их по фото. Теперь жми «Далее: Сводка» внизу страницы.",
   },
+];
+
+// Поля, которых НЕТ в форме и которые может записать только фото-калибровка
+// (кнопка «Записать в параметры велика»). При «Удалить фото»/«Очистить» они
+// убираются из карточки безусловно — вручную их ввести невозможно.
+const PHOTO_ONLY_KEYS: Array<keyof BikeMeasurements> = [
+  "reach",
+  "stack",
+  "sta",
+  "hta",
+  "frontCenter",
+  "rearCenter",
+  "seatTube",
+  "bbDrop",
 ];
 
 export function BikeParametersForm() {
@@ -265,6 +281,31 @@ export function BikeParametersForm() {
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
+
+  // v1.14.9: «Удалить фото»/«Очистить» в калибраторе = убрать из карточки
+  // ВЫЧИСЛЕННОЕ. Чистим все поля, которых нет в форме (Reach, Stack, STA, HTA,
+  // FC, RC, ST, BB Drop — вручную их ввести невозможно), плюс WB, если он был
+  // дозаполнен из фото (провенанс в activeBike.photoDerived). Введённое
+  // вручную (SH, WB, WH, ETT, Stem, α, CR, BBH) не трогаем.
+  const purgePhotoComputed = useCallback(() => {
+    const wbFromPhoto = !!activeBike?.photoDerived?.includes("wheelbase");
+    const patch: Partial<BikeMeasurements> = {};
+    for (const k of PHOTO_ONLY_KEYS) patch[k] = undefined;
+    if (wbFromPhoto) patch.wheelbase = undefined;
+    setBike(patch);
+    if (activeBike) {
+      const merged: BikeMeasurements = { ...activeBike.measurements, ...patch };
+      // Пишем в хранилище сразу — не ждём автосейв (800 мс): пользователь
+      // может закрыть приложение сразу после очистки.
+      updateBike(activeBike.id, merged);
+      updateBikePhotoDerived(activeBike.id, null);
+      lastSavedJsonRef.current = JSON.stringify(merged);
+      const cleared: BikeRecord = { ...activeBike, measurements: merged };
+      delete cleared.photoDerived;
+      setActiveBikeState(cleared);
+      setBikes(getBikes());
+    }
+  }, [activeBike, setBike]);
 
   // АВТОСОХРАНЕНИЕ: любые изменения параметров активного велика (ввод полей,
   // замки, значения, записанные из фото-калибровки) через 800 мс после
@@ -450,6 +491,7 @@ export function BikeParametersForm() {
             measured={bike}
             initialPhotoUrl={activeBike.photoData}
             initialKeyPoints={activeBike.keyPointsData ? JSON.parse(activeBike.keyPointsData) : null}
+            onClearComputed={purgePhotoComputed}
             onPhotoChange={(photoData, keyPoints) => {
               updateBikePhoto(
                 activeBike.id,
@@ -479,14 +521,31 @@ export function BikeParametersForm() {
               if (avg.rearCenter != null) setBike({ rearCenter: avg.rearCenter });
               if (avg.seatTubeLength != null) setBike({ seatTube: avg.seatTubeLength });
               if (avg.bbDrop != null) setBike({ bbDrop: avg.bbDrop });
-              if (avg.wheelbase != null && !bike.wheelbase) setBike({ wheelbase: avg.wheelbase });
+              // v1.14.9: провенанс для «Очистить» — помечаем WB, если он
+              // дозаполнен из фото в пустое поле. Тогда «Удалить фото»/«Очистить»
+              // уберут и его, а введённый вручную WB останется.
+              let wbFromPhoto = false;
+              if (avg.wheelbase != null && !bike.wheelbase) {
+                setBike({ wheelbase: avg.wheelbase });
+                wbFromPhoto = true;
+              }
+              if (activeBike) {
+                updateBikePhotoDerived(activeBike.id, wbFromPhoto ? ["wheelbase"] : null);
+                setActiveBikeState((prev) =>
+                  prev && prev.id === activeBike.id
+                    ? wbFromPhoto
+                      ? { ...prev, photoDerived: ["wheelbase"] }
+                      : (() => { const next = { ...prev }; delete next.photoDerived; return next; })()
+                    : prev
+                );
+              }
             }}
           />
 
           {/* Схема велосипеда */}
           <Card>
             <CardContent className="pt-4">
-              <BikeSchemaDiagram values={bike} />
+              <BikeSchemaDiagram values={bike} onClearPhotoComputed={purgePhotoComputed} />
             </CardContent>
           </Card>
 
