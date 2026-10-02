@@ -922,6 +922,71 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         }
       }
 
+      // === 🛞 ВИДЕНИЕ КОЛЁС: что движок «видит» по каждой колёсной паре ===
+      // Прямой ответ на вопрос «корректно ли считаны масштаб и перспектива»:
+      // радиусы в px и мм при рабочем масштабе, расхождение с WH, соотношение
+      // перед/зад (перспектива) и контроль физического диапазона.
+      {
+        const wheelRows: string[] = [];
+        const pairs = [
+          { label: "Заднее", axleKey: "rearAxle" as const, topKey: "rearWheelTop" as const },
+          { label: "Переднее", axleKey: "frontAxle" as const, topKey: "frontWheelTop" as const },
+        ];
+        const radiiPx: Array<{ label: string; rPx: number }> = [];
+        for (const w of pairs) {
+          const axle = pts[w.axleKey];
+          const top = pts[w.topKey];
+          if (
+            !axle || axle.x == null || axle.y == null ||
+            !top || top.x == null || top.y == null
+          ) {
+            wheelRows.push(
+              `    ${w.label}: ${!axle || axle.x == null ? "нет точки ОСИ" : "ось есть"}${!top || top.x == null ? ", нет точки ВЕРХА покрышки" : ""} → радиус недоступен`
+            );
+            continue;
+          }
+          const rPx = Math.hypot(
+            (top.x - axle.x) * imgSize.width,
+            (top.y - axle.y) * imgSize.height
+          );
+          radiiPx.push({ label: w.label, rPx });
+          const rMm = rPx * engine.scaleMmPerPx;
+          const dev = wheelHeightMm ? ((rMm - wheelHeightMm) / wheelHeightMm) * 100 : null;
+          wheelRows.push(
+            `    ${w.label}: ось (${(axle.x * imgSize.width).toFixed(0)}, ${(axle.y * imgSize.height).toFixed(0)}) px → верх (${(top.x * imgSize.width).toFixed(0)}, ${(top.y * imgSize.height).toFixed(0)}) px`,
+            `      радиус = ${rPx.toFixed(1)} px = ${Math.round(rMm)} мм при рабочем масштабе ${engine.scaleMmPerPx.toFixed(3)} мм/пикс` +
+              (dev != null
+                ? ` → расхождение с WH ${wheelHeightMm} мм: ${dev > 0 ? "+" : ""}${dev.toFixed(1)}%${Math.abs(dev) > 15 ? " ⚠ большое — проверьте точку верха покрышки" : " (в норме: перспектива/точность разметки)"}`
+                : " (WH не задан — сравнение в мм недоступно)"),
+            Math.round(rMm) < 280 || Math.round(rMm) > 420
+              ? `      ⚠ радиус ${Math.round(rMm)} мм вне типичного диапазона 280–420 мм — проверьте пару ось/верх этого колеса`
+              : `      ✓ радиус в типичном диапазоне 280–420 мм`
+          );
+        }
+        if (radiiPx.length === 2) {
+          const ratio = radiiPx[0].rPx / radiiPx[1].rPx; // зад / перед
+          const diffPct = Math.abs(1 - ratio) * 100;
+          wheelRows.push(
+            `    Соотношение радиусов зад/пер = ${ratio.toFixed(3)} — ${
+              ratio > 1
+                ? `заднее кажется на ${diffPct.toFixed(1)}% БОЛЬШЕ переднего (нетипично: обычно переднее ближе к камере — проверьте, не перепутаны ли верха колёс)`
+                : `переднее кажется на ${diffPct.toFixed(1)}% больше заднего — обычная перспектива (перед ближе к камере)`
+            }`,
+            `    Эту разницу ядро компенсирует: consensus-масштаб учитывает обоих кандидатов от колёс, dual scale даёт локальный масштаб на каждой оси.`
+          );
+        } else if (radiiPx.length === 1) {
+          wheelRows.push(
+            `    Размечен только один верх колеса — для компенсации перспективы (dual scale) нужны ОБА (rearWheelTop + frontWheelTop).`
+          );
+        }
+        setDebugLog((prev) => [
+          ...prev,
+          ``,
+          `  🛞 Как движок видит колёса:`,
+          ...wheelRows,
+        ]);
+      }
+
       // === CONFIDENCE SCORE (вместо null-валидации) ===
       // ВАЖНО: используем СВЕЖУЮ перспективу из этой же итерации (локальная
       // переменная perspective), а не perspectiveInfo из стейта — тот на один
@@ -1178,6 +1243,34 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
             ...prev.slice(-80),
             `[${ts}] ${mode}: ${changedKey} — ${oldStr} → ${newStr}`,
           ]);
+
+          // 🛞 Колесо в логе: если тронута одна из 4 колёсных точек и пара
+          // «ось+верх» на месте — сразу считаем радиус (ось → верх покрышки),
+          // чтобы было видно, КАК движок видит это колесо прямо при разметке.
+          const WHEEL_OF: Partial<Record<keyof BikeKeyPoints, { axle: keyof BikeKeyPoints; top: keyof BikeKeyPoints; label: string }>> = {
+            rearAxle: { axle: "rearAxle", top: "rearWheelTop", label: "Заднее" },
+            rearWheelTop: { axle: "rearAxle", top: "rearWheelTop", label: "Заднее" },
+            frontAxle: { axle: "frontAxle", top: "frontWheelTop", label: "Переднее" },
+            frontWheelTop: { axle: "frontAxle", top: "frontWheelTop", label: "Переднее" },
+          };
+          const wp = WHEEL_OF[changedKey];
+          const axlePt = wp ? pts[wp.axle] : null;
+          const topPt = wp ? pts[wp.top] : null;
+          if (wp && imgSize && axlePt?.x != null && axlePt?.y != null && topPt?.x != null && topPt?.y != null) {
+            const rPx = Math.hypot(
+              (topPt.x - axlePt.x) * imgSize.width,
+              (topPt.y - axlePt.y) * imgSize.height
+            );
+            const s = engineResult?.scaleMmPerPx;
+            setDebugLog((prev) => [
+              ...prev.slice(-80),
+              `  🛞 ${wp.label} колесо: R = ${rPx.toFixed(1)} px (ось → верх покрышки)${
+                s
+                  ? ` ≈ ${Math.round(rPx * s)} мм при масштабе ${s.toFixed(3)} мм/пикс`
+                  : " (масштаб ещё не посчитан — мм появятся после «Вычислить все параметры»)"
+              }`,
+            ]);
+          }
         }
       }
 
@@ -1235,7 +1328,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         }
       }
     },
-    [placementMode, placementPointKey, knownValue, runCalibration, keyPoints]
+    [placementMode, placementPointKey, knownValue, runCalibration, keyPoints, imgSize, engineResult]
   );
 
   const handleApplyAveraged = useCallback(() => {
