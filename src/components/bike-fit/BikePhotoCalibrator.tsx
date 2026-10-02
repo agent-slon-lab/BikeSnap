@@ -130,6 +130,20 @@ const KNOWN_DIM_OPTIONS: Array<{ key: CalibFieldKey; label: string; unit: string
   { key: "wheelbase", label: "WB (колёсная база)", unit: "мм", placeholder: "1000" },
 ];
 
+/** Единый порядок ручной разметки: 8 обязательных + 2 опциональные (dual scale) */
+const PLACEMENT_ORDER: Array<keyof BikeKeyPoints> = [
+  "bb",
+  "stTop",
+  "saddleMount",
+  "htTop",
+  "htBottom",
+  "htTopCap",
+  "rearAxle",
+  "frontAxle",
+  "rearWheelTop",
+  "frontWheelTop",
+];
+
 const MATCH_COLORS = {
   good: { bg: "bg-emerald-50 dark:bg-emerald-950/30", border: "border-emerald-200 dark:border-emerald-900", text: "text-emerald-600 dark:text-emerald-400", label: "✓ Хорошо" },
   acceptable: { bg: "bg-amber-50 dark:bg-amber-950/30", border: "border-amber-200 dark:border-amber-900", text: "text-amber-600 dark:text-amber-400", label: "≈ Приемлемо" },
@@ -448,6 +462,27 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     setPlacementMode(false);
     setPlacementPointKey(null);
   }, []);
+
+  // Продолжить разметку: войти в режим разметки БЕЗ сброса уже стоящих точек.
+  // Стартуем с первой незаполненной точки (если всё стоит — с BB: нужную точку
+  // можно перекачать через чипы в панели разметки).
+  const continuePlacement = useCallback(() => {
+    if (!keyPoints) return;
+    let first: keyof BikeKeyPoints = "bb";
+    for (const k of PLACEMENT_ORDER) {
+      const pt = keyPoints[k];
+      if (!pt || pt.x == null || pt.y == null) {
+        first = k;
+        break;
+      }
+    }
+    setPlacementMode(true);
+    setPlacementPointKey(first);
+    setDebugLog((prev) => [
+      ...prev.slice(-50),
+      `[${new Date().toLocaleTimeString()}] Продолжение разметки с точки ${first} (существующие точки сохранены)`,
+    ]);
+  }, [keyPoints]);
 
   const runCalibration = useCallback(
     (pts: BikeKeyPoints, knownVal: number) => {
@@ -1093,23 +1128,12 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
 
       // Если в режиме разметки — перейти к следующей null-точке
       if (placementMode && placementPointKey) {
-        // Полный порядок размещения: 8 обязательных + 2 опциональные (верх колёс для dual scale)
-        const order: Array<keyof BikeKeyPoints> = [
-          "bb",
-          "stTop",
-          "saddleMount",
-          "htTop",
-          "htBottom",
-          "htTopCap",
-          "rearAxle",
-          "frontAxle",
-          "rearWheelTop",
-          "frontWheelTop",
-        ];
-        const currentIdx = order.indexOf(placementPointKey);
+        // Ищем следующую незаполненную точку С НАЧАЛА PLACEMENT_ORDER: так
+        // ранее не размещённые точки не пропускаются, даже если пользователь
+        // через чипы размещал точки в произвольном порядке.
         let next: keyof BikeKeyPoints | null = null;
-        for (let i = currentIdx + 1; i < order.length; i++) {
-          const k = order[i];
+        for (let i = 0; i < PLACEMENT_ORDER.length; i++) {
+          const k = PLACEMENT_ORDER[i];
           const pt = pts[k];
           if (!pt || pt.x == null || pt.y == null) {
             next = k;
@@ -1306,6 +1330,27 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                 </Button>
               </div>
             )}
+
+            {/* Продолжить/поправить разметку, когда точки УЖЕ есть (частично или
+                полностью) — раньше тут был мёртвый угол: кнопка разметки
+                исчезала, а клики по фото ставили только уже существующие точки */}
+            {keyPoints !== null && !loading && !placementMode && (() => {
+              const nullCount = PLACEMENT_ORDER.filter((k) => {
+                const pt = keyPoints[k];
+                return !pt || pt.x == null || pt.y == null;
+              }).length;
+              return (
+                <Button
+                  onClick={continuePlacement}
+                  className="w-full bg-emerald-500 hover:bg-emerald-600"
+                  size="lg"
+                >
+                  {nullCount > 0
+                    ? `✏️ Продолжить разметку — осталось точек: ${nullCount}`
+                    : "✏️ Поправить точки"}
+                </Button>
+              );
+            })()}
 
             {/* Результат определения точек */}
             {keyPoints && (
