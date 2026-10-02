@@ -63,10 +63,17 @@ def main() -> None:
     token = load_token()
 
     print("=== Открытые auto-report issue ===")
-    issues = api("/issues?labels=auto-report&state=open&per_page=50", token)
-    if not issues:
+    issues = api("/issues?state=open&per_page=100&sort=created&direction=desc", token)
+    # Метку токен назначить не может (нет права) — фильтруем по заголовку,
+    # который генерирует приложение: «Отчёт vX.Y.Z — …». PR исключаем.
+    reports = [
+        it
+        for it in issues
+        if "pull_request" not in it and it["title"].startswith("Отчёт")
+    ]
+    if not reports:
         print("  (нет открытых — всё разобрано)")
-    for it in issues:
+    for it in reports:
         print(f"  #{it['number']}  {it['created_at'][:16]}  {it['title']}")
         print(f"      {it['html_url']}")
 
