@@ -189,8 +189,34 @@ export async function uploadReportToGithub(
     delete (v as { pendingPhoto?: unknown }).pendingPhoto;
   }
 
+  // 1b. Фото калибровки шага 2 — фото велика с боку с точками разметки
+  // (v1.14.15: «НАДО ЧТОБЫ эти действия ТОЖЕ СОХРАНЯЛИСЬ»)
+  let calibOut = report.bikeCalibration ?? null;
+  if (calibOut?.photo) {
+    const parsedCalib = parseDataUrl(calibOut.photo);
+    if (parsedCalib) {
+      const up = await putFile(
+        `${DIR}/${dateStamp}/${base}-photo-bike-side.${
+          parsedCalib.ext === "jpeg" ? "jpg" : parsedCalib.ext
+        }`,
+        parsedCalib.payload,
+        commitMsg,
+      );
+      calibOut = { ...calibOut, photo: null, photoFile: up.path };
+      photoFiles.push({
+        path: up.path,
+        htmlUrl: up.htmlUrl,
+        view: "велик (калибровка, шаг 2)",
+      });
+    }
+  }
+
   // 2. JSON отчёта (фото вырезаны, проставлены photoFile)
-  const reportForRepo: FitReport = { ...report, views: jsonViews };
+  const reportForRepo: FitReport = {
+    ...report,
+    views: jsonViews,
+    ...(calibOut ? { bikeCalibration: calibOut } : {}),
+  };
   const jsonUpload = await putFile(
     `${DIR}/${dateStamp}/${fname}`,
     utf8ToBase64(JSON.stringify(reportForRepo, null, 2)),
@@ -245,6 +271,22 @@ export async function uploadReportToGithub(
     .filter(Boolean)
     .join(" · ");
 
+  // Калибровка шага 2 в сводке issue (v1.14.15)
+  const calibMd = (() => {
+    const c = report.bikeCalibration;
+    if (!c) return null;
+    const placed = c.points ? Object.values(c.points).filter(Boolean) : [];
+    const keys = c.points
+      ? (Object.entries(c.points)
+          .filter(([, v]) => v)
+          .map(([k]) => k)
+          .join(", ") || "")
+      : "";
+    return `- **Калибровка (шаг 2):** фото велика ${
+      c.photo || c.photoFile ? "✓" : "—"
+    }, точек ${placed.length}${keys ? ` — ${keys}` : ""}`;
+  })();
+
   const body = [
     "Авто-отчёт из приложения BikeSnap (кнопка «Отправить отчёт» на шаге «Анализ»).",
     "",
@@ -257,6 +299,7 @@ export async function uploadReportToGithub(
     "",
     "**Ракурсы**",
     viewsMd || "- нет ракурсов",
+    calibMd ?? null,
     "",
     "**Файлы в репозитории**",
     filesMd,

@@ -53,11 +53,11 @@ def tiny_jpeg_data_url() -> str:
 
 def main() -> None:
     stamp = time.strftime("%Y-%m-%dT%H-%M-%S")
-    filename = f"bikesnap-report-v1.14.12-E2E-{stamp}.json"
+    filename = f"bikesnap-report-v1.14.15-E2E-{stamp}.json"
     report = {
         "meta": {
             "app": "BikeSnap",
-            "version": "v1.14.12",
+            "version": "v1.14.15",
             "createdAt": time.strftime("%Y-%m-%dT%H:%M:%S+07:00"),
             "userAgent": "e2e-test/1.0 (pipeline check)",
             "screen": "100x100",
@@ -88,6 +88,23 @@ def main() -> None:
                 "photo": None,
             },
         ],
+        # v1.14.15: калибровка шага 2 — фото велика + точки разметки
+        "bikeCalibration": {
+            "photo": tiny_jpeg_data_url(),
+            "photoFile": None,
+            "points": {
+                "bb": {"x": 0.42, "y": 0.71},
+                "stTop": {"x": 0.47, "y": 0.35},
+                "saddleMount": {"x": 0.49, "y": 0.28},
+                "htTop": {"x": 0.63, "y": 0.38},
+                "htBottom": {"x": 0.66, "y": 0.47},
+                "htTopCap": {"x": 0.62, "y": 0.34},
+                "rearAxle": {"x": 0.27, "y": 0.72},
+                "frontAxle": {"x": 0.72, "y": 0.72},
+                "rearWheelTop": None,
+                "frontWheelTop": None,
+            },
+        },
     }
 
     print("=== POST /api/report-upload ===")
@@ -107,7 +124,8 @@ def main() -> None:
     issue = gh(f"/issues/{out['issueNumber']}")
     assert issue["state"] == "open", "issue не открыт"
     labels = [l["name"] for l in issue["labels"]]
-    print(f"  issue открыт, метки: {labels}")
+    assert "Калибровка (шаг 2)" in issue["body"], "в issue нет строки калибровки"
+    print(f"  issue открыт, метки: {labels}, калибровка в сводке: OK")
     for f in out["files"]:
         code = urllib.request.Request(
             f"{REPO_API}/contents/{f}",

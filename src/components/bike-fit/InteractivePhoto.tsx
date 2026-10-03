@@ -1,8 +1,34 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, Move } from "lucide-react";
-import type { BikeKeyPoints, NullablePoint, PixelPoint } from "@/lib/bike-photo-scale";
+/**
+ * ИНТЕРАКТИВНОЕ ФОТО ВЕЛИКА (v3.0.0 — «палец-фёрст», v1.14.15)
+ * ===========================================================================
+ * Разметка ключевых точек велосипеда на фото. v3.0.0 — полная переработка
+ * взаимодействия по жалобе: «на шаге 2 вообще ничего не видно по фото. как
+ * и куда ставить точки. фото оч мелкое. точки тоже. даже лупа не помогает
+ * тк она перекрывается пальцем».
+ *
+ * Что изменилось (все размеры теперь в ЭКРАННЫХ пикселях, а не в пикселях
+ * исходного фото — на телефоне кружки из старой версии были ~9 px):
+ *   1. ЗУМ: щипок двумя пальцами (1×..8×), панорама одним пальцем по пустому
+ *      месту при зуме, колесо мыши на десктопе, кнопки +/−/сброс.
+ *   2. ЛУПА: фиксированный экран размер (до 84 px радиус), зум 2.5× ПОВЕРХ
+ *      текущего вида, и главное — висит НАД ПАЛЬЦЕМ (под ним только если
+ *      упёрлись в верхний край), палец её не перекрывает.
+ *   3. УСТАНОВКА ТОЧКИ двухфазная: прижал палец → виден призрак-перекрестие
+ *      и лупа над пальцем → подвёл → отпустил → точка встала. Тап мышью
+ *      работает так же (down+up мгновенно).
+ *   4. Точки: видимый кружок 26 px, хит-зона ≥48 px, подписи 11 px —
+ *      одинаково на телефоне и десктопе при любом разрешении фото.
+ *
+ * Координатная модель: viewBox SVG = натуральные пиксели фото. Пан/зум —
+ * transform-группа (view.x/y/scale). Экранные размеры конвертируются в
+ * единицы viewBox через getScreenCTM().a (учитывает letterbox от maxHeight).
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Loader2, Move, ZoomIn, ZoomOut, Maximize } from "lucide-react";
+import type { BikeKeyPoints, PixelPoint } from "@/lib/bike-photo-scale";
 import { pointFullLabel } from "@/lib/point-labels";
 
 interface InteractivePhotoProps {
@@ -99,6 +125,16 @@ const POINT_CONFIG: Array<{
   },
 ];
 
+/** Границы зума: 1× (весь кадр) .. 8× (детали втулки). */
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 8;
+
+interface ViewState {
+  x: number;
+  y: number;
+  scale: number;
+}
+
 export function InteractivePhoto({
   photoUrl,
   keyPoints,
@@ -107,133 +143,374 @@ export function InteractivePhoto({
   placementMode = false,
   placementPointKey = null,
 }: InteractivePhotoProps) {
+  const wrapRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
-  const imgRef = useRef<HTMLImageElement>(null);
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
-  const [draggingKey, setDraggingKey] = useState<keyof BikeKeyPoints | null>(
-    null
-  );
+  const [containerW, setContainerW] = useState(0);
+  // Версия рендера — триггер пересчёта pxPerUnit при ресайзе контейнера
+  const [renderTick, setRenderTick] = useState(0);
+  const [draggingKey, setDraggingKey] = useState<keyof BikeKeyPoints | null>(null);
   const [showLabels, setShowLabels] = useState(true);
-  // Позиция курсора в SVG-координатах (для лупы)
-  const [cursorSvg, setCursorSvg] = useState<{ x: number; y: number } | null>(null);
+  const [view, setView] = useState<ViewState>({ x: 0, y: 0, scale: 1 });
+  // Позиция курсора/пальца в координатах viewBox (для лупы)
+  const [cursorVb, setCursorVb] = useState<{ x: number; y: number } | null>(null);
+  // Призрак точки при двухфазной установке (placementMode): позиция в image-координатах
+  const [aimImg, setAimImg] = useState<PixelPoint | null>(null);
+
+  // ===== refs-зеркала для обработчиков жестов (свежие значения без ре-мемоизации) =====
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const keyPointsRef = useRef(keyPoints);
+  keyPointsRef.current = keyPoints;
+  const placementRef = useRef({ mode: placementMode, key: placementPointKey });
+  placementRef.current = { mode: placementMode, key: placementPointKey };
+  const imgSizeRef = useRef(imgSize);
+  imgSizeRef.current = imgSize;
+
+  // Активные указатели (для щипка)
+  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  // Состояние жеста одним пальцем
+  const dragRef = useRef<{ key: keyof BikeKeyPoints } | null>(null);
+  const aimRef = useRef<{ key: keyof BikeKeyPoints } | null>(null);
+  const panRef = useRef<{ last: { x: number; y: number } } | null>(null);
+  // Состояние щипка
+  const pinchRef = useRef<{
+    startDist: number;
+    startScale: number;
+    midImg: { x: number; y: number };
+  } | null>(null);
 
   // Загрузка реальных размеров изображения
   useEffect(() => {
     if (!photoUrl) {
       setImgSize({ w: 0, h: 0 });
+      setView({ x: 0, y: 0, scale: 1 });
       return;
     }
     const img = new Image();
     img.onload = () => {
       setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
+      setView({ x: 0, y: 0, scale: 1 });
     };
     img.onerror = () => setImgSize({ w: 0, h: 0 });
     img.src = photoUrl;
   }, [photoUrl]);
 
-  // Конвертировать [0..1] нормализованные → SVG-координаты (натуральные пиксели)
-  const toSvg = useCallback(
-    (pt: NullablePoint): { x: number; y: number } => {
+  // Ресайз контейнера → пересчёт экранных масштабов
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? 0;
+      setContainerW(w);
+      setRenderTick((t) => t + 1);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  /** Экран → координаты viewBox SVG (с учётом letterbox от maxHeight). */
+  const screenToVb = useCallback((clientX: number, clientY: number) => {
+    const svg = svgRef.current;
+    if (!svg || imgSizeRef.current.w === 0) return { x: 0, y: 0 };
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return { x: 0, y: 0 };
+    const t = pt.matrixTransform(ctm.inverse());
+    return { x: t.x, y: t.y };
+  }, []);
+
+  /** Экран → image-координаты (прошедшие через пан/зум). */
+  const screenToImg = useCallback(
+    (clientX: number, clientY: number) => {
+      const vb = screenToVb(clientX, clientY);
+      const v = viewRef.current;
       return {
-        x: (pt.x ?? 0) * imgSize.w,
-        y: (pt.y ?? 0) * imgSize.h,
+        x: (vb.x - v.x) / v.scale,
+        y: (vb.y - v.y) / v.scale,
       };
     },
-    [imgSize]
+    [screenToVb]
   );
 
-  // Конвертировать экран (clientX/Y) → SVG-координаты через getScreenCTM
-  const screenToSvg = useCallback(
-    (clientX: number, clientY: number): { x: number; y: number } => {
-      const svg = svgRef.current;
-      if (!svg || imgSize.w === 0) return { x: 0, y: 0 };
-      const pt = svg.createSVGPoint();
-      pt.x = clientX;
-      pt.y = clientY;
-      const ctm = svg.getScreenCTM();
-      if (!ctm) return { x: 0, y: 0 };
-      const transformed = pt.matrixTransform(ctm.inverse());
-      return { x: transformed.x, y: transformed.y };
+  /** image → viewBox-координаты (куда ставить маркер внутри zoom-группы). */
+  const imgToVb = useCallback((img: { x: number; y: number }) => {
+    const v = viewRef.current;
+    return { x: img.x * v.scale + v.x, y: img.y * v.scale + v.y };
+  }, []);
+
+  /** Удержать пан в границах: при scale ≥ 1 картинка не отрывается от краёв. */
+  const clampView = useCallback((v: ViewState): ViewState => {
+    const { w, h } = imgSizeRef.current;
+    if (!w || !h) return v;
+    const minX = w * (1 - v.scale);
+    const minY = h * (1 - v.scale);
+    return {
+      ...v,
+      x: Math.min(0, Math.max(minX, v.x)),
+      y: Math.min(0, Math.max(minY, v.y)),
+    };
+  }, []);
+
+  /** Экранный масштаб: сколько экранных пикселей в 1 единице viewBox. */
+  const pxPerUnit = useMemo(() => {
+    void renderTick;
+    const ctm = svgRef.current?.getScreenCTM();
+    if (ctm && ctm.a > 0 && Number.isFinite(ctm.a)) return ctm.a;
+    if (containerW > 0 && imgSize.w > 0) return containerW / imgSize.w;
+    return 0;
+  }, [renderTick, containerW, imgSize.w]);
+
+  /** Сколько экранных пикселей в 1 пикселе ИЗОБРАЖЕНИЯ (с зумом). */
+  const screenScale = pxPerUnit > 0 ? pxPerUnit * view.scale : 0;
+
+  /** image px → экранные px → image-единицы: круг радиуса screenPx. */
+  const px = useCallback(
+    (screenPx: number) => (screenScale > 0 ? screenPx / screenScale : screenPx * 0.02),
+    [screenScale]
+  );
+
+  /** Зум к точке экрана (щипок/колесо/кнопки). */
+  const zoomAt = useCallback(
+    (clientX: number, clientY: number, factor: number) => {
+      const v0 = viewRef.current;
+      const s1 = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v0.scale * factor));
+      if (s1 === v0.scale) return;
+      const vb = screenToVb(clientX, clientY);
+      const img = { x: (vb.x - v0.x) / v0.scale, y: (vb.y - v0.y) / v0.scale };
+      setView(clampView({ x: vb.x - img.x * s1, y: vb.y - img.y * s1, scale: s1 }));
     },
-    [imgSize]
+    [screenToVb, clampView]
   );
 
-  // Конвертировать экран → [0..1] нормализованные
-  const toNormalized = useCallback(
-    (clientX: number, clientY: number): PixelPoint => {
-      const svgP = screenToSvg(clientX, clientY);
-      return {
-        x: imgSize.w > 0 ? Math.max(0, Math.min(1, svgP.x / imgSize.w)) : 0.5,
-        y: imgSize.h > 0 ? Math.max(0, Math.min(1, svgP.y / imgSize.h)) : 0.5,
-      };
-    },
-    [screenToSvg, imgSize]
-  );
+  // Колесо мыши — нативный слушатель (React onWheel пассивен, preventDefault не работал бы)
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (imgSizeRef.current.w === 0) return;
+      e.preventDefault();
+      zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.18 : 1 / 1.18);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [zoomAt]);
 
-  // Начало перетаскивания
+  // ===== указатели =====
+
   const handlePointerDown = useCallback(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      if (imgSizeRef.current.w === 0) return;
+      const { mode, key } = placementRef.current;
+      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      try {
+        svgRef.current?.setPointerCapture(e.pointerId);
+      } catch {}
+
+      // Второй палец — щипок: глушим aim/pan/drag
+      if (pointersRef.current.size === 2) {
+        const pts = [...pointersRef.current.values()];
+        const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+        pinchRef.current = {
+          startDist: Math.max(1, dist),
+          startScale: viewRef.current.scale,
+          midImg: screenToImg(mid.x, mid.y),
+        };
+        dragRef.current = null;
+        setDraggingKey(null);
+        aimRef.current = null;
+        setAimImg(null);
+        panRef.current = null;
+        setCursorVb(null);
+        return;
+      }
+
+      if (mode && key) {
+        // Двухфазная установка: прижал → прицеливаешься → отпустил
+        aimRef.current = { key };
+        setAimImg(screenToImg(e.clientX, e.clientY));
+        setCursorVb(screenToVb(e.clientX, e.clientY));
+        return;
+      }
+
+      // Панорама пустого места при зуме (drag точек перехватывается на <g>)
+      if (viewRef.current.scale > 1) {
+        panRef.current = { last: screenToVb(e.clientX, e.clientY) };
+      }
+    },
+    [screenToImg, screenToVb]
+  );
+
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      if (imgSizeRef.current.w === 0) return;
+      if (pointersRef.current.has(e.pointerId)) {
+        pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      }
+
+      // Щипок
+      if (pinchRef.current && pointersRef.current.size >= 2) {
+        const pts = [...pointersRef.current.values()];
+        const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+        const p = pinchRef.current;
+        const s1 = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, p.startScale * (dist / p.startDist)));
+        const vbMid = screenToVb(mid.x, mid.y);
+        setView(
+          clampView({ x: vbMid.x - p.midImg.x * s1, y: vbMid.y - p.midImg.y * s1, scale: s1 })
+        );
+        return;
+      }
+
+      // Драг существующей точки
+      if (dragRef.current && keyPointsRef.current) {
+        const imgPt = screenToImg(e.clientX, e.clientY);
+        const norm: PixelPoint = {
+          x: Math.max(0, Math.min(1, imgPt.x / imgSizeRef.current.w)),
+          y: Math.max(0, Math.min(1, imgPt.y / imgSizeRef.current.h)),
+        };
+        setCursorVb(screenToVb(e.clientX, e.clientY));
+        onPointsChange({ ...keyPointsRef.current, [dragRef.current.key]: norm });
+        return;
+      }
+
+      // Прицеливание новой точки (лупа над пальцем + призрак)
+      if (aimRef.current) {
+        setAimImg(screenToImg(e.clientX, e.clientY));
+        setCursorVb(screenToVb(e.clientX, e.clientY));
+        return;
+      }
+
+      // Панорама
+      if (panRef.current) {
+        const vb = screenToVb(e.clientX, e.clientY);
+        const v = viewRef.current;
+        setView(
+          clampView({ ...v, x: v.x + (vb.x - panRef.current.last.x), y: v.y + (vb.y - panRef.current.last.y) })
+        );
+        panRef.current = { last: vb };
+      }
+    },
+    [screenToImg, screenToVb, onPointsChange, clampView]
+  );
+
+  const endPointer = useCallback(
+    (e: React.PointerEvent<SVGSVGElement>) => {
+      pointersRef.current.delete(e.pointerId);
+      try {
+        svgRef.current?.releasePointerCapture(e.pointerId);
+      } catch {}
+
+      // Коммит прицелинной точки — В МОМЕНТ ОТПУСКАНИЯ пальца
+      if (aimRef.current && keyPointsRef.current) {
+        const key = aimRef.current.key;
+        const imgPt = screenToImg(e.clientX, e.clientY);
+        const norm: PixelPoint = {
+          x: Math.max(0, Math.min(1, imgPt.x / imgSizeRef.current.w)),
+          y: Math.max(0, Math.min(1, imgPt.y / imgSizeRef.current.h)),
+        };
+        aimRef.current = null;
+        setAimImg(null);
+        setCursorVb(null);
+        onPointsChange({ ...keyPointsRef.current, [key]: norm });
+        return;
+      }
+
+      if (dragRef.current) {
+        dragRef.current = null;
+        setDraggingKey(null);
+        setCursorVb(null);
+        return;
+      }
+
+      panRef.current = null;
+
+      // После щипка остался один палец → мягко переходим в панораму
+      if (pointersRef.current.size === 1 && viewRef.current.scale > 1) {
+        const rest = [...pointersRef.current.values()][0];
+        panRef.current = { last: screenToVb(rest.x, rest.y) };
+        pinchRef.current = null;
+        return;
+      }
+      if (pointersRef.current.size === 0) {
+        pinchRef.current = null;
+        setCursorVb(null);
+      }
+    },
+    [screenToImg, screenToVb, onPointsChange]
+  );
+
+  // ===== начало перетаскивания существующей точки (с <g>) =====
+  const startPointDrag = useCallback(
     (e: React.PointerEvent, key: keyof BikeKeyPoints) => {
       e.preventDefault();
-      e.stopPropagation();
-      (e.target as Element).setPointerCapture(e.pointerId);
+      e.stopPropagation(); // не даём root'у начать pan/aim
+      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      try {
+        svgRef.current?.setPointerCapture(e.pointerId);
+      } catch {}
+      dragRef.current = { key };
       setDraggingKey(key);
+      setCursorVb(screenToVb(e.clientX, e.clientY));
     },
-    []
-  );
-
-  // Перетаскивание
-  const handlePointerMove = useCallback(
-    (e: React.PointerEvent) => {
-      // Обновляем позицию курсора для лупы (всегда, даже если не драгаем)
-      const svgP = screenToSvg(e.clientX, e.clientY);
-      setCursorSvg(svgP);
-
-      if (!draggingKey || !keyPoints) return;
-      e.preventDefault();
-      const newPt = toNormalized(e.clientX, e.clientY);
-      const newPoints = { ...keyPoints, [draggingKey]: newPt };
-      onPointsChange(newPoints);
-    },
-    [draggingKey, keyPoints, toNormalized, onPointsChange, screenToSvg]
-  );
-
-  // Конец перетаскивания
-  const handlePointerUp = useCallback(
-    (e: React.PointerEvent) => {
-      if (draggingKey) {
-        try {
-          (e.target as Element).releasePointerCapture(e.pointerId);
-        } catch {}
-      }
-      setDraggingKey(null);
-      setCursorSvg(null);
-    },
-    [draggingKey]
-  );
-
-  // Клик по фото — если в режиме разметки, размещаем выбранную точку (с snap к рёбрам)
-  const handleSvgPointerDown = useCallback(
-    (e: React.PointerEvent) => {
-      if (!placementMode || !placementPointKey) return;
-      if (!keyPoints) return;
-      e.preventDefault();
-      const pt = toNormalized(e.clientX, e.clientY);
-      onPointsChange({ ...keyPoints, [placementPointKey]: pt });
-    },
-    [placementMode, placementPointKey, keyPoints, toNormalized, onPointsChange]
+    [screenToVb]
   );
 
   const hasImage = imgSize.w > 0 && imgSize.h > 0;
 
-  // Радиус точки в единицах viewBox (натуральные пиксели)
-  // Чтобы кружок был ~44px на экране при любом масштабе:
-  // Берём ~2.2% от ширины изображения (минимум 12, максимум 40 px в SVG-юнитах)
-  const pointRadius = hasImage
-    ? Math.max(12, Math.min(40, imgSize.w * 0.022))
-    : 18;
-  const strokeWidth = Math.max(2, pointRadius * 0.3);
-  const lineStrokeWidth = Math.max(2, pointRadius * 0.25);
-  const fontSize = Math.max(10, pointRadius * 0.8);
+  // Экранно-постоянные размеры (в единицах изображения)
+  const pointR = px(13); // видимый кружок: диаметр 26 px
+  const hitR = Math.max(pointR * 1.9, px(24)); // хит-зона ≥48 px диаметр
+  const haloR = pointR + px(4);
+  const strokeWidth = Math.max(pointR * 0.28, px(2));
+  const lineW = Math.max(pointR * 0.22, px(1.5));
+  const fontSize = Math.max(pointR * 0.95, px(11));
+
+  // Параметры лупы (экранные размеры → viewBox)
+  const magRScreen = Math.min(84, Math.max(56, (containerW || 360) * 0.22));
+  const magR = pxPerUnit > 0 ? magRScreen / pxPerUnit : px(70);
+  const magZoom = view.scale * 2.5;
+
+  // Лупа видна при драге точки или прицеливании
+  const loupeCursor =
+    (draggingKey || aimRef.current) && cursorVb && hasImage
+      ? {
+          img: {
+            x: (cursorVb.x - view.x) / view.scale,
+            y: (cursorVb.y - view.y) / view.scale,
+          },
+          vb: cursorVb,
+        }
+      : null;
+
+  const loupe = (() => {
+    if (!loupeCursor) return null;
+    // Лупа НАД пальцем; если упирается в верх — ПОД пальцем; клампим в границы фото
+    let magCx = loupeCursor.vb.x;
+    let magCy = loupeCursor.vb.y - magR * 1.45;
+    if (magCy - magR < 0) magCy = loupeCursor.vb.y + magR * 1.45;
+    magCx = Math.max(magR, Math.min(imgSize.w - magR, magCx));
+    magCy = Math.max(magR, Math.min(imgSize.h - magR, magCy));
+    const cross = px(11);
+    return { cx: magCx, cy: magCy, cross, zoom: magZoom, cursorImg: loupeCursor.img };
+  })();
+
+  const aimColor = aimRef.current
+    ? POINT_CONFIG.find((c) => c.key === aimRef.current?.key)?.color ?? "#0ea5e9"
+    : "#0ea5e9";
+
+  const resetZoom = useCallback(() => setView({ x: 0, y: 0, scale: 1 }), []);
+  const zoomButton = useCallback(
+    (factor: number) => {
+      const el = wrapRef.current;
+      const r = el?.getBoundingClientRect();
+      zoomAt(r ? r.left + r.width / 2 : 0, r ? r.top + r.height / 2 : 0, factor);
+    },
+    [zoomAt]
+  );
 
   return (
     <div className="space-y-2">
@@ -266,14 +543,15 @@ export function InteractivePhoto({
               </p>
             )}
             <p className="text-[11px] text-muted-foreground">
-              Кликни по фото, чтобы поставить точку
+              Прижми палец к нужному месту, глянь в лупу НАД пальцем, подвини и отпусти — точка встанет туда, где перекрестие. Можно приблизить щипком.
             </p>
           </div>
         );
       })()}
 
       <div
-        className="relative w-full overflow-hidden rounded-xl border bg-black"
+        ref={wrapRef}
+        className="relative w-full overflow-hidden rounded-xl border bg-black select-none"
         style={{ touchAction: "none" }}
       >
         {hasImage ? (
@@ -285,252 +563,227 @@ export function InteractivePhoto({
             style={{
               maxHeight: "70vh",
               touchAction: "none",
-              cursor: placementMode ? "crosshair" : "default",
+              cursor: placementMode ? "crosshair" : "grab",
             }}
-            onPointerDown={handleSvgPointerDown}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={endPointer}
+            onPointerCancel={endPointer}
           >
-            {/* Сама картинка внутри SVG — гарантированно совпадает с координатами */}
-            <image
-              href={photoUrl}
-              x={0}
-              y={0}
-              width={imgSize.w}
-              height={imgSize.h}
-              preserveAspectRatio="xMidYMid meet"
-            />
+            <defs>
+              <clipPath id="mag-clip">
+                {loupe && <circle cx={loupe.cx} cy={loupe.cy} r={magR} />}
+              </clipPath>
+            </defs>
 
-            {/* Линии между BB и каждой точкой */}
-            {keyPoints &&
-              POINT_CONFIG.map(({ key, color }) => {
-                if (key === "bb") return null;
-                const pt = keyPoints[key];
-                if (!pt || pt.x == null || pt.y == null) return null;
-                const bb = keyPoints.bb;
-                if (!bb || bb.x == null || bb.y == null) return null;
-                const p1 = toSvg(bb);
-                const p2 = toSvg(pt);
-                return (
-                  <line
-                    key={`line-${key}`}
-                    x1={p1.x}
-                    y1={p1.y}
-                    x2={p2.x}
-                    y2={p2.y}
-                    stroke={color}
-                    strokeWidth={lineStrokeWidth}
-                    strokeDasharray={`${lineStrokeWidth * 2.5} ${
-                      lineStrokeWidth * 2
-                    }`}
-                    opacity={0.7}
-                    strokeLinecap="round"
-                  />
-                );
-              })}
+            {/* ===== ПАН/ЗУМ-ГРУППА ===== */}
+            <g transform={`translate(${view.x} ${view.y}) scale(${view.scale})`}>
+              {/* Сама картинка внутри SVG — гарантированно совпадает с координатами */}
+              <image
+                href={photoUrl}
+                x={0}
+                y={0}
+                width={imgSize.w}
+                height={imgSize.h}
+                preserveAspectRatio="xMidYMid meet"
+              />
 
-            {/* Линия колёсной базы rear → front */}
-            {keyPoints &&
-              keyPoints.rearAxle &&
-              keyPoints.frontAxle &&
-              keyPoints.rearAxle.x != null &&
-              keyPoints.frontAxle.x != null &&
-              (() => {
-                const r = toSvg(keyPoints.rearAxle);
-                const f = toSvg(keyPoints.frontAxle);
-                return (
-                  <line
-                    x1={r.x}
-                    y1={r.y}
-                    x2={f.x}
-                    y2={f.y}
-                    stroke="#06b6d4"
-                    strokeWidth={lineStrokeWidth}
-                    strokeDasharray={`${lineStrokeWidth * 2.5} ${
-                      lineStrokeWidth * 2
-                    }`}
-                    opacity={0.6}
-                    strokeLinecap="round"
-                  />
-                );
-              })()}
-
-            {/* Точки (кружки) + подписи */}
-            {keyPoints &&
-              POINT_CONFIG.map(({ key, label, color, hint, antiHint }) => {
-                const pt = keyPoints[key];
-                if (!pt || pt.x == null || pt.y == null) return null;
-                const p = toSvg(pt);
-                const isDragging = draggingKey === key;
-                const isPlacementTarget =
-                  placementMode && placementPointKey === key;
-                return (
-                  <g
-                    key={`pt-${key}`}
-                    style={{
-                      cursor: isDragging
-                        ? "grabbing"
-                        : placementMode
-                        ? "default"
-                        : "grab",
-                      pointerEvents: placementMode ? "none" : "all",
-                    }}
-                    onPointerDown={(e) => handlePointerDown(e, key)}
-                    onPointerMove={handlePointerMove}
-                    onPointerUp={handlePointerUp}
-                    onPointerCancel={handlePointerUp}
-                  >
-                    {/* Нативный tooltip при наведении (полное название + описание точки) */}
-                    <title>{`${pointFullLabel(key)}\n\n${hint}${antiHint ? "\n\n⚠ " + antiHint : ""}`}</title>
-                    {/* Пульсирующее кольцо для активной точки в режиме разметки */}
-                    {isPlacementTarget && (
-                      <circle
-                        cx={p.x}
-                        cy={p.y}
-                        r={pointRadius * 1.5}
-                        fill="none"
-                        stroke={color}
-                        strokeWidth={strokeWidth * 0.8}
-                        opacity={0.6}
-                      >
-                        <animate
-                          attributeName="r"
-                          values={`${pointRadius * 1.3};${pointRadius * 1.8};${pointRadius * 1.3}`}
-                          dur="1.5s"
-                          repeatCount="indefinite"
-                        />
-                        <animate
-                          attributeName="opacity"
-                          values="0.6;0.2;0.6"
-                          dur="1.5s"
-                          repeatCount="indefinite"
-                        />
-                      </circle>
-                    )}
-                    {/* Внешний ореол для видимости на тёмном фоне */}
-                    <circle
-                      cx={p.x}
-                      cy={p.y}
-                      r={pointRadius + 4}
-                      fill="rgba(0,0,0,0.25)"
-                    />
-                    {/* Белый кружок с цветным ободком */}
-                    <circle
-                      cx={p.x}
-                      cy={p.y}
-                      r={pointRadius}
-                      fill="rgba(255,255,255,0.95)"
+              {/* Линии между BB и каждой точкой */}
+              {keyPoints &&
+                POINT_CONFIG.map(({ key, color }) => {
+                  if (key === "bb") return null;
+                  const pt = keyPoints[key];
+                  if (!pt || pt.x == null || pt.y == null) return null;
+                  const bb = keyPoints.bb;
+                  if (!bb || bb.x == null || bb.y == null) return null;
+                  return (
+                    <line
+                      key={`line-${key}`}
+                      x1={bb.x * imgSize.w}
+                      y1={bb.y * imgSize.h}
+                      x2={pt.x * imgSize.w}
+                      y2={pt.y * imgSize.h}
                       stroke={color}
-                      strokeWidth={strokeWidth}
+                      strokeWidth={lineW}
+                      strokeDasharray={`${lineW * 2.5} ${lineW * 2}`}
+                      opacity={0.7}
+                      strokeLinecap="round"
                     />
-                    {/* Внутренняя точка для точности */}
-                    <circle
-                      cx={p.x}
-                      cy={p.y}
-                      r={strokeWidth * 0.6}
-                      fill={color}
+                  );
+                })}
+
+              {/* Линия колёсной базы rear → front */}
+              {keyPoints &&
+                keyPoints.rearAxle &&
+                keyPoints.frontAxle &&
+                keyPoints.rearAxle.x != null &&
+                keyPoints.frontAxle.x != null &&
+                (() => {
+                  return (
+                    <line
+                      x1={keyPoints.rearAxle!.x! * imgSize.w}
+                      y1={keyPoints.rearAxle!.y! * imgSize.h}
+                      x2={keyPoints.frontAxle!.x! * imgSize.w}
+                      y2={keyPoints.frontAxle!.y! * imgSize.h}
+                      stroke="#06b6d4"
+                      strokeWidth={lineW}
+                      strokeDasharray={`${lineW * 2.5} ${lineW * 2}`}
+                      opacity={0.6}
+                      strokeLinecap="round"
                     />
-                    {/* Подпись */}
-                    {showLabels && (
-                      <g pointerEvents="none">
-                        <text
-                          x={p.x}
-                          y={p.y + pointRadius + fontSize + 2}
-                          textAnchor="middle"
-                          fontSize={fontSize}
-                          fontWeight="bold"
-                          fill={color}
-                          stroke="black"
-                          strokeWidth={fontSize * 0.18}
-                          paintOrder="stroke"
+                  );
+                })()}
+
+              {/* Точки (кружки) + подписи */}
+              {keyPoints &&
+                POINT_CONFIG.map(({ key, label, color, hint, antiHint }) => {
+                  const pt = keyPoints[key];
+                  if (!pt || pt.x == null || pt.y == null) return null;
+                  const cx = pt.x * imgSize.w;
+                  const cy = pt.y * imgSize.h;
+                  const isDragging = draggingKey === key;
+                  const isPlacementTarget =
+                    placementMode && placementPointKey === key;
+                  return (
+                    <g
+                      key={`pt-${key}`}
+                      style={{
+                        cursor: isDragging ? "grabbing" : "grab",
+                        // В режиме разметки существующие точки не мешают прицеливанию
+                        pointerEvents: placementMode ? "none" : "all",
+                      }}
+                      onPointerDown={(e) => startPointDrag(e, key)}
+                    >
+                      {/* Нативный tooltip при наведении (полное название + описание точки) */}
+                      <title>{`${pointFullLabel(key)}\n\n${hint}${antiHint ? "\n\n⚠ " + antiHint : ""}`}</title>
+                      {/* Пульсирующее кольцо для активной точки в режиме разметки */}
+                      {isPlacementTarget && (
+                        <circle
+                          cx={cx}
+                          cy={cy}
+                          r={pointR * 1.5}
+                          fill="none"
+                          stroke={color}
+                          strokeWidth={strokeWidth * 0.8}
+                          opacity={0.6}
                         >
-                          {label}
-                        </text>
-                      </g>
-                    )}
-                  </g>
-                );
-              })}
+                          <animate
+                            attributeName="r"
+                            values={`${pointR * 1.3};${pointR * 1.8};${pointR * 1.3}`}
+                            dur="1.5s"
+                            repeatCount="indefinite"
+                          />
+                          <animate
+                            attributeName="opacity"
+                            values="0.6;0.2;0.6"
+                            dur="1.5s"
+                            repeatCount="indefinite"
+                          />
+                        </circle>
+                      )}
+                      {/* Невидимая хит-зона ≥48px — палец попадает с первого раза */}
+                      <circle cx={cx} cy={cy} r={hitR} fill="transparent" />
+                      {/* Внешний ореол для видимости на тёмном фоне */}
+                      <circle cx={cx} cy={cy} r={haloR} fill="rgba(0,0,0,0.25)" />
+                      {/* Белый кружок с цветным ободком */}
+                      <circle
+                        cx={cx}
+                        cy={cy}
+                        r={pointR}
+                        fill="rgba(255,255,255,0.95)"
+                        stroke={color}
+                        strokeWidth={strokeWidth}
+                      />
+                      {/* Внутренняя точка для точности */}
+                      <circle cx={cx} cy={cy} r={strokeWidth * 0.6} fill={color} />
+                      {/* Подпись */}
+                      {showLabels && (
+                        <g pointerEvents="none">
+                          <text
+                            x={cx}
+                            y={cy + pointR + fontSize + px(2)}
+                            textAnchor="middle"
+                            fontSize={fontSize}
+                            fontWeight="bold"
+                            fill={color}
+                            stroke="black"
+                            strokeWidth={fontSize * 0.18}
+                            paintOrder="stroke"
+                          >
+                            {label}
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  );
+                })}
 
-            {/* ===== ЛУПА (Magnifier) =====
-                Показывается при перетаскивании точки.
-                Радиус лупы — 6% от ширины фото (видимая область ~12% от ширины).
-                Зум 2.5x: показываем уменьшенную копию фото в 2.5x масштабе,
-                обрезанную по кругу.
-            */}
-            {draggingKey && cursorSvg && hasImage && (() => {
-              const magRadius = Math.max(50, imgSize.w * 0.06);
-              const zoom = 2.5;
-              // Лупа справа-сверху от курсора, не выходя за пределы фото
-              const offsetX = magRadius * 1.3;
-              const offsetY = -magRadius * 1.3;
-              let magCx = cursorSvg.x + offsetX;
-              let magCy = cursorSvg.y + offsetY;
-              // Если вылезает за правый край — слева от курсора
-              if (magCx + magRadius > imgSize.w) magCx = cursorSvg.x - offsetX;
-              // Если вылезает за верхний край — снизу от курсора
-              if (magCy - magRadius < 0) magCy = cursorSvg.y - offsetY;
+              {/* Призрак-перекрестие при двухфазной установке точки */}
+              {aimImg &&
+                placementMode &&
+                (() => {
+                  const cx = aimImg.x;
+                  const cy = aimImg.y;
+                  const r = px(14);
+                  return (
+                    <g pointerEvents="none">
+                      <circle cx={cx} cy={cy} r={r} fill="none" stroke={aimColor} strokeWidth={px(2.5)} opacity={0.9} />
+                      <line x1={cx - r * 1.5} y1={cy} x2={cx + r * 1.5} y2={cy} stroke={aimColor} strokeWidth={px(2)} opacity={0.9} />
+                      <line x1={cx} y1={cy - r * 1.5} x2={cx} y2={cy + r * 1.5} stroke={aimColor} strokeWidth={px(2)} opacity={0.9} />
+                      <circle cx={cx} cy={cy} r={px(2)} fill={aimColor} />
+                    </g>
+                  );
+                })()}
+            </g>
 
+            {/* ===== ЛУПА (вне зум-группы — постоянный экранный размер) =====
+                Радиус 56–84 ЭКРАННЫХ px, зум 2.5× поверх текущего вида,
+                центр НАД пальцем (палец её не перекрывает). */}
+            {loupe && (() => {
               return (
                 <g pointerEvents="none">
                   {/* Тень под лупой */}
-                  <circle
-                    cx={magCx}
-                    cy={magCy}
-                    r={magRadius + 4}
-                    fill="rgba(0,0,0,0.4)"
-                  />
+                  <circle cx={loupe.cx} cy={loupe.cy} r={magR + px(4)} fill="rgba(0,0,0,0.4)" />
                   {/* Белый фон */}
-                  <circle
-                    cx={magCx}
-                    cy={magCy}
-                    r={magRadius + 2}
-                    fill="white"
-                  />
-                  {/* Картинка в круге (zoom 2.5x) */}
-                  <clipPath id="mag-clip">
-                    <circle cx={magCx} cy={magCy} r={magRadius} />
-                  </clipPath>
+                  <circle cx={loupe.cx} cy={loupe.cy} r={magR + px(2)} fill="white" />
+                  {/* Картинка в круге (зум поверх вида) */}
                   <g clipPath="url(#mag-clip)">
                     <image
                       href={photoUrl}
-                      x={magCx - cursorSvg.x * zoom}
-                      y={magCy - cursorSvg.y * zoom}
-                      width={imgSize.w * zoom}
-                      height={imgSize.h * zoom}
+                      x={loupe.cx - loupe.cursorImg.x * loupe.zoom}
+                      y={loupe.cy - loupe.cursorImg.y * loupe.zoom}
+                      width={imgSize.w * loupe.zoom}
+                      height={imgSize.h * loupe.zoom}
                       preserveAspectRatio="xMidYMid meet"
                     />
                   </g>
                   {/* Ободок лупы */}
                   <circle
-                    cx={magCx}
-                    cy={magCy}
-                    r={magRadius}
+                    cx={loupe.cx}
+                    cy={loupe.cy}
+                    r={magR}
                     fill="none"
                     stroke="#0ea5e9"
-                    strokeWidth={Math.max(2, magRadius * 0.05)}
+                    strokeWidth={px(2.5)}
                   />
-                  {/* Перекрестие в центре лупы */}
+                  {/* Перекрестие в центре лупы = куда встанет точка */}
                   <line
-                    x1={magCx - 10}
-                    y1={magCy}
-                    x2={magCx + 10}
-                    y2={magCy}
+                    x1={loupe.cx - loupe.cross}
+                    y1={loupe.cy}
+                    x2={loupe.cx + loupe.cross}
+                    y2={loupe.cy}
                     stroke="#ef4444"
-                    strokeWidth={2}
+                    strokeWidth={px(2)}
                   />
                   <line
-                    x1={magCx}
-                    y1={magCy - 10}
-                    x2={magCx}
-                    y2={magCy + 10}
+                    x1={loupe.cx}
+                    y1={loupe.cy - loupe.cross}
+                    x2={loupe.cx}
+                    y2={loupe.cy + loupe.cross}
                     stroke="#ef4444"
-                    strokeWidth={2}
+                    strokeWidth={px(2)}
                   />
-                  <circle
-                    cx={magCx}
-                    cy={magCy}
-                    r={2}
-                    fill="#ef4444"
-                  />
+                  <circle cx={loupe.cx} cy={loupe.cy} r={px(2)} fill="#ef4444" />
                 </g>
               );
             })()}
@@ -538,17 +791,37 @@ export function InteractivePhoto({
         ) : (
           // Скелетон пока размеры не загрузились
           <div className="flex aspect-[3/2] w-full items-center justify-center">
-            <img
-              ref={imgRef}
-              src={photoUrl}
-              alt="Фото велосипеда"
-              className="hidden"
-              onLoad={(e) => {
-                const t = e.currentTarget;
-                setImgSize({ w: t.naturalWidth, h: t.naturalHeight });
-              }}
-            />
             <Loader2 className="size-8 animate-spin text-emerald-400" />
+          </div>
+        )}
+
+        {/* Кнопки зума (поверх фото, справа сверху) */}
+        {hasImage && (
+          <div className="absolute right-2 top-2 flex flex-col gap-1.5">
+            <button
+              type="button"
+              aria-label="Приблизить"
+              onClick={() => zoomButton(1.4)}
+              className="flex size-9 items-center justify-center rounded-lg bg-black/55 text-white backdrop-blur-sm active:bg-black/75"
+            >
+              <ZoomIn className="size-5" />
+            </button>
+            <button
+              type="button"
+              aria-label="Отдалить"
+              onClick={() => zoomButton(1 / 1.4)}
+              className="flex size-9 items-center justify-center rounded-lg bg-black/55 text-white backdrop-blur-sm active:bg-black/75"
+            >
+              <ZoomOut className="size-5" />
+            </button>
+            <button
+              type="button"
+              aria-label="Сбросить зум"
+              onClick={resetZoom}
+              className="flex size-9 items-center justify-center rounded-lg bg-black/55 text-white backdrop-blur-sm active:bg-black/75"
+            >
+              <Maximize className="size-5" />
+            </button>
           </div>
         )}
 
@@ -567,8 +840,8 @@ export function InteractivePhoto({
       {keyPoints && (
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Move className="size-3" />
-            Тяните точки мышкой — показывается лупа 2.5× для точности
+            <Move className="size-3 shrink-0" />
+            Щипок — зум · палец по пустому — панорама · лупа над пальцем
           </p>
           <button
             onClick={() => setShowLabels(!showLabels)}

@@ -38,6 +38,22 @@ export interface ReportViewInput {
   captureMeta?: CaptureMeta | null;
 }
 
+/** Данные калибровки шага 2 (фото велика + точки разметки) для отчёта. */
+export interface BikeCalibrationInput {
+  /** dataURL фото велика (уже сжат при сохранении в карточку) или null */
+  photo: string | null;
+  /** Точки разметки [0..1], ключи — BikeKeyPoints */
+  points: Record<string, { x: number; y: number } | null> | null;
+}
+
+/** Данные калибровки шага 2 (фото велика + точки разметки) для отчёта. */
+export interface BikeCalibrationInput {
+  /** dataURL фото велика (уже сжат при сохранении в карточку) или null */
+  photo: string | null;
+  /** Точки разметки [0..1], ключи — BikeKeyPoints */
+  points: Record<string, { x: number; y: number } | null> | null;
+}
+
 /** Контекст онбординга (из стора). body/bike — any-структуры, уходят в JSON как есть. */
 export interface FitReportContext {
   bikeType?: string | null;
@@ -72,6 +88,18 @@ export interface FitReport {
     /** Путь к фото в репозитории (заполняется при заливке на GitHub) */
     photoFile?: string | null;
   }>;
+  /**
+   * Калибровка шага 2 «Велосипед»: фото велика с боку + точки разметки,
+   * по которым считались SH/WB/WH (v1.14.15 — по запросу «НАДО ЧТОБЫ эти
+   * действия ТОЖЕ СОХРАНЯЛИСЬ»). Отсутствует, если калибровка не проводилась.
+   */
+  bikeCalibration?: {
+    /** JPEG dataURL фото велика (вырезается при заливке, см. photoFile) */
+    photo: string | null;
+    /** Путь к фото велика в репозитории */
+    photoFile?: string | null;
+    points: Record<string, { x: number; y: number } | null> | null;
+  } | null;
 }
 
 export type ReportSendResult = "shared" | "downloaded" | "cancelled";
@@ -110,10 +138,14 @@ async function photoToDataUrl(url: string, maxDim = 1280): Promise<string | null
   }
 }
 
-/** Сборка отчёта: JSON-строка + имя файла. Фото читаются параллельно. */
+/**
+ * Сборка отчёта: JSON-строка + имя файла. Фото читаются параллельно.
+ * calibration — данные шага 2 (фото велика + точки разметки), v1.14.15.
+ */
 export async function buildFitReport(
   views: ReportViewInput[],
   context: FitReportContext = {},
+  calibration?: BikeCalibrationInput | null,
 ): Promise<{ report: FitReport; json: string; filename: string }> {
   const viewsOut: FitReport["views"] = await Promise.all(
     views.map(async (v) => ({
@@ -133,6 +165,14 @@ export async function buildFitReport(
       photo: v.url ? await photoToDataUrl(v.url) : null,
     })),
   );
+
+  const calibOut: FitReport["bikeCalibration"] = calibration
+    ? {
+        photo: calibration.photo ? await photoToDataUrl(calibration.photo) : null,
+        photoFile: null,
+        points: calibration.points ?? null,
+      }
+    : null;
 
   const report: FitReport = {
     meta: {
@@ -154,6 +194,7 @@ export async function buildFitReport(
     },
     context,
     views: viewsOut,
+    ...(calibOut ? { bikeCalibration: calibOut } : {}),
   };
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);

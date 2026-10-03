@@ -24,7 +24,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { buildFitReport, sendReport, type ReportViewInput } from "@/lib/fit-report";
+import { buildFitReport, sendReport, type BikeCalibrationInput, type ReportViewInput } from "@/lib/fit-report";
+import { getActiveBike } from "@/lib/bike-storage";
 import { useBikeStore } from "@/lib/bike-store";
 
 interface DebugReportCardProps {
@@ -44,17 +45,50 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
   // считался анализ (тип вела, рост/inseam, размеры рамы, жалобы)
   const { bikeType, goal, complaints, body, bike } = useBikeStore();
 
+  // Калибровка шага 2 (v1.14.15): фото велика + точки разметки из карточки
+  // активного велика (bikefit-bikes). «НАДО ЧТОБЫ эти действия ТОЖЕ
+  // СОХРАНЯЛИСЬ» — теперь уходят в отчёт вместе с фото позы.
+  const calibration: BikeCalibrationInput | null = (() => {
+    try {
+      const b = getActiveBike();
+      if (!b || (!b.photoData && !b.keyPointsData)) return null;
+      let points: BikeCalibrationInput["points"] = null;
+      if (b.keyPointsData) {
+        const parsed = JSON.parse(b.keyPointsData) as Record<
+          string,
+          { x: number | null; y: number | null } | null
+        >;
+        // оставляем только валидные точки (x/y числа)
+        const clean: Record<string, { x: number; y: number } | null> = {};
+        for (const [k, v] of Object.entries(parsed)) {
+          clean[k] =
+            v && typeof v.x === "number" && typeof v.y === "number"
+              ? { x: v.x, y: v.y }
+              : null;
+        }
+        points = clean;
+      }
+      return { photo: b.photoData ?? null, points };
+    } catch {
+      return null;
+    }
+  })();
+
   const handleSend = async () => {
     setBusy(true);
     setStatus({ tone: "info", text: "Отправляем отчёт на GitHub…" });
     try {
-      const { report, json, filename } = await buildFitReport(views, {
-        bikeType,
-        goal,
-        complaints,
-        body,
-        bike,
-      });
+      const { report, json, filename } = await buildFitReport(
+        views,
+        {
+          bikeType,
+          goal,
+          complaints,
+          body,
+          bike,
+        },
+        calibration,
+      );
 
       try {
         const res = await fetch("/api/report-upload", {
