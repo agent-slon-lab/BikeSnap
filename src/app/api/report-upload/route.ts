@@ -11,6 +11,14 @@ import { uploadReportToGithub } from "@/lib/report-upload";
 
 export const runtime = "nodejs";
 
+/**
+ * Vercel/serverless: заливка отчёта — до 3 фото + JSON + issue строго
+ * последовательно; локально это 3–4 с, но на холодной лямбде с задержками
+ * до api.github.com может подбираться к дефолтным 10 с Hobby-плана.
+ * 60 с — максимум Hobby: запас, чтобы фото с телефона не рвались по таймауту.
+ */
+export const maxDuration = 60;
+
 /** Имя файла ограничиваем — уйдёт в путь к репозиторию. */
 const SAFE_NAME = /^[\w.\-]{1,120}$/;
 
