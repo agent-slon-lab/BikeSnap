@@ -1,0 +1,327 @@
+{
+  "meta": {
+    "app": "BikeSnap",
+    "version": "v1.14.13",
+    "createdAt": "2026-10-03T03:53:55.192Z",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+    "screen": "2560x1440",
+    "viewport": "1920x959",
+    "orientation": "landscape",
+    "language": "ru-RU"
+  },
+  "context": {
+    "bikeType": "mtb",
+    "goal": "comfort",
+    "complaints": [
+      "none"
+    ],
+    "body": {
+      "height": 180,
+      "inseam": 80,
+      "footLength": 28,
+      "flexibility": 3
+    },
+    "bike": {
+      "saddleHeight": 690,
+      "ett": 580,
+      "stem": 80,
+      "stemAngle": 15,
+      "crank": 175,
+      "wheelHeight": 334,
+      "wheelbase": 1080
+    }
+  },
+  "views": [
+    {
+      "view": "side",
+      "analyzed": true,
+      "error": null,
+      "landmarksCount": 33,
+      "landmarks": [
+        {
+          "x": 0.399,
+          "y": 0.2271,
+          "visibility": 0.9988
+        },
+        {
+          "x": 0.3958,
+          "y": 0.212,
+          "visibility": 0.9988
+        },
+        {
+          "x": 0.3966,
+          "y": 0.2098,
+          "visibility": 0.9988
+        },
+        {
+          "x": 0.3989,
+          "y": 0.2061,
+          "visibility": 0.999
+        },
+        {
+          "x": 0.3946,
+          "y": 0.2146,
+          "visibility": 0.9985
+        },
+        {
+          "x": 0.3946,
+          "y": 0.2144,
+          "visibility": 0.9985
+        },
+        {
+          "x": 0.3946,
+          "y": 0.2139,
+          "visibility": 0.9989
+        },
+        {
+          "x": 0.4126,
+          "y": 0.1916,
+          "visibility": 0.9981
+        },
+        {
+          "x": 0.4075,
+          "y": 0.2031,
+          "visibility": 0.9982
+        },
+        {
+          "x": 0.41,
+          "y": 0.2322,
+          "visibility": 0.9986
+        },
+        {
+          "x": 0.4103,
+          "y": 0.2375,
+          "visibility": 0.9982
+        },
+        {
+          "x": 0.4569,
+          "y": 0.2065,
+          "visibility": 1
+        },
+        {
+          "x": 0.4604,
+          "y": 0.2432,
+          "visibility": 0.9999
+        },
+        {
+          "x": 0.435,
+          "y": 0.3142,
+          "visibility": 0.9949
+        },
+        {
+          "x": 0.4472,
+          "y": 0.3502,
+          "visibility": 0.3115
+        },
+        {
+          "x": 0.362,
+          "y": 0.4089,
+          "visibility": 0.9893
+        },
+        {
+          "x": 0.3867,
+          "y": 0.4436,
+          "visibility": 0.421
+        },
+        {
+          "x": 0.3474,
+          "y": 0.4322,
+          "visibility": 0.9799
+        },
+        {
+          "x": 0.3719,
+          "y": 0.4591,
+          "visibility": 0.3993
+        },
+        {
+          "x": 0.3415,
+          "y": 0.4232,
+          "visibility": 0.9772
+        },
+        {
+          "x": 0.3536,
+          "y": 0.4572,
+          "visibility": 0.4154
+        },
+        {
+          "x": 0.3481,
+          "y": 0.4147,
+          "visibility": 0.9604
+        },
+        {
+          "x": 0.372,
+          "y": 0.4528,
+          "visibility": 0.4126
+        },
+        {
+          "x": 0.531,
+          "y": 0.4214,
+          "visibility": 0.9999
+        },
+        {
+          "x": 0.5247,
+          "y": 0.4315,
+          "visibility": 0.9998
+        },
+        {
+          "x": 0.5042,
+          "y": 0.6038,
+          "visibility": 0.9766
+        },
+        {
+          "x": 0.4925,
+          "y": 0.5698,
+          "visibility": 0.1202
+        },
+        {
+          "x": 0.5201,
+          "y": 0.7829,
+          "visibility": 0.969
+        },
+        {
+          "x": 0.5029,
+          "y": 0.72,
+          "visibility": 0.2283
+        },
+        {
+          "x": 0.5315,
+          "y": 0.8055,
+          "visibility": 0.9495
+        },
+        {
+          "x": 0.5175,
+          "y": 0.7449,
+          "visibility": 0.422
+        },
+        {
+          "x": 0.4703,
+          "y": 0.8199,
+          "visibility": 0.9795
+        },
+        {
+          "x": 0.46,
+          "y": 0.7502,
+          "visibility": 0.5403
+        }
+      ],
+      "analysis": {
+        "kneeAngle": {
+          "value": 166.6,
+          "min": 25,
+          "max": 35,
+          "status": "bad",
+          "label": "Угол колена",
+          "description": "Угол сгиба колена в нижней точке педалирования. Влияет на мощность и нагрузку на сустав.",
+          "recommendation": "Ошибка распознавания позы или экстремальная настройка — проверьте кадр: НМТ должна быть снята в нижней фазе педалирования.",
+          "color": {
+            "text": "text-rose-600 dark:text-rose-400",
+            "bg": "bg-rose-50 dark:bg-rose-950/40",
+            "border": "border-rose-200 dark:border-rose-900",
+            "ring": "ring-rose-500/30"
+          }
+        },
+        "hipAngle": {
+          "value": 152.6,
+          "min": 40,
+          "max": 55,
+          "status": "bad",
+          "label": "Угол бедра",
+          "description": "Угол между корпусом и бедром. Определяет закрытость тазобедренного сустава.",
+          "recommendation": "Бедро слишком открыто — уменьшите дистанцию седло-руль.",
+          "color": {
+            "text": "text-rose-600 dark:text-rose-400",
+            "bg": "bg-rose-50 dark:bg-rose-950/40",
+            "border": "border-rose-200 dark:border-rose-900",
+            "ring": "ring-rose-500/30"
+          }
+        },
+        "backAngle": {
+          "value": 71,
+          "min": 30,
+          "max": 55,
+          "status": "bad",
+          "label": "Наклон корпуса",
+          "description": "Угол наклона спины относительно горизонта. Меньше = более вертикально (комфорт), больше = более аэродинамично.",
+          "recommendation": "Спина слишком горизонтальная — поднимите вынос руля или сдвиньте седло вперёд для комфорта.",
+          "color": {
+            "text": "text-rose-600 dark:text-rose-400",
+            "bg": "bg-rose-50 dark:bg-rose-950/40",
+            "border": "border-rose-200 dark:border-rose-900",
+            "ring": "ring-rose-500/30"
+          }
+        },
+        "ankleAngle": {
+          "value": 158.3,
+          "min": 90,
+          "max": 110,
+          "status": "bad",
+          "label": "Угол голеностопа",
+          "description": "Угол сгиба стопы. Влияет на эффективность передачи мощности на педаль.",
+          "recommendation": "Стопа слишком поднята — опустите носок шипа или поработайте над гибкостью икры.",
+          "color": {
+            "text": "text-rose-600 dark:text-rose-400",
+            "bg": "bg-rose-50 dark:bg-rose-950/40",
+            "border": "border-rose-200 dark:border-rose-900",
+            "ring": "ring-rose-500/30"
+          }
+        },
+        "shoulderAngle": {
+          "value": 30.5,
+          "min": 70,
+          "max": 100,
+          "status": "bad",
+          "label": "Угол плеча",
+          "description": "Угол между плечом и корпусом. Характеризует положение рук на руле.",
+          "recommendation": "Руки слишком опущены — поднимите руль или используйте более короткий вынос.",
+          "color": {
+            "text": "text-rose-600 dark:text-rose-400",
+            "bg": "bg-rose-50 dark:bg-rose-950/40",
+            "border": "border-rose-200 dark:border-rose-900",
+            "ring": "ring-rose-500/30"
+          }
+        },
+        "kops": {
+          "value": 1.6,
+          "min": 0,
+          "max": 3,
+          "status": "good",
+          "label": "KOPS (колено над осью педали, у.е.)",
+          "description": "Горизонтальное смещение колена относительно оси педали. Идеал — колено ровно над осью (норма ±10 мм).",
+          "recommendation": "Отличное положение колена над осью педали.",
+          "color": {
+            "text": "text-emerald-600 dark:text-emerald-400",
+            "bg": "bg-emerald-50 dark:bg-emerald-950/40",
+            "border": "border-emerald-200 dark:border-emerald-900",
+            "ring": "ring-emerald-500/30"
+          }
+        },
+        "side": "left"
+      },
+      "captureMeta": null,
+      "photo": null,
+      "photoFile": "user-reports/2026-10-03/bikesnap-report-v1.14.13-2026-10-03T03-53-55-photo-side.jpg"
+    },
+    {
+      "view": "back",
+      "analyzed": false,
+      "error": null,
+      "landmarksCount": 0,
+      "landmarks": null,
+      "analysis": null,
+      "captureMeta": null,
+      "photo": null,
+      "photoFile": null
+    },
+    {
+      "view": "front",
+      "analyzed": false,
+      "error": null,
+      "landmarksCount": 0,
+      "landmarks": null,
+      "analysis": null,
+      "captureMeta": null,
+      "photo": null,
+      "photoFile": null
+    }
+  ]
+}
