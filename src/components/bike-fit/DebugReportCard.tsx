@@ -1,22 +1,21 @@
 "use client";
 
 /**
- * КАРТОЧКА «ОТЧЁТ ДЛЯ ОТЛАДКИ» (v2.0.0)
+ * КАРТОЧКА «ОТЧЁТ ДЛЯ ОТЛАДКИ» (v3.0.0)
  * Идея пользователя: «создай на гите issue и когда пользов отправляет отчет
  * из анализа, то он автоматом там формируется и заливается на гит. а ты гит
  * мониторишь, скачиваешь и анализируешь и правишь».
  *
- * Одна кнопка «Отправить отчёт» делает всё:
- *   1. Заливает фото и JSON в user-reports/ репозитория BikeSnap (Contents API).
- *   2. Создаёт issue со сводкой (версия, ошибки, гироскоп, ссылки на файлы).
- *   3. Фолбэк/бонус: системное «Поделиться» файлом .json или скачивание.
- *
- * Репозиторий открытый — фото и данные отчёта публикуются. Токен вшит в
- * сборку (NEXT_PUBLIC_GITHUB_TOKEN, fine-grained PAT одного репозитория).
+ * v3.0.0 (по жалобе «мне все также предлагают скачать файл, а надо чтобы
+ * просто отправлялось на гит»): отправка идёт через серверный релей
+ * /api/report-upload → GitHub (issue + файлы в user-reports/). ПРИ УСПЕХЕ
+ * никаких системных диалогов «поделиться/скачать» не появляется — только
+ * статус со ссылкой на issue. Скачивание копии — отдельная явная кнопка,
+ * которая возникает, только если заливка не удалась.
  */
 
 import { useState } from "react";
-import { Send, FileJson } from "lucide-react";
+import { Send, FileJson, Download } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -26,7 +25,6 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { buildFitReport, sendReport, type ReportViewInput } from "@/lib/fit-report";
-import { githubConfigured, uploadReportToGithub, type GithubUploadResult } from "@/lib/report-upload";
 import { useBikeStore } from "@/lib/bike-store";
 
 interface DebugReportCardProps {
@@ -35,22 +33,20 @@ interface DebugReportCardProps {
 
 type Status = { tone: "info" | "ok" | "error"; text: string; link?: string } | null;
 
+/** Копия отчёта, отложенная для явного скачивания при сбое заливки. */
+type PendingCopy = { json: string; filename: string } | null;
+
 export function DebugReportCard({ views }: DebugReportCardProps) {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<Status>(null);
+  const [pendingCopy, setPendingCopy] = useState<PendingCopy>(null);
   // Контекст онбординга — уходит в отчёт, чтобы я видел, в каких условиях
   // считался анализ (тип вела, рост/inseam, размеры рамы, жалобы)
   const { bikeType, goal, complaints, body, bike } = useBikeStore();
 
   const handleSend = async () => {
     setBusy(true);
-    const canGithub = githubConfigured();
-    setStatus({
-      tone: "info",
-      text: canGithub
-        ? "Собираем отчёт и заливаем на GitHub…"
-        : "Готовим отчёт — упаковываем фото и данные…",
-    });
+    setStatus({ tone: "info", text: "Отправляем отчёт на GitHub…" });
     try {
       const { report, json, filename } = await buildFitReport(views, {
         bikeType,
@@ -60,54 +56,42 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
         bike,
       });
 
-      // 1. GitHub: файлы в user-reports/ + issue. Ошибка не останавливает
-      //    локальную доставку — отчёт всё равно уйдёт в share/скачивание.
-      let gh: GithubUploadResult | null = null;
-      let ghError: string | null = null;
-      if (canGithub) {
-        try {
-          gh = await uploadReportToGithub(report, json, filename);
-        } catch (e) {
-          ghError = e instanceof Error ? e.message : String(e);
-        }
-      }
-
-      // 2. Локальная копия пользователю (share-меню на телефоне / файл на десктопе)
-      const local = await sendReport(json, filename);
-
-      if (gh) {
-        const localNote =
-          local === "shared"
-            ? " Копия — в меню «Поделиться»."
-            : local === "downloaded"
-              ? ` Копия сохранена в «Загрузки»: ${filename}.`
-              : "";
-        setStatus({
-          tone: ghError ? "error" : "ok",
-          text: ghError
-            ? `Issue #${gh.issueNumber} создан, но часть файлов не долилась: ${ghError}`
-            : `Готово: issue #${gh.issueNumber}, файлов ${gh.files.length} в user-reports/. Разработчик увидит отчёт в GitHub.${localNote}`,
-          link: gh.issueUrl,
+      try {
+        const res = await fetch("/api/report-upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ report, filename }),
         });
-      } else {
-        if (canGithub && ghError) {
-          setStatus({
-            tone: "error",
-            text: `На GitHub не вышло: ${ghError}. Отчёт собран локально — отправьте его вручную.`,
-          });
-        } else if (local === "shared") {
-          setStatus({
-            tone: "ok",
-            text: "Отчёт собран — отправьте его через выбранное приложение.",
-          });
-        } else if (local === "downloaded") {
+        const data = (await res.json().catch(() => ({}))) as {
+          issueNumber?: number;
+          issueUrl?: string;
+          files?: string[];
+          error?: string;
+        };
+        if (res.ok && data.issueUrl && typeof data.issueNumber === "number") {
+          setPendingCopy(null);
           setStatus({
             tone: "ok",
-            text: `Отчёт сохранён в «Загрузки»: ${filename}.`,
+            text: `Готово: issue #${data.issueNumber}, файлов в репозитории ${
+              data.files?.length ?? 0
+            }. Отчёт лежит на GitHub — разработчик его разберёт.`,
+            link: data.issueUrl,
           });
         } else {
-          setStatus(null); // пользователь закрыл системное меню — молча
+          setPendingCopy({ json, filename });
+          setStatus({
+            tone: "error",
+            text: `На GitHub не ушло: ${data.error ?? `HTTP ${res.status}`}. Можно скачать копию кнопкой ниже и передать вручную.`,
+          });
         }
+      } catch (netErr) {
+        setPendingCopy({ json, filename });
+        setStatus({
+          tone: "error",
+          text: `Сервер недоступен: ${
+            netErr instanceof Error ? netErr.message : String(netErr)
+          }. Можно скачать копию кнопкой ниже и передать вручную.`,
+        });
       }
     } catch (e) {
       setStatus({
@@ -119,6 +103,20 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
     }
   };
 
+  const handleDownloadCopy = async () => {
+    if (!pendingCopy) return;
+    const result = await sendReport(pendingCopy.json, pendingCopy.filename);
+    setStatus({
+      tone: "ok",
+      text:
+        result === "shared"
+          ? "Копия открыта в меню «Поделиться»."
+          : result === "downloaded"
+            ? `Копия сохранена в «Загрузки»: ${pendingCopy.filename}.`
+            : "Копия готова — отправьте её разработчику.",
+    });
+  };
+
   return (
     <Card className="border-dashed bg-muted/30">
       <CardHeader className="pb-3">
@@ -128,9 +126,9 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
         </CardTitle>
         <CardDescription>
           Фото, найденные точки тела, результат анализа (или ошибка) и положение
-          телефона в момент снимка. Отправка заливает отчёт на GitHub — issue + файлы
-          в user-reports/, — разработчик разбирает его там же. Репозиторий
-          открытый: фото и данные будут видны публично.
+          телефона в момент снимка. Отправка заливает отчёт на GitHub — issue +
+          файлы в user-reports/ — и на этом всё: никаких диалогов и скачиваний.
+          Репозиторий открытый: фото и данные будут видны публично.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -142,12 +140,19 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
           className="w-full sm:w-auto border-orange-300 text-orange-600 hover:bg-orange-50 hover:text-orange-700 dark:border-orange-800 dark:text-orange-400 dark:hover:bg-orange-950/40"
         >
           <Send className="size-4" />
-          {busy
-            ? "Отправляем…"
-            : githubConfigured()
-              ? "Отправить отчёт на GitHub"
-              : "Отправить отчёт разработчику"}
+          {busy ? "Отправляем…" : "Отправить отчёт на GitHub"}
         </Button>
+        {pendingCopy && !busy && (
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={handleDownloadCopy}
+            className="mt-2 w-full sm:w-auto text-muted-foreground"
+          >
+            <Download className="size-4" />
+            Скачать копию отчёта
+          </Button>
+        )}
         {status && (
           <p
             className={

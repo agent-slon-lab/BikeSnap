@@ -1,31 +1,29 @@
 /**
- * ЗАЛИВКА ОТЧЁТА НА GITHUB (v1.0.0)
+ * ЗАЛИВКА ОТЧЁТА НА GITHUB (v2.0.0 — серверный релей)
  * ===========================================================================
- * Идея пользователя: «создай на гите issue и когда пользов отправляет отчёт
+ * Идея пользователя: «создай на гите issue и когда пользов отправляет отчет
  * из анализа, то он автоматом там формируется и заливается на гит. а ты гит
  * мониторишь, скачиваешь и анализируешь и правишь».
  *
+ * v2.0.0: код выполняется ТОЛЬКО НА СЕРВЕРЕ (импортируется из API-роута
+ * /api/report-upload). Браузер шлёт отчёт на свой же origin, релей делает
+ * вызовы GitHub API — никаких CORS и никакого токена в клиентском бандле.
+ *
  * Что делает:
  *   1. Фото каждого ракурса (JPEG dataURL) → отдельным файлом в
- *      user-reports/ репозитория через Contents API (бинарник в base64).
- *   2. JSON отчёта (с НУЛЁМ вместо фото + ссылками на фото-файлы) →
- *      user-reports/<filename>.
- *   3. Issue с человекочитаемой сводкой (версия, ошибки, гироскоп, ссылки
- *      на файлы). Фото в issue не дублируем — тело ограничено 65к символов.
+ *      user-reports/<дата>/ через Contents API (base64).
+ *   2. JSON отчёта (с НУЛЁМ вместо фото + photoFile-ссылками) → рядом.
+ *   3. Issue с человекочитаемой сводкой (версия, ошибки, гироскоп, ссылки).
  *
- * Конфиг из окружения на этапе сборки:
- *   NEXT_PUBLIC_GITHUB_TOKEN — fine-grained PAT (Contents+Issues write)
- *   NEXT_PUBLIC_GITHUB_REPO  — "owner/name", по умолчанию BikeSnap
- *
- * Приватность: репозиторий ОТКРЫТЫЙ — загруженные фото и данные видны всем.
- * Токен вшивается в бандл — это осознанное решение для личного инструмента,
- * PAT ограничен одним репозиторием.
+ * Конфиг: GITHUB_TOKEN (server env) / NEXT_PUBLIC_GITHUB_TOKEN (fallback),
+ * NEXT_PUBLIC_GITHUB_REPO — "owner/name".
  */
 
 import type { FitReport } from "@/lib/fit-report";
 
 const REPO = process.env.NEXT_PUBLIC_GITHUB_REPO || "agent-slon-lab/BikeSnap";
-const TOKEN = process.env.NEXT_PUBLIC_GITHUB_TOKEN || "";
+const TOKEN =
+  process.env.GITHUB_TOKEN || process.env.NEXT_PUBLIC_GITHUB_TOKEN || "";
 const API = "https://api.github.com";
 const DIR = "user-reports";
 const LABEL = "auto-report";
@@ -37,12 +35,16 @@ export interface GithubUploadResult {
   files: string[];
 }
 
-class GithubError extends Error {
+export class GithubError extends Error {
   status: number;
   constructor(status: number, message: string) {
     super(message);
     this.status = status;
   }
+}
+
+export function githubConfigured(): boolean {
+  return TOKEN.length > 0;
 }
 
 function apiHeaders(): HeadersInit {
@@ -102,7 +104,6 @@ function sanitize(s: string): string {
 
 /**
  * PUT Contents API: создаёт файл. Если имя занято (422) — добавляет -2, -3…
- * Возвращает путь к файлу и html-ссылку.
  */
 async function putFile(
   path: string,
@@ -130,29 +131,30 @@ async function putFile(
   }
 }
 
-export function githubConfigured(): boolean {
-  return TOKEN.length > 0;
-}
-
 /**
  * Полная заливка: фото → JSON → issue. Последовательно, чтобы коммиты
- * не конкурировали за ref.
+ * не конкурировали за ref. filename — от клиента; проверяется роутом.
  */
 export async function uploadReportToGithub(
   report: FitReport,
-  json: string,
-  filename: string,
+  filename?: string,
 ): Promise<GithubUploadResult> {
   if (!githubConfigured()) {
-    throw new GithubError(0, "токен GitHub не настроен в сборке приложения");
+    throw new GithubError(0, "токен GitHub не настроен на сервере (.env)");
   }
 
-  const base = filename.replace(/\.json$/i, "");
+  const fname =
+    filename ||
+    `bikesnap-report-${report.meta.version}-${new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")
+      .slice(0, 19)}.json`;
+  const base = fname.replace(/\.json$/i, "");
   const stamp = new Date(report.meta.createdAt);
   const dateStamp = `${stamp.getFullYear()}-${String(stamp.getMonth() + 1).padStart(2, "0")}-${String(stamp.getDate()).padStart(2, "0")}`;
   const commitMsg = `report: авто-отчёт из приложения (${report.meta.version})`;
 
-  // 1. Фото отдельно (Contents API любит файлы поменьше, JSON легче без base64)
+  // 1. Фото отдельно — JSON легче без base64, фото удобно смотреть в репо
   const photoFiles: Array<{ path: string; htmlUrl: string; view: string }> = [];
   const jsonViews = report.views.map((v) => {
     if (!v.photo) return { ...v, photo: null as string | null, photoFile: null };
@@ -162,23 +164,26 @@ export async function uploadReportToGithub(
   });
 
   for (const v of jsonViews) {
-    const pending = (v as { pendingPhoto?: { ext: string; payload: string } }).pendingPhoto;
+    const pending = (v as { pendingPhoto?: { ext: string; payload: string } })
+      .pendingPhoto;
     if (!pending) continue;
     const viewTag = sanitize(v.view);
     const up = await putFile(
-      `${DIR}/${dateStamp}/${base}-photo-${viewTag}.${pending.ext === "jpeg" ? "jpg" : pending.ext}`,
+      `${DIR}/${dateStamp}/${base}-photo-${viewTag}.${
+        pending.ext === "jpeg" ? "jpg" : pending.ext
+      }`,
       pending.payload,
       commitMsg,
     );
     photoFiles.push({ path: up.path, htmlUrl: up.htmlUrl, view: v.view });
-    (v as { photoFile?: string; pendingPhoto?: unknown }).photoFile = up.path;
+    (v as { photoFile?: string }).photoFile = up.path;
     delete (v as { pendingPhoto?: unknown }).pendingPhoto;
   }
 
-  // 2. JSON отчёта (фото уже вырезаны, проставлены photoFile)
+  // 2. JSON отчёта (фото вырезаны, проставлены photoFile)
   const reportForRepo: FitReport = { ...report, views: jsonViews };
   const jsonUpload = await putFile(
-    `${DIR}/${dateStamp}/${filename}`,
+    `${DIR}/${dateStamp}/${fname}`,
     utf8ToBase64(JSON.stringify(reportForRepo, null, 2)),
     commitMsg,
   );
@@ -206,16 +211,17 @@ export async function uploadReportToGithub(
   });
 
   const viewsMd = report.views
-    .map((v, i) => {
+    .map((v) => {
       const gyro = v.captureMeta?.gyroSupported
-        ? `, гироскоп pitch ${Math.round(v.captureMeta.pitch)}° roll ${Math.round(v.captureMeta.roll)}°`
+        ? `, гироскоп pitch ${Math.round(v.captureMeta.pitch)}° roll ${Math.round(
+            v.captureMeta.roll,
+          )}°`
         : "";
-      const line = v.error
+      return v.error
         ? `- **${v.view}**: ОШИБКА — ${v.error.slice(0, 300)}${gyro}`
         : v.analyzed
           ? `- **${v.view}**: анализ OK, точек ${v.landmarksCount}${gyro}`
           : `- **${v.view}**: без анализа, точек ${v.landmarksCount}${gyro}`;
-      return i === 0 ? line : line;
     })
     .join("\n");
 
@@ -253,26 +259,32 @@ export async function uploadReportToGithub(
 
   let issue: { number: number; html_url: string };
   try {
-    issue = await api<{ number: number; html_url: string }>(`/repos/${REPO}/issues`, {
-      method: "POST",
-      headers: apiHeaders(),
-      body: JSON.stringify({
-        title: `Отчёт ${report.meta.version} — ${when} — ${status}`,
-        body,
-        labels: [LABEL],
-      }),
-    });
-  } catch (e) {
-    // метки нет/не назначилась — повторяем без labels
-    if (e instanceof GithubError && (e.status === 422 || e.status === 403)) {
-      issue = await api<{ number: number; html_url: string }>(`/repos/${REPO}/issues`, {
+    issue = await api<{ number: number; html_url: string }>(
+      `/repos/${REPO}/issues`,
+      {
         method: "POST",
         headers: apiHeaders(),
         body: JSON.stringify({
           title: `Отчёт ${report.meta.version} — ${when} — ${status}`,
           body,
+          labels: [LABEL],
         }),
-      });
+      },
+    );
+  } catch (e) {
+    // метка не создалась/не назначилась — повторяем без labels
+    if (e instanceof GithubError && (e.status === 422 || e.status === 403)) {
+      issue = await api<{ number: number; html_url: string }>(
+        `/repos/${REPO}/issues`,
+        {
+          method: "POST",
+          headers: apiHeaders(),
+          body: JSON.stringify({
+            title: `Отчёт ${report.meta.version} — ${when} — ${status}`,
+            body,
+          }),
+        },
+      );
     } else {
       throw e;
     }
