@@ -1,6 +1,6 @@
 {
   "name": "bikesnap",
-  "version": "1.14.18",
+  "version": "1.14.19",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",

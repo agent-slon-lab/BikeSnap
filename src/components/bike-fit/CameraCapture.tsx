@@ -39,11 +39,14 @@
  *    не изменился, Pitch-подсказка переформулирована ориентационно-нейтрально
  *    (в ландшафте «телефон вертикально» читается как «положи набок»).
  *
- * Оверлей:
- *  - эллипсы колёс с процентом круглости (зелёный ≥ 88% — снимай);
- *  - линия осей между колёсами + её завал к горизонту (то же выравнивание,
- *    которое потом молча сделает ядро);
- *  - линия горизонта по гироскопу (если датчик доступен).
+ * Оверлей (v1.8.0 «статичный трафарет» — идея пользователя):
+ *  - на экране ВСЕГДА статичный трафарет: линия земли + два круга колёс;
+ *    пользователь сам подгоняет велик под него — дрожащие найденные эллипсы
+ *    больше не рисуются в принципе;
+ *  - трафарет вращается вместе с гироскоп-горизонтом (земля остаётся уровнем);
+ *  - живая детекция под трафаретом гоняет только: светофор
+ *    красный/жёлтый/зелёный в углу видоискателя, подсказки (через защёлку
+ *    с выдержкой — читаются спокойно) и авто-спуск.
  *
  * Детектор — src/lib/wheel-detect.ts (чистый TS, ~1-2 мс на кадр 320px).
  */
@@ -59,7 +62,6 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   detectWheels,
-  type DetectedEllipse,
   type WheelDetectResult,
   type WheelDetectStatus,
 } from "@/lib/wheel-detect";
@@ -86,8 +88,23 @@ interface CameraCaptureProps {
 const PROC_WIDTH = 320;
 /** Период обработки кадров, мс */
 const PROC_INTERVAL_MS = 280;
-/** Коэффициент сглаживания детекций (EMA) — меньше = плавнее, но инертнее */
-const SMOOTH_ALPHA = 0.45;
+/** Сглаживание круглости (EMA) — меньше = плавнее, но инертнее.
+ *  Сглаживается только ЧИСЛО (светофор/условия спуска) — рисунка
+ *  найденных эллипсов больше нет, так что дрожать нечему. */
+const ROUNDNESS_SMOOTH_ALPHA = 0.35;
+/** Новый текст подсказки должен продержаться столько, чтобы сменить текущий —
+ *  иначе мерцание кадров детектора мгновенно перелистывает тексты. */
+const HINT_STABLE_MS = 1200;
+/** Текущая подсказка висит минимум столько — иначе её не успеть прочитать. */
+const HINT_MIN_DISPLAY_MS = 2600;
+/** Стартовая подсказка (совпадает с детекторной «none») */
+const HINT_START = "Наведите камеру на велосипед — оба колеса должны быть полностью в кадре";
+/** Трафарет: радиус круга колеса, доля меньшей стороны кадра на экране */
+const TEMPLATE_WHEEL_R = 0.14;
+/** Трафарет: расстояние между центрами колёс в радиусах (база/диаметр ≈ 1.5) */
+const TEMPLATE_WHEEL_GAP_R = 3.0;
+/** Трафарет: высота линии земли, доля высоты кадра */
+const TEMPLATE_GROUND_Y = 0.78;
 
 /** Порог круглости для АВТО-спуска — строгое «идеально» (планка ok-статуса 0.88) */
 const AUTO_ROUNDNESS = 0.9;
@@ -105,10 +122,8 @@ const PITCH_TOLERANCE_DEG = 8;
 
 interface OverlayState {
   status: WheelDetectStatus;
-  wheels: DetectedEllipse[];
+  /** круглость пары, сглаженная EMA — светофор не мигает */
   roundness: number;
-  axleTiltDeg: number;
-  hint: string;
 }
 
 export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCaptureProps) {
@@ -122,14 +137,23 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
   const procCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const smoothRef = useRef<DetectedEllipse[]>([]);
+  const roundSmoothRef = useRef(0);
   const busyRef = useRef(false);
 
   const [error, setError] = useState<string | null>(null);
   const [facing, setFacing] = useState<"environment" | "user">("environment");
   const [overlay, setOverlay] = useState<OverlayState | null>(null);
+  const [hintText, setHintText] = useState(HINT_START);
   const [videoReady, setVideoReady] = useState(false);
   const [shot, setShot] = useState(false);
+
+  // Защёлка подсказок: показанный текст / кандидат / время показа
+  const hintMachineRef = useRef({
+    shown: HINT_START,
+    shownAt: 0,
+    candidate: "",
+    candidateSince: 0,
+  });
 
   // Гироскоп активен только пока видоискатель открыт (переоткрытие модалки
   // пересоздаёт подписку; iOS помнит выданное разрешение для origin)
@@ -205,7 +229,14 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
     setOverlay(null);
     setVideoReady(false);
     setShot(false);
-    smoothRef.current = [];
+    roundSmoothRef.current = 0;
+    hintMachineRef.current = {
+      shown: HINT_START,
+      shownAt: performance.now(),
+      candidate: "",
+      candidateSince: 0,
+    };
+    setHintText(HINT_START);
     busyRef.current = false;
 
     const start = async () => {
@@ -261,15 +292,36 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
   // ============================================================
 
   const applyResult = useCallback((result: WheelDetectResult) => {
-    const smoothed = smoothDetections(result.wheels, smoothRef.current);
-    smoothRef.current = smoothed;
-    setOverlay({
-      status: result.status,
-      wheels: smoothed,
-      roundness: result.roundness,
-      axleTiltDeg: result.axleTiltDeg,
-      hint: result.hint,
-    });
+    // Круглость — EMA: светофор и условия авто-спуска без дрожания.
+    // При потере детекции roundness = 0 прокидывается сразу — свет гаснет без задержки.
+    const prev = roundSmoothRef.current;
+    roundSmoothRef.current =
+      result.roundness > 0 && prev > 0
+        ? ROUNDNESS_SMOOTH_ALPHA * result.roundness + (1 - ROUNDNESS_SMOOTH_ALPHA) * prev
+        : result.roundness;
+
+    // Защёлка подсказок: новый текст обязан продержаться HINT_STABLE_MS,
+    // а текущий — провисеть минимум HINT_MIN_DISPLAY_MS. Мерцание статусов
+    // детектора больше не перелистывает подсказки быстрее, чем их читают.
+    const h = hintMachineRef.current;
+    const now = performance.now();
+    if (result.hint !== h.shown) {
+      if (result.hint === h.candidate) {
+        if (now - h.candidateSince >= HINT_STABLE_MS && now - h.shownAt >= HINT_MIN_DISPLAY_MS) {
+          h.shown = result.hint;
+          h.shownAt = now;
+          h.candidate = "";
+          setHintText(h.shown);
+        }
+      } else {
+        h.candidate = result.hint;
+        h.candidateSince = now;
+      }
+    } else {
+      h.candidate = "";
+    }
+
+    setOverlay({ status: result.status, roundness: roundSmoothRef.current });
   }, []);
 
   useEffect(() => {
@@ -350,82 +402,49 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
     const dispH = vh * scale;
     const offX = (cw - dispW) / 2;
     const offY = (ch - dispH) / 2;
-    const sx = dispW / PROC_WIDTH; // координаты детектора (px) → экранные
 
-    // --- Горизонт по гироскопу (второстепенный ориентир) ---
+    // --- СТАТИЧНЫЙ ТРАФАРЕТ: земля + два круга колёс (v1.8.0) ---
+    // Рисуется всегда, дрожать не может в принципе. Вращается вместе с
+    // гироскоп-горизонтом: при наклоне телефона реальная земля в мире
+    // остаётся уровнем — трафарет должен повторять то, что видит камера.
     const roll = gyroRollRef.current;
-    if (gyroSupported && Math.abs(roll) <= 45) {
-      ctx.save();
-      ctx.translate(offX + dispW / 2, offY + dispH / 2);
-      ctx.rotate((-roll * Math.PI) / 180);
-      ctx.strokeStyle = "rgba(34, 211, 238, 0.75)";
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([10, 8]);
+    const useGyro = gyroSupported && Math.abs(roll) <= 45;
+    const R = TEMPLATE_WHEEL_R * Math.min(dispW, dispH);
+    const half = (TEMPLATE_WHEEL_GAP_R * R) / 2; // ± до центров колёс от центра кадра
+    const groundY = dispH * (TEMPLATE_GROUND_Y - 0.5); // в системе с центром в (0,0)
+
+    ctx.save();
+    ctx.translate(offX + dispW / 2, offY + dispH / 2);
+    if (useGyro) ctx.rotate((-roll * Math.PI) / 180);
+
+    // Линия земли
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([12, 9]);
+    ctx.beginPath();
+    ctx.moveTo(-dispW / 2 + 8, groundY);
+    ctx.lineTo(dispW / 2 - 8, groundY);
+    ctx.stroke();
+
+    // Круги колёс — стоят на земле
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([9, 7]);
+    for (const wx of [-half, half]) {
       ctx.beginPath();
-      ctx.moveTo(-dispW, 0);
-      ctx.lineTo(dispW, 0);
+      ctx.arc(wx, groundY - R, R, 0, 2 * Math.PI);
       ctx.stroke();
-      ctx.setLineDash([]);
+    }
+    ctx.setLineDash([]);
+
+    // Метка горизонта — над правым концом земли (стабильна, датчик точный)
+    if (useGyro) {
       ctx.font = "600 12px system-ui, sans-serif";
-      ctx.fillStyle = "rgba(34, 211, 238, 1)";
+      ctx.fillStyle = "rgba(34, 211, 238, 0.9)";
       const txt = `Горизонт ${Math.abs(roll) < 1 ? "ровно" : `${Math.abs(roll).toFixed(0)}°`}`;
-      ctx.fillText(txt, dispW / 2 - 80, -6);
-      ctx.restore();
+      ctx.fillText(txt, half + R + 10, groundY - 6);
     }
-
-    // --- Колёса ---
-    const wheels = overlay?.wheels ?? [];
-    const status = overlay?.status ?? "none";
-    wheels.forEach((w, i) => {
-      const x = offX + w.cx * sx;
-      const y = offY + w.cy * sx;
-      const a = w.a * sx;
-      const b = w.b * sx;
-      const color = wheelColor(w.roundness, status);
-
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(w.theta);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 3;
-      ctx.setLineDash([9, 6]);
-      ctx.beginPath();
-      ctx.ellipse(0, 0, a, b, 0, 0, 2 * Math.PI);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      // центр
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(0, 0, 3, 0, 2 * Math.PI);
-      ctx.fill();
-      ctx.restore();
-
-      // подпись круглости
-      const pct = Math.round(w.roundness * 100);
-      const label = i === 0 && wheels.length === 2 ? `${pct}% · ${Math.abs(overlay?.axleTiltDeg ?? 0).toFixed(1)}°` : `${pct}%`;
-      ctx.font = "700 13px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = "rgba(0,0,0,0.8)";
-      ctx.strokeText(label, x, y - b - 8);
-      ctx.fillStyle = color;
-      ctx.fillText(label, x, y - b - 8);
-      ctx.textAlign = "start";
-    });
-
-    // --- Линия осей между колёсами ---
-    if (wheels.length === 2) {
-      const [w1, w2] = wheels;
-      ctx.save();
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([5, 5]);
-      ctx.beginPath();
-      ctx.moveTo(offX + w1.cx * sx, offY + w1.cy * sx);
-      ctx.lineTo(offX + w2.cx * sx, offY + w2.cy * sx);
-      ctx.stroke();
-      ctx.restore();
-    }
+    ctx.restore();
   }, [overlay, gyroSupported]);
 
   // Перерисовка при каждой детекции / повороте гироскопа
@@ -483,6 +502,14 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
 
   const status: WheelDetectStatus = overlay?.status ?? "none";
   const roundness = overlay?.roundness ?? 0;
+
+  // Светофор ракурса (v1.8.0): зелёный — оба колеса круглые, можно фотать;
+  // жёлтый — велик виден, но ракурс не тот / одно колесо; красный — не находим ничего.
+  const light: "red" | "amber" | "green" =
+    status === "ok" ? "green" : status === "none" ? "red" : "amber";
+  const lightColor =
+    light === "green" ? "#34d399" : light === "amber" ? "#fbbf24" : "#fb7185";
+
   const isOptimal =
     status === "ok" && roundness >= AUTO_ROUNDNESS && !pitchWarning && !error;
 
@@ -533,7 +560,7 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
       ? `Снимок через ${countdown}…`
       : isOptimal
         ? "Ракурс идеален! Удерживайте — снимем автоматически"
-        : (overlay?.hint ?? "Наведите камеру на велосипед — оба колеса должны быть полностью в кадре");
+        : hintText;
 
   const pillTone: "ok" | "warn" | "muted" = pitchWarning
     ? "warn"
@@ -574,10 +601,28 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
               className="pointer-events-none absolute inset-0 h-full w-full"
             />
 
+            {/* Светофор ракурса: красный — плохо, жёлтый — почти, зелёный — можно фотать */}
+            {!error && (
+              <div className="pointer-events-none absolute right-3 top-3">
+                <div
+                  className={cn(
+                    "flex size-9 items-center justify-center rounded-full border-2 bg-black/45 shadow-lg backdrop-blur transition-colors",
+                    light === "green" && "animate-pulse",
+                  )}
+                  style={{ borderColor: lightColor }}
+                >
+                  <span
+                    className="size-4 rounded-full transition-colors"
+                    style={{ backgroundColor: lightColor }}
+                  />
+                </div>
+              </div>
+            )}
+
             {/* Статус-плашка */}
             {!error && (
               <div className={cn(
-                "pointer-events-none absolute left-1/2 top-3 w-[92%] -translate-x-1/2",
+                "pointer-events-none absolute left-1/2 top-3 w-[74%] -translate-x-1/2",
                 phoneLandscape ? "max-w-sm" : "max-w-md",
               )}>
                 <div
@@ -666,31 +711,6 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
 // ============================================================
 // ВСПОМОГАТЕЛЬНОЕ
 // ============================================================
-
-/** Экспоненциальное сглаживание детекций между кадрами (устраняет дрожание) */
-function smoothDetections(next: DetectedEllipse[], prev: DetectedEllipse[]): DetectedEllipse[] {
-  return next.map((n) => {
-    const p = prev.find(
-      (q) => Math.hypot(q.cx - n.cx, q.cy - n.cy) < PROC_WIDTH * 0.14,
-    );
-    if (!p) return n;
-    const lerp = (a: number, b: number) => SMOOTH_ALPHA * b + (1 - SMOOTH_ALPHA) * a;
-    return {
-      ...n,
-      cx: lerp(p.cx, n.cx),
-      cy: lerp(p.cy, n.cy),
-      a: lerp(p.a, n.a),
-      b: lerp(p.b, n.b),
-      theta: lerp(p.theta, n.theta),
-    };
-  });
-}
-
-function wheelColor(roundness: number, status: WheelDetectStatus): string {
-  if (status === "ok" && roundness >= 0.88) return "#34d399"; // emerald-400
-  if (roundness >= 0.65) return "#fbbf24"; // amber-400
-  return "#fb7185"; // rose-400
-}
 
 function PillIcon({ tone }: { tone: "ok" | "warn" | "muted" }) {
   if (tone === "ok") return <CheckCircle2 className="size-4 shrink-0" />;

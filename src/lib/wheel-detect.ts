@@ -428,7 +428,9 @@ export function detectWheels(img: RawFrame, debug?: (info: DetectDebugInfo) => v
     const roundness = Math.min(w1.roundness, w2.roundness);
     const axleTiltDeg = (Math.atan2(w2.cy - w1.cy, w2.cx - w1.cx) * 180) / Math.PI;
     const status: WheelDetectStatus = roundness >= ROUNDNESS_OK ? "ok" : "tilted";
-    const pct = Math.round(roundness * 100);
+    // v1.14.19: проценты в подсказке — полосами по 10%: текст меняется редко,
+    // защёлка в CameraCapture успевает его показать (и человек — прочитать)
+    const pctBand = Math.max(20, Math.min(90, Math.round(roundness * 10) * 10));
     return {
       status,
       wheels: [w1, w2],
@@ -437,7 +439,7 @@ export function detectWheels(img: RawFrame, debug?: (info: DetectDebugInfo) => v
       hint:
         status === "ok"
           ? "Ракурс ровный — колёса круглые. Можно снимать!"
-          : `Колёса видны как овалы (${pct}%) — сместитесь чуть в сторону, пока не станут кругами`,
+          : `Колёса видны как овалы (примерно ${pctBand}%) — сместитесь чуть в сторону, пока не станут кругами`,
     };
   }
 
