@@ -1,5 +1,5 @@
 /**
- * ЗАЛИВКА ОТЧЁТА НА GITHUB (v2.0.0 — серверный релей)
+ * ЗАЛИВКА ОТЧЁТА НА GITHUB (v2.1.0 — серверный релей, ленивый токен)
  * ===========================================================================
  * Идея пользователя: «создай на гите issue и когда пользов отправляет отчет
  * из анализа, то он автоматом там формируется и заливается на гит. а ты гит
@@ -8,6 +8,12 @@
  * v2.0.0: код выполняется ТОЛЬКО НА СЕРВЕРЕ (импортируется из API-роута
  * /api/report-upload). Браузер шлёт отчёт на свой же origin, релей делает
  * вызовы GitHub API — никаких CORS и никакого токена в клиентском бандле.
+ *
+ * v2.1.0 (по жалобе «токен не настроен»): токен читается ЛЕНИВО, при каждом
+ * вызове, а не в module-level константе. Next dev перечитывает .env на
+ * «Reload env», но константы, захваченные при старте модуля, не обновляются —
+ * если сервер стартовал раньше, чем восстановился .env (снапшот воркспейса),
+ * релей до рестарта видел пустой токен и отвечал «токен GitHub не настроен».
  *
  * Что делает:
  *   1. Фото каждого ракурса (JPEG dataURL) → отдельным файлом в
@@ -22,8 +28,6 @@
 import type { FitReport } from "@/lib/fit-report";
 
 const REPO = process.env.NEXT_PUBLIC_GITHUB_REPO || "agent-slon-lab/BikeSnap";
-const TOKEN =
-  process.env.GITHUB_TOKEN || process.env.NEXT_PUBLIC_GITHUB_TOKEN || "";
 const API = "https://api.github.com";
 const DIR = "user-reports";
 const LABEL = "auto-report";
@@ -43,13 +47,18 @@ export class GithubError extends Error {
   }
 }
 
+/** Токен ЛЕНИВО, при каждом вызове — см. v2.1.0 в шапке файла. */
+function envToken(): string {
+  return process.env.GITHUB_TOKEN || process.env.NEXT_PUBLIC_GITHUB_TOKEN || "";
+}
+
 export function githubConfigured(): boolean {
-  return TOKEN.length > 0;
+  return envToken().length > 0;
 }
 
 function apiHeaders(): HeadersInit {
   return {
-    Authorization: `Bearer ${TOKEN}`,
+    Authorization: `Bearer ${envToken()}`,
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
     "Content-Type": "application/json",
