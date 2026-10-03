@@ -42,6 +42,8 @@ import { cn } from "@/lib/utils";
 import { useMediaFlag, PHONE_LANDSCAPE_QUERY } from "@/hooks/use-media-flag";
 import { DebugReportCard } from "@/components/bike-fit/DebugReportCard";
 import type { CaptureMeta, ReportViewInput } from "@/lib/fit-report";
+import { photoToDataUrl } from "@/lib/fit-report";
+import { usePhotoAnalysisStore } from "@/lib/photo-analysis-store";
 
 interface ViewPhotoState {
   url: string | null;
@@ -52,14 +54,6 @@ interface ViewPhotoState {
   captureMeta: CaptureMeta | null;
 }
 
-const INITIAL_STATE: ViewPhotoState = {
-  url: null,
-  landmarks: null,
-  analyzing: false,
-  error: null,
-  captureMeta: null,
-};
-
 // Цвета линий симметрии для overlay
 const SYMMETRY_COLORS = {
   shoulder: "#10b981", // emerald
@@ -69,105 +63,129 @@ const SYMMETRY_COLORS = {
   head: "#eab308", // yellow
 };
 
+/** Анализатор по ракурсу — чистые функции из bike-fit (модульный уровень,
+ *  чтобы analyzePhoto не зависел от их идентичности). */
+const ANALYZERS: Record<
+  ViewType,
+  (lm: Point[]) => BikeFitAnalysis | BackViewAnalysis | FrontViewAnalysis | null
+> = {
+  side: analyzeBikeFit,
+  back: analyzeBackView,
+  front: analyzeFrontView,
+};
+
 export function PhotoAnalysisSection() {
   const { bikeType, body } = useBikeStore();
   // Телефон набок: фото слева, рекомендации/метрики справа (две колонки)
   const phoneLandscape = useMediaFlag(PHONE_LANDSCAPE_QUERY);
 
-  // Состояние для каждого ракурса
-  const [sideState, setSideState] = useState<ViewPhotoState>(INITIAL_STATE);
-  const [backState, setBackState] = useState<ViewPhotoState>(INITIAL_STATE);
-  const [frontState, setFrontState] = useState<ViewPhotoState>(INITIAL_STATE);
+  // === v1.14.17: фото/landmarks/анализ ПЕРСИСТЯТСЯ (photo-analysis-store).
+  // Раньше всё жило в useState — refresh, закрытие вкладки и даже переход
+  // на другой шаг стирали фото, и пользователь «постоянно гружил файл».
+  const views = usePhotoAnalysisStore((s) => s.views);
+  const setViewPhotoStore = usePhotoAnalysisStore((s) => s.setViewPhoto);
+  const setViewPhotoData = usePhotoAnalysisStore((s) => s.setViewPhotoData);
+  const setViewResultStore = usePhotoAnalysisStore((s) => s.setViewResult);
+  const clearViewStore = usePhotoAnalysisStore((s) => s.clearView);
 
-  // Результаты анализа (после кнопки "Анализировать")
-  const [sideAnalysis, setSideAnalysis] = useState<BikeFitAnalysis | null>(null);
-  const [backAnalysis, setBackAnalysis] = useState<BackViewAnalysis | null>(null);
-  const [frontAnalysis, setFrontAnalysis] = useState<FrontViewAnalysis | null>(null);
+  // Транзиентное UI-состояние (не персистится): анимация анализа + ошибки
+  const [ui, setUi] = useState<
+    Record<ViewType, { analyzing: boolean; error: string | null }>
+  >({
+    side: { analyzing: false, error: null },
+    back: { analyzing: false, error: null },
+    front: { analyzing: false, error: null },
+  });
 
-  const { loading: modelLoading, error: modelError, detect } = usePoseLandmarker();
-
-  // Сохранение результата анализа в правильный state
-  // (объявлено до analyzePhoto, чтобы корректно вошло в зависимости)
-  const saveResult = useCallback(
+  const setUiState = useCallback(
     (
       view: ViewType,
-      analysis: BikeFitAnalysis | BackViewAnalysis | FrontViewAnalysis | null
+      patch: Partial<{ analyzing: boolean; error: string | null }>
     ) => {
-      if (view === "side") setSideAnalysis(analysis as BikeFitAnalysis | null);
-      else if (view === "back")
-        setBackAnalysis(analysis as BackViewAnalysis | null);
-      else if (view === "front")
-        setFrontAnalysis(analysis as FrontViewAnalysis | null);
+      setUi((prev) => ({ ...prev, [view]: { ...prev[view], ...patch } }));
     },
     []
   );
 
+  // Состояние ракурса — сборка персиста + транзиента (для ViewSection и отчёта)
+  const sideState: ViewPhotoState = {
+    url: views.side.photoData,
+    landmarks: views.side.landmarks,
+    analyzing: ui.side.analyzing,
+    error: ui.side.error,
+    captureMeta: views.side.captureMeta,
+  };
+  const backState: ViewPhotoState = {
+    url: views.back.photoData,
+    landmarks: views.back.landmarks,
+    analyzing: ui.back.analyzing,
+    error: ui.back.error,
+    captureMeta: views.back.captureMeta,
+  };
+  const frontState: ViewPhotoState = {
+    url: views.front.photoData,
+    landmarks: views.front.landmarks,
+    analyzing: ui.front.analyzing,
+    error: ui.front.error,
+    captureMeta: views.front.captureMeta,
+  };
+
+  // Результаты анализа — из персист-стора (каст union → конкретный тип)
+  const sideAnalysis = views.side.analysis as BikeFitAnalysis | null;
+  const backAnalysis = views.back.analysis as BackViewAnalysis | null;
+  const frontAnalysis = views.front.analysis as FrontViewAnalysis | null;
+
+  const { loading: modelLoading, error: modelError, detect } = usePoseLandmarker();
+
   // Общий обработчик анализа для любого ракурса
   const analyzePhoto = useCallback(
-    async (
-      view: ViewType,
-      img: HTMLImageElement,
-      state: ViewPhotoState,
-      setState: (s: ViewPhotoState) => void,
-      onResult: (
-        landmarks: Point[]
-      ) => BikeFitAnalysis | BackViewAnalysis | FrontViewAnalysis | null
-    ) => {
+    async (view: ViewType, img: HTMLImageElement) => {
       if (modelLoading || modelError) {
-        setState({
-          ...state,
+        setUiState(view, {
           error:
             modelError ?? "Модель ещё загружается, подождите пару секунд...",
         });
         return;
       }
 
-      setState({ ...state, analyzing: true, error: null });
+      setUiState(view, { analyzing: true, error: null });
 
       try {
         await new Promise((r) => setTimeout(r, 50));
         const result = detect(img);
         if (!result || !result.landmarks || result.landmarks.length === 0) {
-          setState({
-            ...state,
+          setUiState(view, {
             analyzing: false,
             error:
               "Не удалось обнаружить позу на фото. Убедитесь, что велосипедист полностью виден в кадре, попробуйте более чёткое фото.",
           });
-          saveResult(view, null);
+          // landmarks не трогаем — прежние успешные метки живут (как и раньше)
+          setViewResultStore(view, undefined, null);
           return;
         }
         const lms = result.landmarks[0] as Point[];
-        const analysis = onResult(lms);
+        const analysis = ANALYZERS[view](lms);
         if (!analysis) {
-          setState({
-            ...state,
+          setUiState(view, {
             analyzing: false,
-            landmarks: lms,
             error:
               "Ключевые точки тела определены не полностью. Попробуйте фото, где видны плечи, бёдра, колени и стопы.",
           });
-          saveResult(view, null);
+          setViewResultStore(view, lms, null);
           return;
         }
-        setState({
-          ...state,
-          analyzing: false,
-          landmarks: lms,
-          error: null,
-        });
-        saveResult(view, analysis);
+        setViewResultStore(view, lms, analysis);
+        setUiState(view, { analyzing: false, error: null });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        setState({
-          ...state,
+        setUiState(view, {
           analyzing: false,
           error: `Ошибка анализа: ${msg}`,
         });
-        saveResult(view, null);
+        setViewResultStore(view, undefined, null);
       }
     },
-    [modelLoading, modelError, detect, saveResult]
+    [modelLoading, modelError, detect, setUiState, setViewResultStore]
   );
 
   // Контекст-карточка с введёнными данными
@@ -196,8 +214,8 @@ export function PhotoAnalysisSection() {
   // Подсветка линий симметрии для back/front
   const getOverlayLines = useCallback(
     (view: ViewType): Array<{ a: Point; b: Point; color: string; label?: string; dashed?: boolean }> => {
-      if (view === "side" && sideState.landmarks) {
-        const lm = sideState.landmarks;
+      if (view === "side" && views.side.landmarks) {
+        const lm = views.side.landmarks;
         const side = sideAnalysis?.side ?? "right";
         const S = side === "left" ? POSE_LANDMARKS.LEFT_SHOULDER : POSE_LANDMARKS.RIGHT_SHOULDER;
         const H = side === "left" ? POSE_LANDMARKS.LEFT_HIP : POSE_LANDMARKS.RIGHT_HIP;
@@ -220,15 +238,15 @@ export function PhotoAnalysisSection() {
           ];
         }
       }
-      if (view === "back" && backState.landmarks) {
-        const lm = backState.landmarks;
+      if (view === "back" && views.back.landmarks) {
+        const lm = views.back.landmarks;
         return [
           { a: lm[POSE_LANDMARKS.LEFT_SHOULDER], b: lm[POSE_LANDMARKS.RIGHT_SHOULDER], color: SYMMETRY_COLORS.shoulder, label: "Плечи" },
           { a: lm[POSE_LANDMARKS.LEFT_HIP], b: lm[POSE_LANDMARKS.RIGHT_HIP], color: SYMMETRY_COLORS.hip, label: "Таз" },
         ];
       }
-      if (view === "front" && frontState.landmarks) {
-        const lm = frontState.landmarks;
+      if (view === "front" && views.front.landmarks) {
+        const lm = views.front.landmarks;
         return [
           { a: lm[POSE_LANDMARKS.LEFT_SHOULDER], b: lm[POSE_LANDMARKS.RIGHT_SHOULDER], color: SYMMETRY_COLORS.shoulder, label: "Плечи" },
           { a: lm[POSE_LANDMARKS.LEFT_WRIST], b: lm[POSE_LANDMARKS.RIGHT_WRIST], color: "#f97316", label: "Хват", dashed: true },
@@ -236,49 +254,44 @@ export function PhotoAnalysisSection() {
       }
       return [];
     },
-    [sideState.landmarks, backState.landmarks, frontState.landmarks, sideAnalysis]
+    [views.side.landmarks, views.back.landmarks, views.front.landmarks, sideAnalysis]
   );
 
   // Подсчёт общей статистики
   const totalAnalyses = useMemo(
-    () => [sideAnalysis, backAnalysis, frontAnalysis].filter(Boolean).length,
-    [sideAnalysis, backAnalysis, frontAnalysis]
+    () => [views.side.analysis, views.back.analysis, views.front.analysis].filter(Boolean).length,
+    [views.side.analysis, views.back.analysis, views.front.analysis]
   );
 
   const handlePhotoSelected = useCallback(
     (view: ViewType, file: File, url: string, meta?: CaptureMeta) => {
-      if (view === "side") {
-        if (sideState.url) URL.revokeObjectURL(sideState.url);
-        setSideState({ ...INITIAL_STATE, url, captureMeta: meta ?? null });
-        setSideAnalysis(null);
-      } else if (view === "back") {
-        if (backState.url) URL.revokeObjectURL(backState.url);
-        setBackState({ ...INITIAL_STATE, url, captureMeta: meta ?? null });
-        setBackAnalysis(null);
-      } else {
-        if (frontState.url) URL.revokeObjectURL(frontState.url);
-        setFrontState({ ...INITIAL_STATE, url, captureMeta: meta ?? null });
-        setFrontAnalysis(null);
-      }
+      void file; // тип/размер проверен в PhotoUploader
+      setUiState(view, { analyzing: false, error: null });
+      // Мгновенный показ — blob: URL; параллельно сжимаем в JPEG dataURL
+      // ≤1280px: персистим ТОЛЬКО dataURL (blob: умирает при перезагрузке).
+      setViewPhotoStore(view, { photoData: url, captureMeta: meta ?? null });
+      void photoToDataUrl(url).then((data) => {
+        // Пока сжимали, фото могли заменить/удалить — тогда молча выходим
+        const cur = usePhotoAnalysisStore.getState().views[view].photoData;
+        if (cur !== url) return;
+        if (data) {
+          setViewPhotoData(view, data);
+          URL.revokeObjectURL(url);
+        }
+        // Если сжать не удалось — остаётся blob: до конца сессии,
+        // при гидрации персист его отбросит (sanitize в store)
+      });
     },
-    [sideState.url, backState.url, frontState.url]
+    [setUiState, setViewPhotoStore, setViewPhotoData]
   );
 
-  const handleClear = useCallback((view: ViewType) => {
-    if (view === "side") {
-      if (sideState.url) URL.revokeObjectURL(sideState.url);
-      setSideState(INITIAL_STATE);
-      setSideAnalysis(null);
-    } else if (view === "back") {
-      if (backState.url) URL.revokeObjectURL(backState.url);
-      setBackState(INITIAL_STATE);
-      setBackAnalysis(null);
-    } else {
-      if (frontState.url) URL.revokeObjectURL(frontState.url);
-      setFrontState(INITIAL_STATE);
-      setFrontAnalysis(null);
-    }
-  }, [sideState.url, backState.url, frontState.url]);
+  const handleClear = useCallback(
+    (view: ViewType) => {
+      clearViewStore(view);
+      setUiState(view, { analyzing: false, error: null });
+    },
+    [clearViewStore, setUiState]
+  );
 
   return (
     <div className="space-y-6">
@@ -386,9 +399,7 @@ export function PhotoAnalysisSection() {
             onPhotoSelected={handlePhotoSelected}
             onClear={handleClear}
             onAnalyze={(img) =>
-              analyzePhoto("side", img, sideState, setSideState, (lm) =>
-                analyzeBikeFit(lm)
-              )
+              analyzePhoto("side", img)
             }
             overlayLines={getOverlayLines("side")}
           />
@@ -433,9 +444,7 @@ export function PhotoAnalysisSection() {
             onPhotoSelected={handlePhotoSelected}
             onClear={handleClear}
             onAnalyze={(img) =>
-              analyzePhoto("back", img, backState, setBackState, (lm) =>
-                analyzeBackView(lm)
-              )
+              analyzePhoto("back", img)
             }
             overlayLines={getOverlayLines("back")}
           />
@@ -477,9 +486,7 @@ export function PhotoAnalysisSection() {
             onPhotoSelected={handlePhotoSelected}
             onClear={handleClear}
             onAnalyze={(img) =>
-              analyzePhoto("front", img, frontState, setFrontState, (lm) =>
-                analyzeFrontView(lm)
-              )
+              analyzePhoto("front", img)
             }
             overlayLines={getOverlayLines("front")}
           />

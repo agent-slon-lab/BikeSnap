@@ -111,8 +111,10 @@ const r4 = (n: number) => Math.round(n * 10000) / 10000;
  * Фото → уменьшенный JPEG dataURL (большая сторона ≤ maxDim).
  * blob: URL того же origin — canvas не «портится». Любая ошибка → null
  * (отчёт без фото лучше, чем никакой отчёт).
+ * v1.14.17: экспортирована — тот же компрессор использует персист фото
+ * шага 4 (photo-analysis-store): dataURL переживает refresh, blob: — нет.
  */
-async function photoToDataUrl(url: string, maxDim = 1280): Promise<string | null> {
+export async function photoToDataUrl(url: string, maxDim = 1280): Promise<string | null> {
   try {
     if (typeof document === "undefined" || typeof Image === "undefined") return null;
     const img = new Image();
