@@ -1,12 +1,21 @@
 "use client";
 
 /**
- * ИНТЕРАКТИВНОЕ ФОТО ВЕЛИКА (v3.0.0 — «палец-фёрст», v1.14.15)
+ * ИНТЕРАКТИВНОЕ ФОТО ВЕЛИКА (v3.1.0 — лупа с просветом, v1.14.16)
  * ===========================================================================
- * Разметка ключевых точек велосипеда на фото. v3.0.0 — полная переработка
- * взаимодействия по жалобе: «на шаге 2 вообще ничего не видно по фото. как
- * и куда ставить точки. фото оч мелкое. точки тоже. даже лупа не помогает
- * тк она перекрывается пальцем».
+ * Разметка ключевых точек велосипеда на фото. v3.0.0 (v1.14.15) — переработка
+ * взаимодействия: зум щипком, экранно-постоянные размеры, двухфазная установка.
+ *
+ * v3.1.0 (v1.14.16) — фикс по обратной связи: «лупа/зум в принципе хорошо,
+ * но её надо сместить — я нажимаю на точку, и в этой же точке центр лупы».
+ *   • Просвет: нижний край лупы теперь на LOUPE_GAP_SCREEN = 76 экранных px
+ *     ВЫШЕ точки касания (в v3.0.0 было 0.45·R ≈ 25–38 px — подушечка пальца
+ *     перекрывала круг). Центр лупы = R + 76 px над пальцем.
+ *   • У верхнего края фото лупа переворачивается ПОД палец с тем же просветом.
+ *   • Направляющая линия от перекрестия лупы к точке касания — видно связь.
+ *   • Фикс декора: ободок/тень/перекрестие лупы считались через px() (делит
+ *     на view.scale — для элементов внутри зум-группы), а лупа снаружи → при
+ *     зуме 8× ободок становился волосным. Теперь loupePx() без view.scale.
  *
  * Что изменилось (все размеры теперь в ЭКРАННЫХ пикселях, а не в пикселях
  * исходного фото — на телефоне кружки из старой версии были ~9 px):
@@ -128,6 +137,10 @@ const POINT_CONFIG: Array<{
 /** Границы зума: 1× (весь кадр) .. 8× (детали втулки). */
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 8;
+
+/** Просвет между точкой касания и НИЖНИМ краем лупы (экранные px).
+ *  Подушечка пальца при нажатии ~30 px, плюс запас — палец не достаёт до круга. */
+const LOUPE_GAP_SCREEN = 76;
 
 interface ViewState {
   x: number;
@@ -473,6 +486,12 @@ export function InteractivePhoto({
   const magRScreen = Math.min(84, Math.max(56, (containerW || 360) * 0.22));
   const magR = pxPerUnit > 0 ? magRScreen / pxPerUnit : px(70);
   const magZoom = view.scale * 2.5;
+  /** Экранные px → единицы viewBox БЕЗ зума (лупа снаружи зум-группы).
+   *  px() делит ещё и на view.scale — он для элементов внутри группы. */
+  const loupePx = useCallback(
+    (screenPx: number) => (pxPerUnit > 0 ? screenPx / pxPerUnit : screenPx * 0.02),
+    [pxPerUnit]
+  );
 
   // Лупа видна при драге точки или прицеливании
   const loupeCursor =
@@ -488,13 +507,16 @@ export function InteractivePhoto({
 
   const loupe = (() => {
     if (!loupeCursor) return null;
-    // Лупа НАД пальцем; если упирается в верх — ПОД пальцем; клампим в границы фото
+    // v3.1.0: центр лупы на (R + 76px) НАД точкой касания — нижний край круга
+    // на 76 px выше пальца, подушечка его не перекрывает. У верхнего края фото
+    // лупа переворачивается ПОД палец с тем же просветом; иначе кламп в фото.
+    const off = magR + loupePx(LOUPE_GAP_SCREEN);
     let magCx = loupeCursor.vb.x;
-    let magCy = loupeCursor.vb.y - magR * 1.45;
-    if (magCy - magR < 0) magCy = loupeCursor.vb.y + magR * 1.45;
+    let magCy = loupeCursor.vb.y - off;
+    if (magCy - magR < 0) magCy = loupeCursor.vb.y + off;
     magCx = Math.max(magR, Math.min(imgSize.w - magR, magCx));
     magCy = Math.max(magR, Math.min(imgSize.h - magR, magCy));
-    const cross = px(11);
+    const cross = loupePx(11);
     return { cx: magCx, cy: magCy, cross, zoom: magZoom, cursorImg: loupeCursor.img };
   })();
 
@@ -543,7 +565,7 @@ export function InteractivePhoto({
               </p>
             )}
             <p className="text-[11px] text-muted-foreground">
-              Прижми палец к нужному месту, глянь в лупу НАД пальцем, подвини и отпусти — точка встанет туда, где перекрестие. Можно приблизить щипком.
+              Прижми палец — в лупе ВЫШЕ пальца видно место с перекрестием. Подвини и отпусти — точка встанет туда, где перекрестие. Можно приблизить щипком.
             </p>
           </div>
         );
@@ -738,14 +760,33 @@ export function InteractivePhoto({
 
             {/* ===== ЛУПА (вне зум-группы — постоянный экранный размер) =====
                 Радиус 56–84 ЭКРАННЫХ px, зум 2.5× поверх текущего вида,
-                центр НАД пальцем (палец её не перекрывает). */}
-            {loupe && (() => {
+                центр на R+76 px НАД пальцем — нижний край круга далеко выше
+                подушечки. Все декоры через loupePx (без view.scale). */}
+            {loupe && loupeCursor && (() => {
+              // Направляющая линия: перекрестие лупы ↔ точка касания
+              const dx = loupeCursor.vb.x - loupe.cx;
+              const dy = loupeCursor.vb.y - loupe.cy;
+              const len = Math.hypot(dx, dy) || 1;
+              const lx1 = loupe.cx + (dx / len) * (magR + loupePx(3));
+              const ly1 = loupe.cy + (dy / len) * (magR + loupePx(3));
               return (
                 <g pointerEvents="none">
+                  {/* Направляющая от края лупы к пальцу */}
+                  <line
+                    x1={lx1}
+                    y1={ly1}
+                    x2={loupeCursor.vb.x}
+                    y2={loupeCursor.vb.y}
+                    stroke="#0ea5e9"
+                    strokeWidth={loupePx(1.5)}
+                    strokeDasharray={`${loupePx(5)} ${loupePx(4)}`}
+                    opacity={0.55}
+                    strokeLinecap="round"
+                  />
                   {/* Тень под лупой */}
-                  <circle cx={loupe.cx} cy={loupe.cy} r={magR + px(4)} fill="rgba(0,0,0,0.4)" />
+                  <circle cx={loupe.cx} cy={loupe.cy} r={magR + loupePx(4)} fill="rgba(0,0,0,0.4)" />
                   {/* Белый фон */}
-                  <circle cx={loupe.cx} cy={loupe.cy} r={magR + px(2)} fill="white" />
+                  <circle cx={loupe.cx} cy={loupe.cy} r={magR + loupePx(2)} fill="white" />
                   {/* Картинка в круге (зум поверх вида) */}
                   <g clipPath="url(#mag-clip)">
                     <image
@@ -764,7 +805,7 @@ export function InteractivePhoto({
                     r={magR}
                     fill="none"
                     stroke="#0ea5e9"
-                    strokeWidth={px(2.5)}
+                    strokeWidth={loupePx(2.5)}
                   />
                   {/* Перекрестие в центре лупы = куда встанет точка */}
                   <line
@@ -773,7 +814,7 @@ export function InteractivePhoto({
                     x2={loupe.cx + loupe.cross}
                     y2={loupe.cy}
                     stroke="#ef4444"
-                    strokeWidth={px(2)}
+                    strokeWidth={loupePx(2)}
                   />
                   <line
                     x1={loupe.cx}
@@ -781,9 +822,9 @@ export function InteractivePhoto({
                     x2={loupe.cx}
                     y2={loupe.cy + loupe.cross}
                     stroke="#ef4444"
-                    strokeWidth={px(2)}
+                    strokeWidth={loupePx(2)}
                   />
-                  <circle cx={loupe.cx} cy={loupe.cy} r={px(2)} fill="#ef4444" />
+                  <circle cx={loupe.cx} cy={loupe.cy} r={loupePx(2)} fill="#ef4444" />
                 </g>
               );
             })()}
@@ -841,7 +882,7 @@ export function InteractivePhoto({
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <Move className="size-3 shrink-0" />
-            Щипок — зум · палец по пустому — панорама · лупа над пальцем
+            Щипок — зум · палец по пустому — панорама · лупа выше пальца
           </p>
           <button
             onClick={() => setShowLabels(!showLabels)}
