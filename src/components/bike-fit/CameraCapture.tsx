@@ -39,14 +39,16 @@
  *    не изменился, Pitch-подсказка переформулирована ориентационно-нейтрально
  *    (в ландшафте «телефон вертикально» читается как «положи набок»).
  *
- * Оверлей (v1.8.0 «статичный трафарет» — идея пользователя):
- *  - на экране ВСЕГДА статичный трафарет: линия земли + два круга колёс;
- *    пользователь сам подгоняет велик под него — дрожащие найденные эллипсы
- *    больше не рисуются в принципе;
- *  - трафарет вращается вместе с гироскоп-горизонтом (земля остаётся уровнем);
- *  - живая детекция под трафаретом гоняет только: светофор
- *    красный/жёлтый/зелёный в углу видоискателя, подсказки (через защёлку
- *    с выдержкой — читаются спокойно) и авто-спуск.
+ * Оверлей (v1.9.0 — совмещение двух способов, идея пользователя):
+ *  - СТАТИЧНЫЙ ТРАФАРЕТ всегда на экране: линия земли + два круга колёс —
+ *    цель, под которую пользователь подгоняет велик (дрожать не может);
+ *  - ПОВЕРХ трафарета рисуются найденные детекцией эллипсы — с сильным
+ *    сглаживанием (EMA по центру/полуосям), полосными процентами круглости
+ *    и плавным затуханием при пропадании (мигание исключено); совместил
+ *    цветной эллипс с белым кругом трафарета → зелёный свет;
+ *  - трафарет вращается вместе с гироскоп-горизонтом (земля — уровень);
+ *  - детекция также гоняет: светофор красный/жёлтый/зелёный в углу,
+ *    подсказки (через защёлку с выдержкой) и авто-спуск.
  *
  * Детектор — src/lib/wheel-detect.ts (чистый TS, ~1-2 мс на кадр 320px).
  */
@@ -62,6 +64,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   detectWheels,
+  type DetectedEllipse,
   type WheelDetectResult,
   type WheelDetectStatus,
 } from "@/lib/wheel-detect";
@@ -89,9 +92,15 @@ const PROC_WIDTH = 320;
 /** Период обработки кадров, мс */
 const PROC_INTERVAL_MS = 280;
 /** Сглаживание круглости (EMA) — меньше = плавнее, но инертнее.
- *  Сглаживается только ЧИСЛО (светофор/условия спуска) — рисунка
- *  найденных эллипсов больше нет, так что дрожать нечему. */
+ *  Сглаживается ЧИСЛО для светофора/условий спуска. */
 const ROUNDNESS_SMOOTH_ALPHA = 0.35;
+/** Сглаживание найденных эллипсов (EMA по центру/полуосям) — они снова
+ *  рисуются поверх трафарета (совмещение двух способов), поэтому дрожание
+ *  давим заметно сильнее, чем в v1.7 (было α=0.45). */
+const ELLIPSE_SMOOTH_ALPHA = 0.3;
+/** Найденные эллипсы дорисовываются после пропадания детекции столько мс
+ *  (с плавным затуханием) — без этого они мигают при потере колеса. */
+const ELLIPSE_TTL_MS = 700;
 /** Новый текст подсказки должен продержаться столько, чтобы сменить текущий —
  *  иначе мерцание кадров детектора мгновенно перелистывает тексты. */
 const HINT_STABLE_MS = 1200;
@@ -99,8 +108,10 @@ const HINT_STABLE_MS = 1200;
 const HINT_MIN_DISPLAY_MS = 2600;
 /** Стартовая подсказка (совпадает с детекторной «none») */
 const HINT_START = "Наведите камеру на велосипед — оба колеса должны быть полностью в кадре";
-/** Трафарет: радиус круга колеса, доля меньшей стороны кадра на экране */
-const TEMPLATE_WHEEL_R = 0.14;
+/** Трафарет: радиус круга колеса, доля меньшей стороны кадра на экране.
+ *  v1.14.20: 0.14 → 0.18 (+29% радиуса, +63% площади) — круги были
+ *  маловаты, пользователь подгоняет велик вплотную к краям кадра. */
+const TEMPLATE_WHEEL_R = 0.18;
 /** Трафарет: расстояние между центрами колёс в радиусах (база/диаметр ≈ 1.5) */
 const TEMPLATE_WHEEL_GAP_R = 3.0;
 /** Трафарет: высота линии земли, доля высоты кадра */
@@ -138,6 +149,10 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
   const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const roundSmoothRef = useRef(0);
+  /** Сглаженные найденные эллипсы (детекторные координаты, PROC_WIDTH) —
+   *  в ref, а не в state: рисуются по таймеру детекции, ререндер не нужен */
+  const ellipseSmoothRef = useRef<DetectedEllipse[]>([]);
+  const lastDetectAtRef = useRef(0);
   const busyRef = useRef(false);
 
   const [error, setError] = useState<string | null>(null);
@@ -230,6 +245,8 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
     setVideoReady(false);
     setShot(false);
     roundSmoothRef.current = 0;
+    ellipseSmoothRef.current = [];
+    lastDetectAtRef.current = 0;
     hintMachineRef.current = {
       shown: HINT_START,
       shownAt: performance.now(),
@@ -299,6 +316,14 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
       result.roundness > 0 && prev > 0
         ? ROUNDNESS_SMOOTH_ALPHA * result.roundness + (1 - ROUNDNESS_SMOOTH_ALPHA) * prev
         : result.roundness;
+
+    // Эллипсы для совмещённого режима (v1.9.0): сглаживаем и держим в ref.
+    // При пустом результате НЕ чистим — дорисуются с затуханием по TTL,
+    // иначе мигание при каждой потере колеса.
+    if (result.wheels.length > 0) {
+      ellipseSmoothRef.current = smoothDetections(result.wheels, ellipseSmoothRef.current);
+      lastDetectAtRef.current = performance.now();
+    }
 
     // Защёлка подсказок: новый текст обязан продержаться HINT_STABLE_MS,
     // а текущий — провисеть минимум HINT_MIN_DISPLAY_MS. Мерцание статусов
@@ -437,14 +462,57 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
     }
     ctx.setLineDash([]);
 
-    // Метка горизонта — над правым концом земли (стабильна, датчик точный)
+    // Метка горизонта — ПОД линией земли слева (не пересекается с кругами
+    // и не вылезает за край на узких экранах)
     if (useGyro) {
       ctx.font = "600 12px system-ui, sans-serif";
       ctx.fillStyle = "rgba(34, 211, 238, 0.9)";
       const txt = `Горизонт ${Math.abs(roll) < 1 ? "ровно" : `${Math.abs(roll).toFixed(0)}°`}`;
-      ctx.fillText(txt, half + R + 10, groundY - 6);
+      ctx.fillText(txt, -dispW / 2 + 12, groundY + 18);
     }
     ctx.restore();
+
+    // --- СОВМЕЩЕНИЕ (v1.9.0): сглаженные найденные эллипсы поверх трафарета.
+    // Цветные эллипсы детекции + белые круги цели: совместил — можно снимать.
+    // При пропадании детекции дорисовываются с плавным затуханием (TTL).
+    const age = performance.now() - lastDetectAtRef.current;
+    if (age < ELLIPSE_TTL_MS) {
+      const fade = 1 - age / ELLIPSE_TTL_MS;
+      const sx = dispW / PROC_WIDTH; // координаты детектора (px) → экранные
+      ellipseSmoothRef.current.forEach((w) => {
+        const x = offX + w.cx * sx;
+        const y = offY + w.cy * sx;
+        const a = w.a * sx;
+        const b = w.b * sx;
+        // процент — полосами по 10%: подпись меняется редко, не мельтешит
+        const pct = Math.max(20, Math.min(90, Math.round(w.roundness * 10) * 10));
+        const color = wheelColor(w.roundness);
+        const alpha = 0.35 + 0.65 * fade; // свежая детекция — 1.0, гаснущая — 0.35
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(x, y);
+        ctx.rotate(w.theta);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, a, b, 0, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.font = "700 13px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = "rgba(0,0,0,0.8)";
+        const label = `${pct}%`;
+        ctx.strokeText(label, x, y - b - 8);
+        ctx.fillStyle = color;
+        ctx.fillText(label, x, y - b - 8);
+        ctx.restore();
+      });
+    }
   }, [overlay, gyroSupported]);
 
   // Перерисовка при каждой детекции / повороте гироскопа
@@ -711,6 +779,34 @@ export function CameraCapture({ open, onOpenChange, onCapture, label }: CameraCa
 // ============================================================
 // ВСПОМОГАТЕЛЬНОЕ
 // ============================================================
+
+/** Экспоненциальное сглаживание найденных эллипсов между кадрами.
+ *  Сопоставление по близости центров: новое колесо без пары — рисуется
+ *  сразу (без инерции), существующее — тянет предыдущее значение за собой. */
+function smoothDetections(next: DetectedEllipse[], prev: DetectedEllipse[]): DetectedEllipse[] {
+  return next.map((n) => {
+    const p = prev.find(
+      (q) => Math.hypot(q.cx - n.cx, q.cy - n.cy) < PROC_WIDTH * 0.16,
+    );
+    if (!p) return n;
+    const lerp = (a: number, b: number) => ELLIPSE_SMOOTH_ALPHA * b + (1 - ELLIPSE_SMOOTH_ALPHA) * a;
+    return {
+      ...n,
+      cx: lerp(p.cx, n.cx),
+      cy: lerp(p.cy, n.cy),
+      a: lerp(p.a, n.a),
+      b: lerp(p.b, n.b),
+      theta: lerp(p.theta, n.theta),
+    };
+  });
+}
+
+/** Цвет эллипса по круглости: зелёный — круг (ракурс ровный) */
+function wheelColor(roundness: number): string {
+  if (roundness >= 0.88) return "#34d399"; // emerald-400
+  if (roundness >= 0.65) return "#fbbf24"; // amber-400
+  return "#fb7185"; // rose-400
+}
 
 function PillIcon({ tone }: { tone: "ok" | "warn" | "muted" }) {
   if (tone === "ok") return <CheckCircle2 className="size-4 shrink-0" />;
