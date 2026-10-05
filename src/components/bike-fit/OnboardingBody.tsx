@@ -1,19 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { User, Plus, Trash2, Ruler, Activity, Info, Target, Heart, Check } from "lucide-react";
+import { User, Plus, Trash2, Ruler, Activity, Target, Heart, Check } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { InfoHint } from "./InfoHint";
 import { cn } from "@/lib/utils";
 import {
   useBikeStore,
@@ -59,6 +54,8 @@ const BODY_FIELD_INFO: Record<string, { what: string; howTo: string }> = {
 
 /**
  * Заметная ⓘ-иконка с подсказкой «что это / как измерить».
+ * v1.14.21: делегирует в общий InfoHint — на телефоне подсказка открывается
+ * тапом и ВИСИТ, пока читаешь (раньше hover-тултип пропадал от любого касания).
  * Единый размер (size-4 = 16px) и фирменный sky-цвет — видна и на телефоне.
  */
 function InfoTip({
@@ -70,25 +67,7 @@ function InfoTip({
   howTo: string;
   contentClassName?: string;
 }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label="Подсказка: что это и как измерить"
-          className="inline-flex size-6 items-center justify-center rounded-full text-sky-500 transition-colors hover:text-sky-600 dark:text-sky-400 dark:hover:text-sky-300"
-        >
-          <Info className="size-4" />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" className={cn("max-w-xs", contentClassName)}>
-        <div className="space-y-1">
-          <p className="text-xs font-medium">{what}</p>
-          <p className="text-[11px] text-muted-foreground">{howTo}</p>
-        </div>
-      </TooltipContent>
-    </Tooltip>
-  );
+  return <InfoHint what={what} howTo={howTo} contentClassName={contentClassName} />;
 }
 
 // ============================================================
@@ -264,7 +243,6 @@ export function OnboardingBody() {
     body.inseam > 0 ? calcSaddleHeightLeMond(body.inseam) : null;
 
   return (
-    <TooltipProvider delayDuration={200}>
     <div className="space-y-4">
       {/* Заголовок */}
       <div className="flex items-center gap-2">
@@ -678,6 +656,5 @@ export function OnboardingBody() {
         </CardContent>
       </Card>
     </div>
-    </TooltipProvider>
   );
 }

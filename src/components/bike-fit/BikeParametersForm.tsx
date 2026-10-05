@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Bike, Plus, Trash2, Save, Info, CircleHelp } from "lucide-react";
+import { Bike, Plus, Trash2, Save, CircleHelp } from "lucide-react";
 import { StepGuide, type GuideStepDef } from "@/components/guide/step-guide";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -9,12 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { InfoHint } from "./InfoHint";
 import { useBikeStore } from "@/lib/bike-store";
 import { BikeSchemaDiagram } from "./BikeSchemaDiagram";
 import { BikePhotoCalibrator } from "./BikePhotoCalibrator";
@@ -550,7 +545,6 @@ export function BikeParametersForm() {
           </Card>
 
           {/* Карточки параметров */}
-          <TooltipProvider delayDuration={200}>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {PARAM_FIELDS.map((p) => {
               const value = bike[p.key as keyof typeof bike] as number | undefined;
@@ -578,20 +572,8 @@ export function BikeParametersForm() {
                         <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono">{p.abbr}</Badge>
                       </div>
                       <div className="flex items-center gap-0.5">
-                        {/* Подсказка «как измерить» */}
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button type="button" className="inline-flex size-6 items-center justify-center rounded-full text-sky-500 transition-colors hover:text-sky-600 dark:text-sky-400 dark:hover:text-sky-300">
-                              <Info className="size-4" />
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom" className="max-w-xs">
-                            <div className="space-y-1">
-                              <p className="text-xs font-medium">{p.tooltip}</p>
-                              <p className="text-[11px] text-muted-foreground">{p.howToMeasure}</p>
-                            </div>
-                          </TooltipContent>
-                        </Tooltip>
+                        {/* Подсказка «как измерить» — тап-переключатель (v1.14.21: не пропадает на телефоне) */}
+                        <InfoHint what={p.tooltip} howTo={p.howToMeasure} />
                       </div>
                     </div>
                     {/* Поле ввода; колесо — выпадающий список типоразмеров (одно поле, радиус подставляется сам) */}
@@ -668,7 +650,6 @@ export function BikeParametersForm() {
               );
             })}
           </div>
-          </TooltipProvider>
 
           {/* Интерактивный гид шага 3 (что нажимать и когда — прямо по шагам).
               Монтируем только при открытии, чтобы шаги всегда начинались с 1-го. */}

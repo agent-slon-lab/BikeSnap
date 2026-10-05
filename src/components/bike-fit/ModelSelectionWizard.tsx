@@ -10,7 +10,6 @@ import {
   Bike,
   Target,
   Check,
-  Info,
   ArrowUpDown,
   ArrowDown,
   ArrowUp,
@@ -28,12 +27,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { InfoHint } from "./InfoHint";
 import { cn } from "@/lib/utils";
 import {
   BIKE_TYPES,
@@ -130,7 +124,6 @@ export function ModelSelectionWizard() {
   };
 
   return (
-    <TooltipProvider delayDuration={200}>
       <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="mb-6 flex items-center justify-between">
@@ -267,7 +260,6 @@ export function ModelSelectionWizard() {
           )}
         </div>
       </div>
-    </TooltipProvider>
   );
 }
 
@@ -427,16 +419,11 @@ function Step2Body({
           <div className="space-y-1.5">
             <Label className="text-sm font-medium flex items-center gap-1">
               Внутренний шов (inseam) *
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button type="button" className="inline-flex size-6 items-center justify-center rounded-full text-sky-500 transition-colors hover:text-sky-600 dark:text-sky-400 dark:hover:text-sky-300">
-                    <Info className="size-4" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="right" className="max-w-xs">
-                  <p className="text-xs">Расстояние от паха до пола по внутренней стороне ноги, стоя в носках. Измерьте через книгу, прижатую к стене.</p>
-                </TooltipContent>
-              </Tooltip>
+              <InfoHint
+                side="right"
+                what="Как измерить inseam"
+                howTo="Расстояние от паха до пола по внутренней стороне ноги, стоя в носках. Измерьте через книгу, прижатую к стене."
+              />
             </Label>
             <div className="relative">
               <Input
