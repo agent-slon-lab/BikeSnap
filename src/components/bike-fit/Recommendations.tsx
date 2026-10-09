@@ -89,6 +89,7 @@ export function Recommendations({ analysis }: RecommendationsProps) {
                     </span>
                     <span className="text-xs text-muted-foreground">
                       текущее {item.value.toFixed(1)}° · норма {item.min}–{item.max}°
+                      {item.flexion && ` · сгиб ${item.flexion.value.toFixed(0)}° (норма ${item.flexion.min}–${item.flexion.max}°)`}
                     </span>
                   </div>
                   <p className="mt-1 flex items-start gap-1.5 text-sm">

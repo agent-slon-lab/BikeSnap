@@ -54,6 +54,12 @@ function AngleCard({ result }: { result: AngleResult }) {
             норма {result.min}–{result.max}°
           </span>
         </div>
+        {/* Производный угол сгиба колена (только у kneeAngle): сгиб = 180° − анатомический */}
+        {result.flexion && (
+          <div className="mt-1 text-[11px] text-muted-foreground">
+            {result.flexion.label}: {result.flexion.value.toFixed(1)}° · норма {result.flexion.min}–{result.flexion.max}°
+          </div>
+        )}
         <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
           {result.description}
         </p>

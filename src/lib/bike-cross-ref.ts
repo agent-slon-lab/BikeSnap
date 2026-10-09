@@ -56,7 +56,16 @@ export function generateCrossReferences(
 ): CrossRefResult {
   const refs: CrossReference[] = [];
 
-  // === 1. SH (высота седла) ↔ угол колена ===
+  // Правило склейки советов по седлу (ТЗ v1.14.22): если дельта высоты седла
+  // с LeMond > 20 мм — приоритет у крупной коррекции по формуле рамы,
+  // а микро-подстройки 2–3 мм (угол голеностопа и т.п.) скрываются как шум.
+  const shDeltaAbs =
+    bike.saddleHeight && calc?.recommendedSaddleHeight
+      ? Math.abs(bike.saddleHeight - calc.recommendedSaddleHeight)
+      : null;
+  const lemondDominates = shDeltaAbs != null && shDeltaAbs > 20;
+
+  // === 1. SH (высота седла) ↔ угол колена (анатомический, норма 140–150°) ===
   if (sideAnalysis && bike.saddleHeight && body.inseam > 0) {
     const kneeAngle = sideAnalysis.kneeAngle;
     const targetSH = calc?.recommendedSaddleHeight;
@@ -64,21 +73,21 @@ export function generateCrossReferences(
     const shDelta = targetSH ? currentSH - targetSH : null;
 
     if (kneeAngle.status === "bad" || kneeAngle.status === "warning") {
-      if (kneeAngle.value > 35) {
-        // Колено слишком прямое → седло слишком высоко
+      if (kneeAngle.value > 150) {
+        // Нога слишком прямая → седло слишком высоко
         refs.push({
           category: "saddle",
-          finding: `Угол колена ${kneeAngle.value.toFixed(1)}° — слишком прямое (норма 25-35°)`,
+          finding: `Угол колена ${kneeAngle.value.toFixed(1)}° — нога слишком прямая (норма 140-150°; сгиб ${kneeAngle.flexion ? kneeAngle.flexion.value.toFixed(0) : "30-40"}°)`,
           connection: `SH=${currentSH} мм, целевая по LeMond=${targetSH} мм → седло выше нормы на ${shDelta != null ? Math.abs(shDelta) : "?"} мм`,
           action: `Опустите седло на ${shDelta != null ? Math.abs(shDelta) : 5} мм`,
           priority: 1,
           sources: ["фото позы (угол колена)", "калибровка (SH)", "формула LeMond"],
         });
-      } else {
+      } else if (kneeAngle.value < 140) {
         // Колено слишком согнутое → седло слишком низко
         refs.push({
           category: "saddle",
-          finding: `Угол колена ${kneeAngle.value.toFixed(1)}° — слишком согнутое (норма 25-35°)`,
+          finding: `Угол колена ${kneeAngle.value.toFixed(1)}° — слишком согнутое (норма 140-150°; сгиб ${kneeAngle.flexion ? kneeAngle.flexion.value.toFixed(0) : "30-40"}°)`,
           connection: `SH=${currentSH} мм, целевая по LeMond=${targetSH} мм → седло ниже нормы на ${shDelta != null ? Math.abs(shDelta) : "?"} мм`,
           action: `Поднимите седло на ${shDelta != null ? Math.abs(shDelta) : 5} мм`,
           priority: 1,
@@ -106,10 +115,13 @@ export function generateCrossReferences(
       });
     }
 
-    if (backAngle.status === "bad" && reachDelta != null && reachDelta > 15) {
+    // Наклон корпуса: <35° — слишком горизонтальная (растянутая) посадка,
+    // >45° — слишком вертикальная. Тексты ветвятся по ЗНАЧЕНИЮ, а не только
+    // по статусу (раньше при инвертированных текстах советы были навыворот).
+    if (backAngle.status === "bad" && backAngle.value < 35 && reachDelta != null && reachDelta > 15) {
       refs.push({
         category: "stem",
-        finding: `Наклон корпуса ${backAngle.value.toFixed(1)}° — слишком вытянутая посадка (норма 30-55°)`,
+        finding: `Наклон корпуса ${backAngle.value.toFixed(1)}° — спина слишком горизонтальная (норма 35-45°)`,
         connection: `Reach=${bike.reach} мм — длиннее целевого ${targetReach} мм на ${Math.abs(reachDelta)} мм`,
         action: `Уменьшите Reach: более короткий вынос или сдвиньте седло вперёд`,
         priority: 2,
@@ -117,10 +129,10 @@ export function generateCrossReferences(
       });
     }
 
-    if (backAngle.status === "bad" && reachDelta != null && reachDelta < -15) {
+    if (backAngle.status === "bad" && backAngle.value > 45 && reachDelta != null && reachDelta < -15) {
       refs.push({
         category: "frame",
-        finding: `Наклон корпуса ${backAngle.value.toFixed(1)}° — слишком вертикальная посадка`,
+        finding: `Наклон корпуса ${backAngle.value.toFixed(1)}° — спина слишком вертикальная (норма 35-45°)`,
         connection: `Reach=${bike.reach} мм — короче целевого ${targetReach} мм на ${Math.abs(reachDelta)} мм`,
         action: `Рама слишком короткая. Увеличьте Reach: более длинный вынос или сдвиньте седло назад`,
         priority: 3,
@@ -136,14 +148,14 @@ export function generateCrossReferences(
     const stackDelta = targetStack ? bike.stack - targetStack : null;
     const stemAngle = bike.stemAngle ?? 0;
 
-    if (backAngle.status === "bad" && stackDelta != null && stackDelta < -15) {
-      // Стек слишком низкий → нужно поднять руль
+    if (backAngle.status === "bad" && backAngle.value < 35 && stackDelta != null && stackDelta < -15) {
+      // Стек слишком низкий, спина ушла в горизонталь → нужно поднять руль
       const angleAdvice = stemAngle < 6
         ? `Также замените вынос с углом ${stemAngle}° на +6° или +10°`
         : `Добавьте проставочные кольца под вынос`;
       refs.push({
         category: "handlebar",
-        finding: `Наклон корпуса ${backAngle.value.toFixed(1)}° — слишком низко (норма 30-55°)`,
+        finding: `Наклон корпуса ${backAngle.value.toFixed(1)}° — спина слишком горизонтальная (норма 35-45°)`,
         connection: `Stack=${bike.stack} мм, целевой=${targetStack} мм → ниже нормы на ${Math.abs(stackDelta)} мм. Угол выноса α=${stemAngle}°`,
         action: `Поднимите руль: ${angleAdvice}`,
         priority: 2,
@@ -151,10 +163,10 @@ export function generateCrossReferences(
       });
     }
 
-    if (backAngle.status === "bad" && stackDelta != null && stackDelta > 15) {
+    if (backAngle.status === "bad" && backAngle.value > 45 && stackDelta != null && stackDelta > 15) {
       refs.push({
         category: "handlebar",
-        finding: `Наклон корпуса ${backAngle.value.toFixed(1)}° — слишком вертикально (норма 30-55°)`,
+        finding: `Наклон корпуса ${backAngle.value.toFixed(1)}° — спина слишком вертикальная (норма 35-45°)`,
         connection: `Stack=${bike.stack} мм, целевой=${targetStack} мм → выше нормы на ${Math.abs(stackDelta)} мм`,
         action: `Опустите руль: снимите проставочные кольца или замените вынос на более отрицательный угол`,
         priority: 3,
@@ -179,13 +191,13 @@ export function generateCrossReferences(
     }
   }
 
-  // === 5. Угол бедра ↔ Reach + ETT ===
+  // === 5. Угол бедра ↔ Reach + ETT (анатомический, норма 95–105°) ===
   if (sideAnalysis && bike.ett && bike.reach) {
     const hipAngle = sideAnalysis.hipAngle;
-    if (hipAngle.status === "bad" && hipAngle.value < 40) {
+    if (hipAngle.status === "bad" && hipAngle.value < 95) {
       refs.push({
         category: "frame",
-        finding: `Угол бедра ${hipAngle.value.toFixed(1)}° — слишком закрытый (норма 40-55°)`,
+        finding: `Угол бедра ${hipAngle.value.toFixed(1)}° — тазобедренный сустав пережат (норма 95-105°)`,
         connection: `ETT=${bike.ett} мм, Reach=${bike.reach} мм → возможно рама слишком длинная`,
         action: `Уменьшите дистанцию седло-руль: короткий вынос или седло вперёд`,
         priority: 2,
@@ -208,8 +220,11 @@ export function generateCrossReferences(
     }
   }
 
-  // === 7. Угол голеностопа ↔ высота седла ===
-  if (sideAnalysis && bike.saddleHeight) {
+  // === 7. Угол голеностопа ↔ высота седла (микро-подстройка 2-3 мм).
+  // СКЛЕЙКА СОВЕТОВ (ТЗ v1.14.22): если дельта с LeMond > 20 мм —
+  // приоритет у крупной коррекции высоты (секция 1), микро-подстройку скрываем,
+  // чтобы не советовать «опустите на 41 мм» и тут же «опустите на 2-3 мм». ===
+  if (sideAnalysis && bike.saddleHeight && !lemondDominates) {
     const ankleAngle = sideAnalysis.ankleAngle;
     if (ankleAngle.status === "bad" && ankleAngle.value > 110) {
       refs.push({

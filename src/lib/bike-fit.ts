@@ -1,7 +1,15 @@
 /**
  * Утилиты для работы с позой велосипедиста
  * Расчёт углов суставов по keypoints из MediaPipe PoseLandmarker
+ *
+ * v1.14.22 — ЕДИНЫЙ АНАТОМИЧЕСКИЙ СТАНДАРТ (180° = полностью выпрямленный
+ * сустав). Нормы живут в src/lib/poseMetricsEngine.ts (JOINT_NORMS) и
+ * импортируются отсюда. Раньше угол колена (анатомический, ~145° в НМТ)
+ * сравнивался с диапазоном СГИБА 25–35° — отсюда ложные «критично»;
+ * текст наклона корпуса был инвертирован. Исправлено по ТЗ.
  */
+
+import { JOINT_NORMS, KNEE_FLEXION_NORM, kneeFlexion } from "./poseMetricsEngine";
 
 export interface Point {
   x: number; // нормализованная координата 0..1
@@ -121,6 +129,13 @@ export interface AngleResult {
   description: string;
   // Рекомендация по корректировке
   recommendation: string;
+  // Производный угол СГИБА колена (только у kneeAngle): 180° − анатомический
+  flexion?: {
+    value: number;
+    min: number;
+    max: number;
+    label: string;
+  };
   // Цвет для UI (Tailwind классы)
   color: {
     text: string;
@@ -165,7 +180,8 @@ function makeResult(
   max: number,
   label: string,
   description: string,
-  recommendation: string
+  recommendation: string,
+  flexion?: AngleResult["flexion"]
 ): AngleResult {
   const status = classifyStatus(value, min, max);
   return {
@@ -176,6 +192,7 @@ function makeResult(
     label,
     description,
     recommendation,
+    flexion,
     color: STATUS_COLORS[status],
   };
 }
@@ -239,6 +256,8 @@ export function analyzeBikeFit(
   const knee = landmarks[K];
   const ankle = landmarks[A];
   const heel = landmarks[HE];
+  const FT = side === "left" ? POSE_LANDMARKS.LEFT_FOOT_INDEX : POSE_LANDMARKS.RIGHT_FOOT_INDEX;
+  const toe = landmarks[FT];
 
   // Проверяем видимость ключевых точек
   if (
@@ -250,68 +269,86 @@ export function analyzeBikeFit(
     return null;
   }
 
-  // 1. Угол колена (hip-knee-ankle) — должен быть 25-35° в НМТ
+  // 1. Угол колена (hip-knee-ankle) — АНАТОМИЧЕСКИЙ угол разгибания,
+  //    норма 140–150° в НМТ (180° = нога полностью выпрямлена).
+  //    Для UI дополнительно считаем угол СГИБА = 180° − угол (норма 30–40°).
   const kneeAngleValue = angleBetween(hip, knee, ankle);
   const kneeAngle = makeResult(
     kneeAngleValue,
-    25,
-    35,
-    "Угол колена",
-    "Угол сгиба колена в нижней точке педалирования. Влияет на мощность и нагрузку на сустав.",
-    kneeAngleValue > 35
-      ? "Колено слишком прямое — поднимите седло на 1–2 см. Это увеличит сгибание."
-      : "Колено слишком согнуто — опустите седло на 1–2 см. Это позволит ноге полностью разгибаться."
+    JOINT_NORMS.knee.min,
+    JOINT_NORMS.knee.max,
+    "Угол колена (разгибание)",
+    "Анатомический угол бедро–колено–лодыжка в нижней точке педалирования (НМТ): 180° — нога полностью выпрямлена. Норма 140–150° (сгибу 30–40°). Влияет на мощность и нагрузку на сустав.",
+    kneeAngleValue > JOINT_NORMS.knee.max
+      ? `Нога слишком прямая (${kneeAngleValue.toFixed(0)}°). Опустите седло, чтобы угол в НМТ составлял 140–150°.`
+      : `Колено слишком согнуто (${kneeAngleValue.toFixed(0)}°). Поднимите седло для предотвращения перегрузки сустава.`,
+    {
+      value: Math.round(kneeFlexion(kneeAngleValue) * 10) / 10,
+      min: KNEE_FLEXION_NORM.min,
+      max: KNEE_FLEXION_NORM.max,
+      label: "сгиб",
+    }
   );
-  // Sanity по спеке: < 20° или > 50° — не норма, а ошибка распознавания
-  if (kneeAngleValue < 20 || kneeAngleValue > 50) {
+  // Sanity: только нижняя граница — анатомический <130° (сгиб >50°) физически
+  // недостижим на велосипеде → ошибка распознавания. ВЕРХНЮЮ границу НЕ ставим:
+  // почти прямая нога (176°) — легитимный случай «седло сильно завышено»,
+  // и он должен давать совет «Опустите седло», а не «ошибка распознавания»
+  // (именно это было частью исходного бага из ТЗ).
+  if (kneeAngleValue < 130) {
     kneeAngle.status = "bad";
     kneeAngle.color = STATUS_COLORS.bad;
     kneeAngle.recommendation =
       "Ошибка распознавания позы или экстремальная настройка — проверьте кадр: НМТ должна быть снята в нижней фазе педалирования.";
   }
 
-  // 2. Угол бедра (shoulder-hip-knee) — должен быть 40-50°
+  // 2. Угол бедра (shoulder-hip-knee) — АНАТОМИЧЕСКИЙ, норма 95–105° в НМТ
   const hipAngleValue = angleBetween(shoulder, hip, knee);
   const hipAngle = makeResult(
     hipAngleValue,
-    40,
-    55,
+    JOINT_NORMS.hip.min,
+    JOINT_NORMS.hip.max,
     "Угол бедра",
-    "Угол между корпусом и бедром. Определяет закрытость тазобедренного сустава.",
-    hipAngleValue < 40
-      ? "Бедро слишком закрыто — увеличьте дистанцию седло-руль (опустите вынос или сдвиньте седло назад)."
-      : "Бедро слишком открыто — уменьшите дистанцию седло-руль."
+    "Анатомический угол между туловищем (плечо→бедро) и бедром (бедро→колено). Норма шоссе 95–105°. Определяет закрытость тазобедренного сустава.",
+    hipAngleValue < JOINT_NORMS.hip.min
+      ? "Тазобедренный сустав пережат — увеличьте дистанцию седло–руль или приподнимите/удлините вынос."
+      : "Угол бедра слишком открыт — посадка избыточно растянута; сократите дистанцию седло–руль."
   );
 
-  // 3. Угол спины (наклон корпуса от горизонтали)
+  // 3. Наклон корпуса (спина: hip → shoulder к горизонту) — норма шоссе 35–45°.
+  //    0° = горизонтально (агрессивная посадка), 90° = вертикально (комфорт).
+  //    Тексты ПО ТЗ: >45° — слишком ВЕРТИКАЛЬНАЯ спина, <35° — слишком
+  //    ГОРИЗОНТАЛЬНАЯ (раньше формулировки были перепутаны местами).
   const backAngleValue = angleToHorizontal(shoulder, hip);
   const backAngle = makeResult(
     backAngleValue,
-    30,
-    55,
+    JOINT_NORMS.torso.min,
+    JOINT_NORMS.torso.max,
     "Наклон корпуса",
-    "Угол наклона спины относительно горизонта. Меньше = более вертикально (комфорт), больше = более аэродинамично.",
-    backAngleValue < 30
-      ? "Спина слишком вертикальная — для скорости опустите вынос руля или наклонитесь вперёд."
-      : "Спина слишком горизонтальная — поднимите вынос руля или сдвиньте седло вперёд для комфорта."
+    "Угол наклона спины (бедро→плечо) к горизонту: 0° — горизонтально (агрессивная посадка), 90° — вертикально (комфорт). Норма шоссе 35–45°.",
+    backAngleValue > JOINT_NORMS.torso.max
+      ? "Спина стоит слишком вертикально — посадка высокая/комфортная. Для аэродинамики опустите или удлините вынос."
+      : "Спина наклонена слишком низко — посадка агрессивная. Поднимите вынос руля для снижения нагрузки на поясницу и руки."
   );
 
-  // 4. Угол голеностопа (knee-ankle-heel)
-  const ankleAngleValue = isVisible(heel)
-    ? angleBetween(knee, ankle, heel)
-    : 90;
+  // 4. Угол голеностопа (knee-ankle-toe, при недоступности носка — heel).
+  //    Норма 90–110°. >110° — носок опущен (седло высоко), <90° — пятка провалена.
+  const ankleAngleValue = isVisible(toe)
+    ? angleBetween(knee, ankle, toe)
+    : isVisible(heel)
+      ? angleBetween(knee, ankle, heel)
+      : 90;
   const ankleAngle = makeResult(
     ankleAngleValue,
-    90,
-    110,
+    JOINT_NORMS.ankle.min,
+    JOINT_NORMS.ankle.max,
     "Угол голеностопа",
-    "Угол сгиба стопы. Влияет на эффективность передачи мощности на педаль.",
-    ankleAngleValue < 90
-      ? "Стопа слишком опущена — проверьте высоту седла и положение шипа."
-      : "Стопа слишком поднята — опустите носок шипа или поработайте над гибкостью икры."
+    "Угол между голенью (колено→лодыжка) и стопой (лодыжка→носок). Норма 90–110°.",
+    ankleAngleValue > JOINT_NORMS.ankle.max
+      ? "Носок слишком опущен вниз — возможно, седло задрано слишком высоко, и вы тянетесь к педали."
+      : "Пятка сильно провалена вниз — проверьте положение шипа на велотуфлях."
   );
 
-  // 5. Угол плеча (elbow-shoulder-hip)
+  // 5. Угол плеча (elbow-shoulder-hip) — без изменений по ТЗ
   const shoulderAngleValue = isVisible(elbow)
     ? angleBetween(elbow, shoulder, hip)
     : 90;

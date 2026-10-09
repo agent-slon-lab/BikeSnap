@@ -89,6 +89,12 @@ function CauseCard({
               Подтверждено фото
             </Badge>
           )}
+          {cause.boosted && (
+            <Badge className="bg-sky-500 text-white text-[10px] gap-1">
+              <AlertTriangle className="size-2.5" />
+              Повышено кросс-валидацией
+            </Badge>
+          )}
           <span className="flex items-center gap-0.5 text-[10px] text-muted-foreground">
             <Clock className="size-3" />
             ~{cause.adaptationDays} дн.
@@ -97,6 +103,11 @@ function CauseCard({
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
           {cause.description}
         </p>
+        {cause.crossNote && (
+          <p className="mt-2 rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-xs leading-relaxed text-sky-800 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300">
+            {cause.crossNote}
+          </p>
+        )}
         <p className="mt-2 flex items-start gap-1.5 text-sm">
           <ArrowRight className="mt-0.5 size-3.5 shrink-0 text-orange-500" />
           <span className="font-medium">{cause.action}</span>

@@ -15,6 +15,7 @@
 
 import type { Complaint } from "./bike-store";
 import type { ViewType, BikeFitAnalysis, BackViewAnalysis, FrontViewAnalysis } from "./bike-fit";
+import { isTorsoUprightForHandComplaints } from "./poseMetricsEngine";
 
 export type Priority = 1 | 2 | 3;
 
@@ -62,7 +63,7 @@ export const COMPLAINT_RULES: ComplaintRule[] = [
           "Колено слишком согнуто в НМТ — перегружаются квадрицепсы и надколенник. Самая частая причина боли спереди колена.",
         priority: 1,
         action:
-          "Поднимите седло на 5 мм. Проверьте угол колена в НМТ — должен быть 25-35°.",
+          "Поднимите седло на 5 мм. Проверьте угол колена в НМТ — должен быть 140–150° (сгиб 30–40°).",
         adaptationDays: 3,
         relatedMetric: {
           view: "side",
@@ -491,10 +492,25 @@ function getMetricValue(
 /**
  * Получить причины для жалоб, отсортированные по приоритету.
  * Если передан анализ — добавляет флаг "triggered" (сработала ли причина по метрике).
+ *
+ * КРОСС-ВАЛИДАЦИЯ (v1.14.22, ТЗ ч.3 п.1): если по фото спина почти вертикальна
+ * (>50°), причины вида «Слишком низкий руль» понижаются с пояснением, а
+ * «Седло слишком завалено вперёд» — повышается: при вертикальной спине вес
+ * на руки чаще наваливает сползание тела вперёд (нос седла вниз / длинный
+ * вынос), а не низкий руль.
  */
 export interface CauseWithTrigger extends ComplaintCause {
   /** Сработала ли причина по метрике из анализа */
   triggered: boolean;
+  /**
+   * Кросс-валидация «жалобы vs фото» (v1.14.22): объяснение, почему причина
+   * понижена/повышена. Пример: жалоба «онемение кистей», но спина почти
+   * вертикальна (>50°) → «низкий руль» под вопросом; вероятнее седло,
+   * заваленное вперёд, или слишком длинный вынос — тело сползает вперёд.
+   */
+  crossNote?: string;
+  /** Приоритет повышен кросс-валидацией (сортируется как triggered) */
+  boosted?: boolean;
 }
 
 export function getCausesForComplaints(
@@ -502,6 +518,9 @@ export function getCausesForComplaints(
   analysis?: AnalysisResults
 ): CauseWithTrigger[] {
   if (complaints.length === 0 || complaints.includes("none")) return [];
+
+  const torsoDeg = analysis?.side?.backAngle?.value ?? null;
+  const torsoUpright = isTorsoUprightForHandComplaints(torsoDeg);
 
   const causes: CauseWithTrigger[] = [];
 
@@ -522,13 +541,35 @@ export function getCausesForComplaints(
           triggered = true;
         }
       }
-      causes.push({ ...cause, triggered });
+
+      let crossNote: string | undefined;
+      let boosted = false;
+      if (torsoUpright && torsoDeg != null) {
+        const torsoTxt = torsoDeg.toFixed(0);
+        if (/низкий руль/i.test(cause.title)) {
+          // Понижаем «низкий руль» с объяснением (спина почти вертикальна)
+          triggered = false;
+          crossNote =
+            `Кросс-валидация по фото: спина почти вертикальна (${torsoTxt}° > 50°) — «низкий руль» под вопросом. ` +
+            "Частая причина — седло, заваленное вперёд, или слишком длинный вынос: тело сползает вперёд, и вес наваливается на руки. Проверьте сначала наклон седла и длину выноса.";
+        } else if (/завалено вперёд/i.test(cause.title)) {
+          // Повышаем «седло завалено вперёд»
+          boosted = true;
+          crossNote =
+            `Кросс-валидация по фото: спина вертикальна (${torsoTxt}° > 50°), а руки перегружены — ` +
+            "проверьте сначала наклон седла (нос не должен утопать вниз) и длину выноса.";
+        }
+      }
+
+      causes.push({ ...cause, triggered, crossNote, boosted });
     }
   }
 
-  // Сортируем: сначала triggered, потом по приоритету
+  // Сортировка: triggered → boosted (кросс-валидация) → по приоритету
   return causes.sort((a, b) => {
-    if (a.triggered !== b.triggered) return a.triggered ? -1 : 1;
+    const aKey = a.triggered ? 0 : a.boosted ? 1 : 2;
+    const bKey = b.triggered ? 0 : b.boosted ? 1 : 2;
+    if (aKey !== bKey) return aKey - bKey;
     return a.priority - b.priority;
   });
 }
