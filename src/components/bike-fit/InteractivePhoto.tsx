@@ -1,10 +1,17 @@
 "use client";
 
 /**
- * ИНТЕРАКТИВНОЕ ФОТО ВЕЛИКА (v3.2.0 — лупа всегда смещена от пальца, v1.14.23)
+ * ИНТЕРАКТИВНОЕ ФОТО ВЕЛИКА (v3.3.0 — режим «на весь экран», v1.14.26)
  * ===========================================================================
  * Разметка ключевых точек велосипеда на фото. v3.0.0 (v1.14.15) — переработка
  * взаимодействия: зум щипком, экранно-постоянные размеры, двухфазная установка.
+ *
+ * v3.3.0 (v1.14.26) — по обратной связи «фото оч мелкое»: кнопка Maximize2
+ * разворачивает фото на весь экран (fixed-оверлей поверх страницы, не нативный
+ * Fullscreen API — тот не работает в Safari на iPhone). Внутри работают ВСЕ
+ * те же жесты: зум щипком/колесом, панорама, точки, лупа — это тот же
+ * компонент, просто контейнер становится на весь вьюпорт. Выход — кнопка
+ * Minimize2 или Esc. Скролл страницы на время фулскрина заблокирован.
  *
  * v3.2.0 (v1.14.23) — фикс по обратной связи: «чтобы ВСЕГДА зум-кружок был
  * смещён от пальца». В v3.1.0 смещение было только вертикальным, а кламп
@@ -43,7 +50,16 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Move, ZoomIn, ZoomOut, Maximize, ImageOff } from "lucide-react";
+import {
+  Loader2,
+  Move,
+  ZoomIn,
+  ZoomOut,
+  Maximize,
+  Maximize2,
+  Minimize2,
+  ImageOff,
+} from "lucide-react";
 import type { BikeKeyPoints, PixelPoint } from "@/lib/bike-photo-scale";
 import { pointFullLabel } from "@/lib/point-labels";
 
@@ -245,6 +261,24 @@ export function InteractivePhoto({
   const [cursorVb, setCursorVb] = useState<{ x: number; y: number } | null>(null);
   // Призрак точки при двухфазной установке (placementMode): позиция в image-координатах
   const [aimImg, setAimImg] = useState<PixelPoint | null>(null);
+  // v1.14.26: режим «на весь экран» — fixed-оверлей, фото максимально большое
+  const [fs, setFs] = useState(false);
+
+  // Esc закрывает фулскрин; на время фулскрина блокируем скролл страницы,
+  // чтобы фон под оверлеем не прокручивался колесом/тачем мимо фото
+  useEffect(() => {
+    if (!fs) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFs(false);
+    };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [fs]);
 
   // ===== refs-зеркала для обработчиков жестов (свежие значения без ре-мемоизации) =====
   const viewRef = useRef(view);
@@ -619,7 +653,15 @@ export function InteractivePhoto({
   );
 
   return (
-    <div className="space-y-2">
+    <div
+      className={
+        fs
+          ? "fixed inset-0 z-[90] flex flex-col gap-2 bg-black p-2 sm:p-3"
+          : "space-y-2"
+      }
+      role={fs ? "dialog" : undefined}
+      aria-modal={fs ? "true" : undefined}
+    >
       {/* Подсказка с описанием текущей точки в режиме разметки */}
       {placementMode && placementPointKey && (() => {
         const cfg = POINT_CONFIG.find((p) => p.key === placementPointKey);
@@ -627,7 +669,7 @@ export function InteractivePhoto({
         const stepIdx = POINT_CONFIG.findIndex((p) => p.key === placementPointKey) + 1;
         return (
           <div
-            className="rounded-lg border-l-4 p-3 space-y-1.5 bg-white dark:bg-background shadow-sm"
+            className="shrink-0 rounded-lg border-l-4 p-3 space-y-1.5 bg-white dark:bg-background shadow-sm"
             style={{ borderColor: cfg.color }}
           >
             <div className="flex items-center gap-2">
@@ -649,7 +691,7 @@ export function InteractivePhoto({
               </p>
             )}
             <p className="text-[11px] text-muted-foreground">
-              Прижми палец — рядом с ним (сверху или сбоку, где есть место) появится лупа с перекрестием. Подвини и отпусти — точка встанет туда, где перекрестие. Можно приблизить щипком.
+              Прижми палец — рядом с ним (сверху или сбоку, где есть место) появится лупа с перекрестием. Подвини и отпусти — точка встанет туда, где перекрестие. Можно приблизить щипком. Кнопка справа сверху развернёт фото на весь экран — удобно для мелких деталей.
             </p>
           </div>
         );
@@ -657,7 +699,12 @@ export function InteractivePhoto({
 
       <div
         ref={wrapRef}
-        className="relative w-full overflow-hidden rounded-xl border bg-black select-none"
+        className={
+          fs
+            ? // Фулскрин: занимаем всё свободное место колонки-оверлея
+              "relative min-h-0 flex-1 overflow-hidden rounded-xl bg-black select-none"
+            : "relative w-full overflow-hidden rounded-xl border bg-black select-none"
+        }
         style={{ touchAction: "none" }}
       >
         {hasImage ? (
@@ -665,9 +712,16 @@ export function InteractivePhoto({
             ref={svgRef}
             viewBox={`0 0 ${imgSize.w} ${imgSize.h}`}
             preserveAspectRatio="xMidYMid meet"
-            className="block w-full h-auto"
+            className={
+              // v1.14.26: в фулскрине SVG заполняет весь контейнер (abs inset-0 —
+              // проценты высоты разрешаются всегда), preserveAspectRatio центрирует
+              // кадр; в обычном режиме — по ширине с клампом 70vh
+              fs
+                ? "absolute inset-0 block h-full w-full"
+                : "block w-full h-auto"
+            }
             style={{
-              maxHeight: "70vh",
+              maxHeight: fs ? undefined : "70vh",
               touchAction: "none",
               cursor: placementMode ? "crosshair" : "grab",
             }}
@@ -929,9 +983,20 @@ export function InteractivePhoto({
           </div>
         )}
 
-        {/* Кнопки зума (поверх фото, справа сверху) */}
+        {/* Кнопки зума (поверх фото, справа сверху); v1.14.26 — разворот на весь экран */}
         {hasImage && (
           <div className="absolute right-2 top-2 flex flex-col gap-1.5">
+            {fs && (
+              <button
+                type="button"
+                aria-label="Выйти из полного экрана"
+                title="Выйти из полного экрана (Esc)"
+                onClick={() => setFs(false)}
+                className="flex size-9 items-center justify-center rounded-lg bg-emerald-600 text-white shadow-lg active:bg-emerald-700"
+              >
+                <Minimize2 className="size-5" />
+              </button>
+            )}
             <button
               type="button"
               aria-label="Приблизить"
@@ -956,6 +1021,17 @@ export function InteractivePhoto({
             >
               <Maximize className="size-5" />
             </button>
+            {!fs && (
+              <button
+                type="button"
+                aria-label="Развернуть на весь экран"
+                title="Развернуть на весь экран — большое фото, зум и точки работают"
+                onClick={() => setFs(true)}
+                className="flex size-9 items-center justify-center rounded-lg bg-black/55 text-white backdrop-blur-sm active:bg-black/75"
+              >
+                <Maximize2 className="size-5" />
+              </button>
+            )}
           </div>
         )}
 
@@ -972,10 +1048,16 @@ export function InteractivePhoto({
 
       {/* Подсказка + переключатели */}
       {keyPoints && (
-        <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div
+          className={
+            fs
+              ? "flex shrink-0 items-center justify-between gap-2 flex-wrap"
+              : "flex items-center justify-between gap-2 flex-wrap"
+          }
+        >
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <Move className="size-3 shrink-0" />
-            Щипок — зум · палец по пустому — панорама · лупа смещена от пальца
+            Щипок — зум · палец по пустому — панорама · лупа смещена от пальца · кнопка справа сверху — весь экран
           </p>
           <button
             onClick={() => setShowLabels(!showLabels)}
