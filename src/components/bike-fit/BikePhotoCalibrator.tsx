@@ -187,6 +187,12 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
   // экран»). Ref, а не state: читается внутри useCallback без deps.
   const savedPhotoDataRef = useRef<string | null>(initialPhotoUrl ?? null);
 
+  // v1.14.25: сигнатура последней авто-записи в карточку велика (JSON avg).
+  // Объявлен ЗДЕСЬ (выше колбэков handlePhotoSelected/handleClear, которые
+  // его сбрасывают). Обновляется в момент фактической записи — см. эффект
+  // авто-записи ниже.
+  const lastAutoAppliedRef = useRef<string>("");
+
   useEffect(() => {
     // Если это эхо нашего собственного onPhotoChange — пропускаем, иначе
     // мы сбросили бы placementMode = false прямо во время разметки (критичный баг:
@@ -227,11 +233,10 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
   const [comparisons, setComparisons] = useState<ComparisonResult[]>([]);
   const [pointsMissing, setPointsMissing] = useState<string[]>([]);
   const [debugLog, setDebugLog] = useState<string[]>([]);
-  // v1.13.5: мгновенная обратная связь под кнопкой «Записать в параметры велика» —
-  // перечисляем, что именно ушло в карточку (лечит «нажимаю — и ничего не происходит»).
+  // v1.14.25: сводка АВТО-записи — что именно ушло в карточку велика.
+  // Кнопка «Записать в параметры велика» удалена: запись выполняется сама
+  // после каждого успешного расчёта (см. эффект авто-записи ниже).
   const [appliedSummary, setAppliedSummary] = useState<string | null>(null);
-  // v1.14.0: авто-скролл к результатам после «Вычислить все параметры»
-  const resultsRef = useRef<HTMLDivElement | null>(null);
   const [placementMode, setPlacementMode] = useState(false);
   const [placementPointKey, setPlacementPointKey] = useState<keyof BikeKeyPoints | null>(null);
   // Перспектива: только ИНФОРМАЦИЯ для dual scale — интерактивная коррекция
@@ -339,7 +344,6 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
 
   // Текущее значение primary-параметра для калибровки
   const knownValue = getCalibValue(knownKey);
-  const hasKnownValue = knownValue != null && knownValue > 0;
 
   // Число из сырого поля ввода (или null)
   const parseCalibRaw = useCallback((raw: string): number | null => {
@@ -396,6 +400,10 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     setEngineWarnings([]);
     setEngineResult(null);
     setScaleSourceInfo(null);
+    // v1.14.25: новое фото — авто-запись должна сработать заново даже при
+    // идентичных точках/значениях (карточка могла быть очищена)
+    lastAutoAppliedRef.current = "";
+    setAppliedSummary(null);
     // Конвертируем в base64 и сохраняем
     if (onPhotoChange) {
       const reader = new FileReader();
@@ -434,6 +442,9 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     setEngineWarnings([]);
     setEngineResult(null);
     setScaleSourceInfo(null);
+    // v1.14.25: очистка сбрасывает историю авто-записи и её сводку
+    lastAutoAppliedRef.current = "";
+    setAppliedSummary(null);
     if (onPhotoChange) {
       lastEmittedRef.current = { photoUrl: null, keyPoints: null };
       onPhotoChange(null, null);
@@ -517,7 +528,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
   const runCalibration = useCallback(
     (pts: BikeKeyPoints, knownVal: number) => {
       const ts = new Date().toLocaleTimeString();
-      // Пересчёт обесценивает прошлую запись — убираем сводку под кнопкой.
+      // Пересчёт обесценивает прошлую запись — сводку обновит авто-запись.
       setAppliedSummary(null);
 
       // === ЗАЩИТА ОТ МУСОРНОГО МАСШТАБА (кейс «SH = 8» вместо «800») ===
@@ -1070,23 +1081,107 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     [knownKey, measured, getCalibValue, getMeasuredFor, imgSize, bikeType]
   );
 
-  const handleCalibrate = useCallback(() => {
-    if (!keyPoints || knownValue == null || knownValue <= 0) return;
-    // Логируем ручной запуск
-    const ts = new Date().toLocaleTimeString();
-    setDebugLog((prev) => [
-      ...prev.slice(-80),
-      ``,
-      `[${ts}] 🎯 Пользователь нажал «Вычислить все параметры»`,
-      `  knownKey = ${knownKey}, knownValue = ${knownValue} мм`,
-    ]);
+  // ===== v1.14.25: АВТО-РАСЧЁТ — кнопка «Вычислить все параметры» удалена =====
+  // Как только известны ВСЕ обязательные точки + размеры фото + хотя бы один
+  // калибровочный размер — расчёт запускается сам. Любая правка (точки на фото,
+  // поля калибровки, карточка велика) пересчитывает всё немедленно.
+  useEffect(() => {
+    if (!keyPoints || !imgSize) return;
+    if (knownValue == null || knownValue <= 0) return;
+    // Запускаем только когда разметка физически достаточна (7 обязательных
+    // точек на месте) — во время разметки ошибки «не хватает точек» не нужны.
+    const AUTO_CALC_REQUIRED: Array<keyof BikeKeyPoints> = [
+      "rearAxle", "frontAxle", "bb", "stTop", "saddleMount", "htBottom", "htTop",
+    ];
+    const allRequired = AUTO_CALC_REQUIRED.every((k) => {
+      const pt = keyPoints[k];
+      return pt && pt.x != null && pt.y != null;
+    });
+    if (!allRequired) return;
     runCalibration(keyPoints, knownValue);
-    // Результат рендерится ниже — плавно показываем его, чтобы не было
-    // ощущения «нажал — ничего не произошло».
-    setTimeout(() => {
-      resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 150);
-  }, [keyPoints, knownValue, runCalibration, knownKey]);
+  }, [keyPoints, imgSize, knownValue, knownKey, runCalibration]);
+
+  // ===== v1.14.25: АВТО-ЗАПИСЬ в карточку велика — кнопка удалена =====
+  // После успешного расчёта (нет физических нарушений) значения сами уходят
+  // в карточку через onAveraged. Пишем ФОТО-значения (НЕ усреднённые):
+  // усреднение в авто-режиме даёт дрейф avg(m,c)→m′→avg(m′,c)→… и бесконечные
+  // перезаписи. Reach/Stack и справочная геометрия в форме не вводятся вовсе,
+  // так что перезапись ручного ввода невозможна по построению; WB остаётся
+  // «только в пустое поле» (правило формы).
+  useEffect(() => {
+    if (!onAveraged || !engineResult || !computed || comparisons.length === 0) return;
+    // ГЕЙТ: физически невозможная разметка → числа мусор, в карточку не пишем
+    if (engineResult.physicsViolations.length > 0) return;
+
+    const avg: Record<string, number | null> = {
+      reach: computed.reach,
+      stack: computed.stack,
+      sta: Math.round(engineResult.anglesDeg.seatTubeAngle * 10) / 10,
+      hta: Math.round(engineResult.anglesDeg.headTubeAngle * 10) / 10,
+      frontCenter: computed.frontCenter,
+      rearCenter: computed.rearCenter,
+      seatTubeLength: computed.seatTubeLength,
+      bbDrop: computed.bbDrop,
+      wheelbase: engineResult.metricsMm.wheelbase,
+    };
+
+    // Всё уже в карточке (после записи/восстановления) — не пишем повторно
+    const CARD_KEY_OF: Record<string, keyof BikeMeasurements> = {
+      reach: "reach",
+      stack: "stack",
+      sta: "sta",
+      hta: "hta",
+      frontCenter: "frontCenter",
+      rearCenter: "rearCenter",
+      seatTubeLength: "seatTube",
+      bbDrop: "bbDrop",
+    };
+    const allAlreadyThere =
+      (Object.keys(CARD_KEY_OF) as Array<keyof typeof CARD_KEY_OF>).every((k) => {
+        const v = avg[k];
+        return v == null || measured[CARD_KEY_OF[k]] === v;
+      }) &&
+      (avg.wheelbase == null || measured.wheelbase != null);
+    const sig = JSON.stringify(avg);
+    if (allAlreadyThere) {
+      lastAutoAppliedRef.current = sig;
+      return;
+    }
+    if (sig === lastAutoAppliedRef.current) return;
+
+    // v1.14.25: дебаунс 400 мс — при драге точки расчёт идёт на каждый
+    // pointermove; запись в карточку (и parent setBike-шторм) делаем после
+    // паузы. Для пользователя это всё ещё «сразу», но без просадок кадража.
+    // ВАЖНО: lastAutoAppliedRef обновляется ВНУТРИ таймера — если таймер
+    // отменён cleanup'ом (пришёл новый расчёт), ref остаётся старым и запись
+    // не теряется: следующий прогон эффекта пересоздаст таймер.
+    const writeTimer = setTimeout(() => {
+      lastAutoAppliedRef.current = sig;
+      const parts: string[] = [];
+      const push = (label: string, val: number | null | undefined, unit = "мм") => {
+        if (val != null && val > 0) parts.push(`${label} ${val}${unit}`);
+      };
+      push("Reach", avg.reach);
+      push("Stack", avg.stack);
+      push("STA", avg.sta, "°");
+      push("HTA", avg.hta, "°");
+      push("FC", avg.frontCenter);
+      push("RC", avg.rearCenter);
+      push("ST", avg.seatTubeLength);
+      push("BB Drop", avg.bbDrop);
+      onAveraged(avg);
+      setAppliedSummary(
+        parts.length > 0
+          ? `✓ Записано в карточку велика автоматически: ${parts.join(", ")}`
+          : null
+      );
+      setDebugLog((prev) => [
+        ...prev.slice(-80),
+        `[${new Date().toLocaleTimeString()}] 💾 АВТО-ЗАПИСЬ в карточку велика: ${parts.join(", ") || "нет значений"}`,
+      ]);
+    }, 400);
+    return () => clearTimeout(writeTimer);
+  }, [engineResult, computed, comparisons, onAveraged, measured]);
 
   // Подсказки для точек — что и где нужно поправить.
   // v2: работают в пиксельном пространстве через результат ядра
@@ -1122,10 +1217,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     ]);
 
     setKeyPoints(corrected);
-    if (knownValue != null && knownValue > 0) {
-      runCalibration(corrected, knownValue);
-    }
-  }, [keyPoints, knownValue, runCalibration]);
+    // v1.14.25: пересчёт запускается автоматически (эффект видит новые keyPoints)
+  }, [keyPoints]);
 
   const handleApplyAllSuggestions = useCallback(() => {
     if (!keyPoints) return;
@@ -1152,10 +1245,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
       corrected = applySuggestion(corrected, s);
     }
     setKeyPoints(corrected);
-    if (knownValue != null && knownValue > 0) {
-      runCalibration(corrected, knownValue);
-    }
-  }, [keyPoints, pointSuggestions, knownValue, runCalibration]);
+    // v1.14.25: пересчёт запускается автоматически (эффект видит новые keyPoints)
+  }, [keyPoints, pointSuggestions]);
 
   // NOTE: Авто-выравнивание (поворот точек) УБРАНО.
   // Точки на фото НЕ двигаются — остаются там, где их поставил пользователь.
@@ -1323,7 +1414,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
               `  🛞 ${wp.label} колесо: R = ${rPx.toFixed(1)} px (ось → верх покрышки)${
                 s
                   ? ` ≈ ${Math.round(rPx * s)} мм при масштабе ${s.toFixed(3)} мм/пикс`
-                  : " (масштаб ещё не посчитан — мм появятся после «Вычислить все параметры»)"
+                  : " (масштаб ещё не посчитан — мм появятся после авто-расчёта)"
               }`,
             ]);
           }
@@ -1376,77 +1467,14 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
           setPlacementPointKey(null);
           setDebugLog((prev) => [
             ...prev.slice(-80),
-            `[${new Date().toLocaleTimeString()}] Все 10 точек размещены — выход из режима разметки`,
+            `[${new Date().toLocaleTimeString()}] Все 10 точек размещены — выход из режима разметки. Расчёт и запись в карточку выполнятся автоматически.`,
           ]);
-
-          // Если есть knownValue — запускаем калибровку
-          if (knownValue != null && knownValue > 0) {
-            setTimeout(() => runCalibration(pts, knownValue), 50);
-          }
-        }
-      } else {
-        // Не в режиме разметки — простой пересчёт при драге
-        if (knownValue != null && knownValue > 0) {
-          runCalibration(pts, knownValue);
         }
       }
+      // v1.14.25: пересчёт при драге — тоже автоматический (эффект по keyPoints)
     },
-    [placementMode, placementPointKey, knownValue, runCalibration, keyPoints, imgSize, engineResult]
+    [placementMode, placementPointKey, keyPoints, imgSize, engineResult]
   );
-
-  const handleApplyAveraged = useCallback(() => {
-    if (comparisons.length === 0 || !onAveraged) return;
-    // ГЕЙТ: физически невозможная разметка → числа мусор, в карточку не пишем.
-    if (engineResult && engineResult.physicsViolations.length > 0) {
-      setError(
-        `Запись заблокирована: разметка физически невозможна (${engineResult.physicsViolations.length} наруш. — красная карточка выше). Исправьте отмеченные точки и снова нажмите «Вычислить все параметры».`
-      );
-      const ts = new Date().toLocaleTimeString();
-      setDebugLog((prev) => [
-        ...prev.slice(-80),
-        `[${ts}] 🛡 Запись в карточку велика ЗАБЛОКИРОВАНА: ${engineResult.physicsViolations.length} физических нарушений разметки.`,
-        ...engineResult.physicsViolations.map((v) => `  ❌ ${v.title}`),
-      ]);
-      return;
-    }
-    const averaged: Record<string, number | null> = {};
-    for (const c of comparisons) {
-      averaged[c.key] = c.averaged;
-    }
-    // ПРИНЦИП «ЭТАЛОН»: WB не входит в comparisons (он known-размер и используется
-    // как калибровка), поэтому фото-WB передаём отдельно из результата ядра v2.
-    // Право записать его остаётся у формы: WB пишется ТОЛЬКО в пустое поле,
-    // введённое вручную значение никогда не перезаписывается.
-    if (engineResult) {
-      averaged.wheelbase = engineResult.metricsMm.wheelbase;
-      // v1.13.5: углы — справочные, в форме не редактируются, так что
-      // перезапись вручную введённого невозможна по построению.
-      averaged.sta = Math.round(engineResult.anglesDeg.seatTubeAngle * 10) / 10;
-      averaged.hta = Math.round(engineResult.anglesDeg.headTubeAngle * 10) / 10;
-    }
-    // Сводка того, что уйдёт в карточку — рендерится под кнопкой.
-    // Setback в карточку НЕ переносим: там это отсылка седла (нос седла от BB,
-    // влияет на фит-предупреждения), а из фото считается сетбэк рамы
-    // (BB → крепление седла) — семантика разная, смешивать нельзя.
-    const parts: string[] = [];
-    const push = (label: string, val: number | null | undefined, unit = "мм") => {
-      if (val != null && val > 0) parts.push(`${label} ${val}${unit}`);
-    };
-    push("Reach", averaged.reach);
-    push("Stack", averaged.stack);
-    push("STA", averaged.sta, "°");
-    push("HTA", averaged.hta, "°");
-    push("FC", averaged.frontCenter);
-    push("RC", averaged.rearCenter);
-    push("ST", averaged.seatTubeLength);
-    push("BB Drop", averaged.bbDrop);
-    onAveraged(averaged);
-    setAppliedSummary(
-      parts.length > 0
-        ? `✓ Записано в карточку велика: ${parts.join(", ")}`
-        : null
-    );
-  }, [comparisons, onAveraged, engineResult]);
 
   const overall = comparisons.length > 0 ? getOverallMatch(comparisons) : null;
 
@@ -1632,10 +1660,9 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                           🛑 Разметка физически невозможна ({engineResult.physicsViolations.length})
                         </p>
                         <p className="text-[11px] text-rose-600/80 dark:text-rose-400/70 mt-0.5 leading-relaxed">
-                          Так велосипед не устроен. Пока эти точки не исправлены,
-                          все вычисленные числа — мусор и записывать их в карточку
-                          велика нельзя. Перетащите отмеченные точки прямо на фото
-                          в правильные места и снова нажмите «Вычислить все параметры».
+                          Так велосипед не устроен. Перетащите отмеченные точки прямо на фото
+                          в правильные места — всё пересчитается и запишется автоматически.
+                          Пока нарушения есть, запись в карточку велика заблокирована.
                         </p>
                       </div>
                     </div>
@@ -1903,21 +1930,11 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                                     ...prev.slice(-80),
                                     `[${ts}] 🛡 Поле ${opt.key} = "${raw}" — вне физического диапазона, исправлено на ${fixed || "(пусто)"}.`,
                                   ]);
-                                  if (fixed && keyPoints) {
-                                    setTimeout(() => runCalibration(keyPoints, parseFloat(fixed)), 0);
-                                  }
+                                  // v1.14.25: пересчёт автоматом — knownValue изменился
                                   return;
                                 }
-                                // При потере фокуса — пересчитать, если есть точки и хоть одно значение
-                                if (keyPoints && numVal != null && numVal > 0) {
-                                  setTimeout(() => {
-                                    // knownValue обновится после re-render — используем getCalibValue напрямую
-                                    const v = getCalibValue(opt.key);
-                                    if (v != null && v > 0) {
-                                      runCalibration(keyPoints, v);
-                                    }
-                                  }, 0);
-                                }
+                                // v1.14.25: при потере фокуса пересчёт НЕ нужен —
+                                // эффект авто-расчёта уже увидел новое значение.
                               }}
                               className={cn(
                                 "h-9 pr-10 text-sm",
@@ -1962,9 +1979,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                                   `[${ts}] 🎯 Primary: ${opt.key} = ${numVal} ${opt.unit}`,
                                 ]);
                                 setKnownKey(opt.key);
-                                if (keyPoints) {
-                                  setTimeout(() => runCalibration(keyPoints, numVal), 0);
-                                }
+                                // v1.14.25: пересчёт автоматом — knownKey/knownValue изменились
                               }}
                               className={cn(
                                 "text-[10px] hover:underline",
@@ -2066,25 +2081,17 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                     </div>
                   )}
 
-                  <Button
-                    onClick={handleCalibrate}
-                    disabled={!hasKnownValue}
-                    className="w-full bg-emerald-500 hover:bg-emerald-600"
-                    size="sm"
-                  >
-                    <Ruler className="size-4" />
-                    Вычислить все параметры
-                  </Button>
                   <p className="text-[10px] text-muted-foreground text-center leading-relaxed">
-                    Шаг 1: расчёт геометрии из фото по вашему primary-размеру.
-                    Результат появится ниже для сверки с вашим вводом — в форму велика
-                    ничего не записывается.
+                    ⚙️ Расчёт выполняется автоматически: как только размечены 7 обязательных
+                    точек и заполнено хотя бы одно поле калибровки — все параметры считаются
+                    и сразу записываются в карточку велика. Правишь точки или размеры —
+                    всё пересчитывается мгновенно.
                   </p>
                 </div>
 
                 {/* Результаты сравнения */}
                 {comparisons.length > 0 && overall && (
-                  <div ref={resultsRef} className="space-y-3 scroll-mt-4">
+                  <div className="space-y-3 scroll-mt-4">
                     <div className="flex items-center justify-between">
                       <p className="text-sm font-semibold">Сравнение: измерено vs вычислено</p>
                       <div className="flex gap-2 text-xs">
@@ -2206,19 +2213,11 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                       })}
                     </div>
 
-                    {/* Кнопка применить усреднённые */}
-                    <Button
-                      onClick={handleApplyAveraged}
-                      disabled={!!engineResult && engineResult.physicsViolations.length > 0}
-                      className="w-full bg-emerald-600 hover:bg-emerald-700"
-                      size="sm"
-                    >
-                      <CheckCircle2 className="size-4" />
-                      Записать в параметры велика
-                    </Button>
+                    {/* v1.14.25: кнопка «Записать в параметры велика» удалена —
+                        запись выполняется автоматически после каждого расчёта */}
                     {engineResult && engineResult.physicsViolations.length > 0 && (
                       <p className="text-[11px] text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 rounded-md px-2 py-1.5 text-center leading-snug">
-                        ⛔ Запись заблокирована: сначала исправьте физические нарушения разметки (красная карточка выше)
+                        ⛔ Авто-запись заблокирована: исправьте физические нарушения разметки (красная карточка выше) — значения запишутся сами, как только разметка станет достоверной.
                       </p>
                     )}
                     {appliedSummary && (
@@ -2227,12 +2226,11 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                       </p>
                     )}
                     <p className="text-[10px] text-muted-foreground text-center leading-relaxed">
-                      Шаг 2: переносит в карточку велика Reach, Stack и справочную
-                      геометрию (STA, HTA, FC, RC, ST, BB Drop) — она появится на
-                      схеме. WB дозаполняется, только если поле пустое. Введённое
-                      вручную — эталон и не перезаписывается. Сохраняется автоматически.
-                      «Удалить фото»/«Очистить» убирают из карточки все вычисленные
-                      значения — введённые вручную остаются.
+                      В карточку велика записывается автоматически: Reach, Stack и справочная
+                      геометрия (STA, HTA, FC, RC, ST, BB Drop) — она появится на схеме.
+                      WB дозаполняется, только если поле пустое. Введённое вручную — эталон
+                      и не перезаписывается. Сохраняется автоматически. «Удалить фото»/«Очистить»
+                      убирают из карточки все вычисленные значения — введённые вручную остаются.
                     </p>
                   </div>
                 )}
