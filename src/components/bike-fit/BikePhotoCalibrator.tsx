@@ -180,6 +180,13 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     keyPoints: initialKeyPoints ?? null,
   });
 
+  // v1.14.24: dataURL фото, который ПЕРСИСТИТСЯ в карточке велика. Для дисплея
+  // используется blob: (быстро, без base64-строк в state), но blob живёт только
+  // до перезагрузки страницы — эмитить в onPhotoChange можно только dataURL,
+  // иначе blob уедет в bikefit-bikes и после F5 фото не загрузится («чёрный
+  // экран»). Ref, а не state: читается внутри useCallback без deps.
+  const savedPhotoDataRef = useRef<string | null>(initialPhotoUrl ?? null);
+
   useEffect(() => {
     // Если это эхо нашего собственного onPhotoChange — пропускаем, иначе
     // мы сбросили бы placementMode = false прямо во время разметки (критичный баг:
@@ -212,6 +219,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
       photoUrl: initialPhotoUrl ?? null,
       keyPoints: initialKeyPoints ?? null,
     };
+    savedPhotoDataRef.current = initialPhotoUrl ?? null;
   }, [initialPhotoUrl, initialKeyPoints]);
 
   const [knownKey, setKnownKey] = useState<KnownDimensionKey>("saddleHeight");
@@ -396,6 +404,9 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         compressImage(reader.result as string, 1200, 0.8).then((compressed) => {
           // Обновляем ref ДО вызова, иначе useEffect воспримет это как внешнее изменение
           lastEmittedRef.current = { photoUrl: compressed, keyPoints: null };
+          // v1.14.24: запоминаем персистентный dataURL — коммит точек эмитит его,
+          // а не дисплейный blob:
+          savedPhotoDataRef.current = compressed;
           onPhotoChange(compressed, null);
         });
       };
@@ -407,6 +418,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     if (photoUrl && photoUrl.startsWith("blob:")) URL.revokeObjectURL(photoUrl);
     setPhotoUrl(null);
     setPhotoFile(null);
+    savedPhotoDataRef.current = null;
     setKeyPoints(null);
     setComputed(null);
     setComparisons([]);
@@ -1323,9 +1335,16 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
       // Сохраняем keyPoints через callback (debounce не нужен — localStorage быстрый)
       // ВАЖНО: обновляем ref, иначе useEffect выше воспримет это как внешнее изменение
       // и сбросит placementMode = false.
+      // v1.14.24: эмитим ПЕРСИСТЕНТНЫЙ dataURL (savedPhotoDataRef), а не дисплейный
+      // photoUrl — тот обычно blob:, который умирает при F5. Раньше сюда просачивался
+      // blob (а при устаревшем closure — ещё и от старого фото) → после перезагрузки
+      // «фото не грузится, чёрный экран».
       if (onPhotoChange) {
-        lastEmittedRef.current = { photoUrl, keyPoints: pts };
-        onPhotoChange(photoUrl, pts);
+        const persistUrl =
+          savedPhotoDataRef.current ??
+          (photoUrl && !photoUrl.startsWith("blob:") ? photoUrl : null);
+        lastEmittedRef.current = { photoUrl: persistUrl, keyPoints: pts };
+        onPhotoChange(persistUrl, pts);
       }
 
       // Если в режиме разметки — перейти к следующей null-точке

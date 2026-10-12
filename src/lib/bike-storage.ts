@@ -70,7 +70,13 @@ function load<T>(key: string): T[] {
 }
 
 function save<T>(key: string, items: T[]) {
-  localStorage.setItem(key, JSON.stringify(items));
+  // v1.14.24: квота localStorage не должна ронять поток сохранения —
+  // при переполнении запись просто не проходит (остаётся предыдущая версия).
+  try {
+    localStorage.setItem(key, JSON.stringify(items));
+  } catch (e) {
+    console.warn("[bike-storage] не удалось сохранить (квота?) —", e);
+  }
 }
 
 function genId(): string {
@@ -140,7 +146,20 @@ export function setActiveRider(id: string) {
 // ============================================================
 
 export function getBikes(): BikeRecord[] {
-  return load<BikeRecord>(BIKES_KEY);
+  const bikes = load<BikeRecord>(BIKES_KEY);
+  // v1.14.24: самолечение записей, повреждённых прежним багом — в photoData
+  // мог попасть blob: URL (живёт только до перезагрузки страницы) → после F5
+  // «фото не грузится, чёрный экран». Точки (keyPointsData) сохраняем: они
+  // в нормированных координатах и подходят к повторно загруженному фото.
+  let healed = false;
+  for (const b of bikes) {
+    if (b.photoData && b.photoData.startsWith("blob:")) {
+      delete b.photoData;
+      healed = true;
+    }
+  }
+  if (healed) save(BIKES_KEY, bikes);
+  return bikes;
 }
 
 export function createBike(name: string, type: BikeType, measurements: BikeMeasurements): BikeRecord {
@@ -169,12 +188,14 @@ export function updateBike(id: string, measurements: BikeMeasurements) {
   }
 }
 
-/** Сохранить фото и точки калибровки для велика */
+/** Сохранить фото и точки калибровки для велика.
+ *  v1.14.24: blob: URL сюда попадать не должен (умирает при F5 → «чёрный
+ *  экран») — такой вызов трактуется как «фото не персистим», точки сохраняются. */
 export function updateBikePhoto(id: string, photoData: string | undefined, keyPointsData: string | undefined) {
   const bikes = getBikes();
   const b = bikes.find((b) => b.id === id);
   if (b) {
-    b.photoData = photoData;
+    b.photoData = photoData && photoData.startsWith("blob:") ? undefined : photoData;
     b.keyPointsData = keyPointsData;
     b.updatedAt = Date.now();
     save(BIKES_KEY, bikes);

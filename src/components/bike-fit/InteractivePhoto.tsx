@@ -43,7 +43,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Move, ZoomIn, ZoomOut, Maximize } from "lucide-react";
+import { Loader2, Move, ZoomIn, ZoomOut, Maximize, ImageOff } from "lucide-react";
 import type { BikeKeyPoints, PixelPoint } from "@/lib/bike-photo-scale";
 import { pointFullLabel } from "@/lib/point-labels";
 
@@ -232,6 +232,9 @@ export function InteractivePhoto({
   const wrapRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
+  // v1.14.24: фото есть, но не декодируется (мёртвый blob:/битый dataURL) —
+  // показываем понятную ошибку вместо вечного чёрного экрана со спиннером
+  const [imgError, setImgError] = useState(false);
   const [containerW, setContainerW] = useState(0);
   // Версия рендера — триггер пересчёта pxPerUnit при ресайзе контейнера
   const [renderTick, setRenderTick] = useState(0);
@@ -270,15 +273,20 @@ export function InteractivePhoto({
   useEffect(() => {
     if (!photoUrl) {
       setImgSize({ w: 0, h: 0 });
+      setImgError(false);
       setView({ x: 0, y: 0, scale: 1 });
       return;
     }
+    setImgError(false);
     const img = new Image();
     img.onload = () => {
       setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
       setView({ x: 0, y: 0, scale: 1 });
     };
-    img.onerror = () => setImgSize({ w: 0, h: 0 });
+    img.onerror = () => {
+      setImgSize({ w: 0, h: 0 });
+      setImgError(true);
+    };
     img.src = photoUrl;
   }, [photoUrl]);
 
@@ -905,6 +913,15 @@ export function InteractivePhoto({
               );
             })()}
           </svg>
+        ) : imgError ? (
+          // v1.14.24: фото не декодировалось — понятная причина вместо чёрного экрана
+          <div className="flex aspect-[3/2] w-full flex-col items-center justify-center gap-2 px-6 text-center">
+            <ImageOff className="size-8 text-rose-400" />
+            <p className="text-sm font-medium text-rose-200">Фото не загрузилось</p>
+            <p className="text-xs text-rose-300/80">
+              Ссылка на фото устарела (такое бывало после перезагрузки страницы). Удалите фото и загрузите его заново — точки разметки сохранятся.
+            </p>
+          </div>
         ) : (
           // Скелетон пока размеры не загрузились
           <div className="flex aspect-[3/2] w-full items-center justify-center">
