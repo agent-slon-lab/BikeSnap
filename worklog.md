@@ -404,3 +404,74 @@ Stage Summary:
   сбросом при смене. Автосейв больше не может записать чужие параметры в
   новую карточку. В телеметрии отчёта — id/имя активного велика.
 - Следующая версия: v1.14.31.
+
+---
+Task ID: 35
+Agent: main (Super Z)
+Task: ТЗ «Critical Fix Spec: Multi-Bike State Isolation & Pose Metrics
+Normalization» — буквальное выполнение п. A.1: жёсткая привязка калибровки
+к bikeId в точке расчёта LeMond-разницы.
+
+Work Log:
+- Аудит v1.14.30: п. A.1 не был выполнен буквально — SH в черновике был
+  «голым» числом без proof of ownership; applySaddleHeightContext принимал
+  числа без проверки принадлежности. Найден РЕАЛЬНЫЙ оставшийся путь
+  протечки: cross-tab — вкладка 1 держит черновик Bike_A в памяти,
+  вкладка 2 переключает вел; activeBikeId обновляется через storage-событие,
+  но draft-стор НЕ перезагружается (loadBikeData жил только в
+  BikeParametersForm) → шаг 4 анализирует фото Bike_B с SH=800 от Bike_A.
+- bike-store.ts: поле `bikeId` в черновике (proof of ownership; ставится
+  ТОЛЬКО loadBikeData(m, bikeId); без id — null консервативно;
+  resetDraftState/reset стирают; setBike-патчи не трогают; персист с
+  санитизацией — legacy-бэкапы → null).
+- bike-store.ts: heal-черновика — подписка на ACTIVE_BIKE_CHANGED_EVENT
+  (same-tab) + storage (cross-tab, фильтр по ключу bikefit-active-bike —
+  autosave соседней вкладки heal не запускает) + мгновенный heal при
+  загрузке модуля. Карточка ищется СТРОГО по id (без fallback bikes[0]).
+  Правила: id совпал → no-op (несохранённые правки живы); чужой/недоказан
+  → полная замена из карточки; активного нет → сброс только «осиротевшего»
+  черновика. Цикла импортов нет: bike-storage импортирует bike-store
+  только типами.
+- bike-storage.ts: ACTIVE_BIKE_KEY экспортирован (для cross-tab фильтра).
+- poseMetricsEngine.ts: CalibrationOwnership {calibBikeId, currentBikeId} +
+  isCalibrationOwnershipValid() — строгий матч ненулевых id; undefined
+  ownership → true (обратная совместимость вызовов/тестов).
+- bike-fit.ts: applySaddleHeightContext(..., ownership?) — гвард в точке
+  расчёта: {A,B} или {null,B} → LeMond-контекст запрещён (буквальный
+  `if (calibration.bikeId !== currentBike.id) return;` из ТЗ).
+- bike-cross-ref.ts: generateCrossReferences(..., ownership?) — при чужой
+  калибровке запрещены ВСЕ SH-секции: дельта LeMond (shDeltaAbs=null →
+  lemondDominates=false), SH↔колено (секция 1) и микро-совет голеностопа
+  (секция 7 — раньше строил «седло слишком высоко» на чужом SH).
+- PhotoAnalysisSection.tsx: bikeId из стора + activeBikeId → ownership в
+  sideAnalysis-memo (deps дополнены). CrossRefRecommendations.tsx: то же
+  в generateCrossReferences.
+- BikeParametersForm.tsx: bikeId карточки во все 4 точки loadBikeData
+  (reload/handleCreate/handleSelect/handleDelete).
+- Тест scripts/test-calib-ownership-v1431.ts: 30 OK / 0 FAIL — гвард
+  ({A,B}→запрещено, {B,B}→как раньше, {null,B}→запрещено), отсутствие
+  saddle-карточек при чужой калибровке, bikeId-семантика (D1–D8), E2E
+  баг-репорта (SH=800 от A не даёт «Опустите седло на 41 мм»). Файл —
+  модуль (export {}), типы через erased import type (polyfill-гарантия).
+- Регрессы: test-stale-state-v1430 42/0; verify-v1429 46/0;
+  test-crossref-v1428 OK; test-pose-norms 27/0; test-bike-photo-persist 10/0.
+- tsc --noEmit чисто (кроме несборочного examples/); eslint изменённых
+  файлов чист; next build OK.
+- Bump v1.14.31: app-version.ts, package.json, sw.js (bikesnap-v1.14.31),
+  whats-new.ts, CHANGELOG.md. Коммит 17f3fab → пуш отклонён (remote ушёл
+  вперёд) → pull --rebase → 4d794e6; ls-remote == HEAD.
+- Прод: HTTP 200; sw.js CACHE = bikesnap-v1.14.31; чанк
+  59dd5e3fcbf220a8.js: 1.14.31 ×2, calibBikeId ×4, active-bike-changed,
+  bikefit-active-bike. Смоук 1440x900: рендер, консоль/ошибки чисты.
+- Живая проверка heal на проде: seeded bikefit-storage (bikeId="bike_A" +
+  SH=800) при активном bike_B → reload → bikefit-storage:
+  bikeId="bike_B", SH/WB стёрты. Тестовые данные localStorage удалены.
+
+Stage Summary:
+- Прод = v1.14.31. П. A.1 ТЗ выполнен буквально: калибровка несёт bikeId,
+  в точке расчёта LeMond-разницы владение проверяется, чужая SH запрещена
+  и в applySaddleHeightContext, и во всех SH-секциях кросс-рекомендаций.
+  Закрыт последний путь протечки (cross-tab) через heal-подписку стора.
+- Нормы углов (колено 140–150, бедро 95–105, торс 35–45 + тексты без
+  инверсии) и иерархия 15 мм — подтверждены регрессами (B/C ТЗ).
+- Следующая версия: v1.14.32.
