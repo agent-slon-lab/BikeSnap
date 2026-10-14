@@ -9,6 +9,7 @@ import {
   Frame,
   User,
   AlertCircle,
+  AlertTriangle,
 } from "lucide-react";
 import {
   Card,
@@ -124,9 +125,20 @@ export function CrossRefRecommendations({ sideAnalysis }: CrossRefRecommendation
                     {ref.finding}
                   </span>
                 </div>
-                <Badge variant="outline" className={cn("text-[10px] shrink-0", style.text)}>
-                  {style.badge}
-                </Badge>
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                  {ref.conflict && (
+                    <Badge
+                      variant="outline"
+                      className="gap-1 border-amber-300 text-[10px] text-amber-700 dark:border-amber-700 dark:text-amber-400"
+                    >
+                      <AlertTriangle className="size-3" />
+                      Противоречие данных
+                    </Badge>
+                  )}
+                  <Badge variant="outline" className={cn("text-[10px]", style.text)}>
+                    {style.badge}
+                  </Badge>
+                </div>
               </div>
               <p className="text-xs text-muted-foreground ml-6">
                 <span className="font-medium">Связь:</span> {ref.connection}

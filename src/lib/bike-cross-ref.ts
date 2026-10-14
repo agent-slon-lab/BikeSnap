@@ -28,6 +28,8 @@ export interface CrossReference {
   priority: 1 | 2 | 3;
   /** Источники данных */
   sources: string[];
+  /** true — карточка фиксирует ПРОТИВОРЕЧИЕ в данных, а не даёт directive (v1.14.28) */
+  conflict?: boolean;
 }
 
 export interface CrossRefResult {
@@ -66,30 +68,65 @@ export function generateCrossReferences(
   const lemondDominates = shDeltaAbs != null && shDeltaAbs > 20;
 
   // === 1. SH (высота седла) ↔ угол колена (анатомический, норма 140–150°) ===
+  // v1.14.28: раньше при прямой ноге текст ВСЕГДА писал «седло выше нормы»,
+  // даже когда SH ниже целевой (пользователь: «ввёл 680, целевая 759, а пишет
+  // „выше нормы на 79“ и предлагает опустить» — бред). Теперь знак берём из
+  // дельты, а при расхождении угла колена и SH честно фиксируем противоречие.
   if (sideAnalysis && bike.saddleHeight && body.inseam > 0) {
     const kneeAngle = sideAnalysis.kneeAngle;
     const targetSH = calc?.recommendedSaddleHeight;
     const currentSH = bike.saddleHeight;
-    const shDelta = targetSH ? currentSH - targetSH : null;
+    const shDelta = targetSH ? currentSH - targetSH : null; // > 0 — седло выше целевой
+    const flexTxt = kneeAngle.flexion ? kneeAngle.flexion.value.toFixed(0) : "30-40";
 
     if (kneeAngle.status === "bad" || kneeAngle.status === "warning") {
-      if (kneeAngle.value > 150) {
-        // Нога слишком прямая → седло слишком высоко
+      const legTooStraight = kneeAngle.value > 150; // нога прямая → седло ведёт себя как завышенное
+      const legTooBent = kneeAngle.value < 140;     // нога согнута → седло ведёт себя как заниженное
+
+      // ПРОТИВОРЕЧИЕ: угол колена и высота седла указывают в разные стороны
+      const contradicts =
+        shDelta != null && ((legTooStraight && shDelta < -5) || (legTooBent && shDelta > 5));
+
+      if (contradicts) {
+        const diff = Math.abs(shDelta!);
         refs.push({
           category: "saddle",
-          finding: `Угол колена ${kneeAngle.value.toFixed(1)}° — нога слишком прямая (норма 140-150°; сгиб ${kneeAngle.flexion ? kneeAngle.flexion.value.toFixed(0) : "30-40"}°)`,
-          connection: `SH=${currentSH} мм, целевая по LeMond=${targetSH} мм → седло выше нормы на ${shDelta != null ? Math.abs(shDelta) : "?"} мм`,
-          action: `Опустите седло на ${shDelta != null ? Math.abs(shDelta) : 5} мм`,
+          finding: legTooStraight
+            ? `Противоречие: колено ${kneeAngle.value.toFixed(1)}° — нога прямая, но седло НИЖЕ целевой на ${diff} мм`
+            : `Противоречие: колено ${kneeAngle.value.toFixed(1)}° — нога согнута, но седло ВЫШЕ целевой на ${diff} мм`,
+          connection: `SH=${currentSH} мм против ${targetSH} мм по LeMond (разница ${diff} мм), при этом угол колена говорит об обратном. Два источника данных противоречат друг другу — вслепую двигать седло нельзя.`,
+          action: "Седло не трогайте. Проверьте: педаль в кадре в нижней точке (НМТ), разметку колена/лодыжки, правильность измерения SH. Если кадр и разметка верны — ориентируйтесь на угол колена, а не на формулу.",
+          priority: 1,
+          sources: ["фото позы (угол колена)", "калибровка (SH)", "формула LeMond", "кросс-валидация"],
+          conflict: true,
+        });
+      } else if (legTooStraight) {
+        refs.push({
+          category: "saddle",
+          finding: `Угол колена ${kneeAngle.value.toFixed(1)}° — нога слишком прямая (норма 140-150°; сгиб ${flexTxt}°)`,
+          connection:
+            shDelta != null && shDelta > 5
+              ? `SH=${currentSH} мм выше целевой по LeMond (${targetSH} мм) на ${shDelta} мм`
+              : `SH=${currentSH} мм — по углу колена седло ведёт себя как завышенное`,
+          action:
+            shDelta != null && shDelta > 5
+              ? `Опустите седло на ${shDelta} мм`
+              : "Опустите седло на 10-15 мм и повторите анализ",
           priority: 1,
           sources: ["фото позы (угол колена)", "калибровка (SH)", "формула LeMond"],
         });
-      } else if (kneeAngle.value < 140) {
-        // Колено слишком согнутое → седло слишком низко
+      } else if (legTooBent) {
         refs.push({
           category: "saddle",
-          finding: `Угол колена ${kneeAngle.value.toFixed(1)}° — слишком согнутое (норма 140-150°; сгиб ${kneeAngle.flexion ? kneeAngle.flexion.value.toFixed(0) : "30-40"}°)`,
-          connection: `SH=${currentSH} мм, целевая по LeMond=${targetSH} мм → седло ниже нормы на ${shDelta != null ? Math.abs(shDelta) : "?"} мм`,
-          action: `Поднимите седло на ${shDelta != null ? Math.abs(shDelta) : 5} мм`,
+          finding: `Угол колена ${kneeAngle.value.toFixed(1)}° — слишком согнутое (норма 140-150°; сгиб ${flexTxt}°)`,
+          connection:
+            shDelta != null && shDelta < -5
+              ? `SH=${currentSH} мм ниже целевой по LeMond (${targetSH} мм) на ${Math.abs(shDelta)} мм`
+              : `SH=${currentSH} мм — по углу колена седло ведёт себя как заниженное`,
+          action:
+            shDelta != null && shDelta < -5
+              ? `Поднимите седло на ${Math.abs(shDelta)} мм`
+              : "Поднимите седло на 10-15 мм и повторите анализ",
           priority: 1,
           sources: ["фото позы (угол колена)", "калибровка (SH)", "формула LeMond"],
         });
@@ -179,7 +216,11 @@ export function generateCrossReferences(
   if (sideAnalysis) {
     const kops = sideAnalysis.kops;
     if (kops.status === "bad") {
-      const direction = kops.value > 3 ? "вперёд" : "назад";
+      // v1.14.28: раньше направление угадывалось по модулю (kops.value > 3)
+      // и в половине случаев было навыворот. Теперь берём знаковое значение:
+      // > 0 — колено ВПЕРЕДИ оси педали, < 0 — позади.
+      const signed = kops.signedValue ?? kops.value;
+      const direction = signed > 0 ? "вперёд" : "назад";
       refs.push({
         category: "saddle",
         finding: `KOPS: колено смещено ${direction} от оси педали на ${kops.value.toFixed(1)} ед.`,
@@ -235,6 +276,29 @@ export function generateCrossReferences(
         priority: 2,
         sources: ["фото позы (голеностоп)", "калибровка (SH)"],
       });
+    }
+  }
+
+  // === Кросс-проверка направления «руль вверх/вниз» (v1.14.28). ===
+  // Если спина слишком вертикальная и Stack выше целевого — карточка выше
+  // советует «Опустите руль», но угол плеча < 70° в рекомендациях позы
+  // превращается в «поднимите руль». Выполнить оба совета сразу нельзя:
+  // заменяем карточку на конфликтную с приоритетом длины посадки.
+  const shoulderA = sideAnalysis?.shoulderAngle;
+  const backA = sideAnalysis?.backAngle;
+  if (shoulderA && backA && backA.value > 45 && shoulderA.value < 70) {
+    const idx = refs.findIndex(
+      (r) => r.category === "handlebar" && /опустите руль/i.test(r.action)
+    );
+    if (idx >= 0) {
+      const orig = refs[idx];
+      refs[idx] = {
+        ...orig,
+        conflict: true,
+        finding: "Противоречие: «опустите руль» против «поднимите руль»",
+        connection: `${orig.connection}. При этом угол плеча ${shoulderA.value.toFixed(1)}° (руки близко к корпусу) обычно требует обратного — поднять руль.`,
+        action: "Руль не трогайте, пока не скорректирована длина посадки: сначала устраните дельту Reach (удлините до целевой), затем повторите фото — наклон корпуса и угол плеча изменятся одновременно, и высоту руля станет видно честно.",
+      };
     }
   }
 

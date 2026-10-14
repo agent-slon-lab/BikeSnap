@@ -48,10 +48,11 @@ function AngleCard({ result }: { result: AngleResult }) {
       <CardContent className="px-4">
         <div className="flex items-baseline gap-2">
           <span className={cn("text-3xl font-bold tabular-nums", result.color.text)}>
-            {result.value.toFixed(1)}°
+            {/* v1.14.28: единица из метрики — KOPS в «у.е.»/«мм» без ложного знака градуса */}
+            {result.value.toFixed(1)}{result.unit ?? "°"}
           </span>
           <span className="text-xs text-muted-foreground">
-            норма {result.min}–{result.max}°
+            норма {result.min}–{result.max}{result.unit ?? "°"}
           </span>
         </div>
         {/* Производный угол сгиба колена (только у kneeAngle): сгиб = 180° − анатомический */}

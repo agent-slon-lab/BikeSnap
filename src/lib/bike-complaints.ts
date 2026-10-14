@@ -228,7 +228,7 @@ export const COMPLAINT_RULES: ComplaintRule[] = [
         adaptationDays: 2,
       },
       {
-        title: "Слишком высокий седл",
+        title: "Слишком высокое седло",
         description:
           "Таз раскачивается при педалировании, тело ищет опору через руки.",
         priority: 3,

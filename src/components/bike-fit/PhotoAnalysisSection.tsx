@@ -28,6 +28,8 @@ import {
   analyzeBikeFit,
   analyzeBackView,
   analyzeFrontView,
+  applyCrossMetricLogic,
+  applySaddleHeightContext,
   VIEW_LABELS,
   POSE_LANDMARKS,
   type Point,
@@ -36,6 +38,7 @@ import {
   type BackViewAnalysis,
   type FrontViewAnalysis,
 } from "@/lib/bike-fit";
+import { calculateAll } from "@/lib/bike-calculations";
 import { BIKE_TYPES } from "@/lib/bike-params";
 import { useBikeStore } from "@/lib/bike-store";
 import { cn } from "@/lib/utils";
@@ -75,7 +78,7 @@ const ANALYZERS: Record<
 };
 
 export function PhotoAnalysisSection() {
-  const { bikeType, body } = useBikeStore();
+  const { bikeType, body, bike, goal } = useBikeStore();
   // Телефон набок: фото слева, рекомендации/метрики справа (две колонки)
   const phoneLandscape = useMediaFlag(PHONE_LANDSCAPE_QUERY);
 
@@ -130,8 +133,24 @@ export function PhotoAnalysisSection() {
     captureMeta: views.front.captureMeta,
   };
 
-  // Результаты анализа — из персист-стора (каст union → конкретный тип)
-  const sideAnalysis = views.side.analysis as BikeFitAnalysis | null;
+  // Результаты анализа — из персист-стора (каст union → конкретный тип).
+  // v1.14.28: поверх сохранённого анализа применяем кросс-валидацию советов
+  // (корпус vs плечо/бедро) и контекст высоты седла (угол колена vs LeMond).
+  // Патч работает и для старых анализов из localStorage — тексты чинятся
+  // сразу, без пересъёмки фото. Стор не мутируем — возвращаем копию.
+  const calc = useMemo(
+    () => (bikeType && goal ? calculateAll(body, bike, { bikeType, goal }) : null),
+    [body, bike, bikeType, goal]
+  );
+  const sideAnalysis = useMemo(() => {
+    const raw = views.side.analysis as BikeFitAnalysis | null;
+    if (!raw) return null;
+    return applySaddleHeightContext(
+      applyCrossMetricLogic(raw),
+      bike.saddleHeight ?? null,
+      calc?.recommendedSaddleHeight ?? null
+    );
+  }, [views.side.analysis, bike.saddleHeight, calc]);
   const backAnalysis = views.back.analysis as BackViewAnalysis | null;
   const frontAnalysis = views.front.analysis as FrontViewAnalysis | null;
 
@@ -222,18 +241,32 @@ export function PhotoAnalysisSection() {
         const K = side === "left" ? POSE_LANDMARKS.LEFT_KNEE : POSE_LANDMARKS.RIGHT_KNEE;
         const A = side === "left" ? POSE_LANDMARKS.LEFT_ANKLE : POSE_LANDMARKS.RIGHT_ANKLE;
         if (lm[S] && lm[H] && lm[K] && lm[A]) {
+          // v1.14.28: подписи переименованы ПО СЕГМЕНТАМ. Раньше «Бедро»
+          // висело на линии плечо→бедро (это корпус) — пользователь читал
+          // «подпись бедро на корпусе». Теперь: бедро→колено — «Бедро»
+          // (угол бедра), колено→лодыжка — «Колено» (угол колена),
+          // плечо→бедро — «Корпус» (наклон корпуса). Цвет линии = статус
+          // метрики: красный/жёлтый/зелёный честно показывают, где проблема.
+          const hex = (s?: "good" | "warning" | "bad") =>
+            s === "bad" ? "#ef4444" : s === "warning" ? "#eab308" : "#22c55e";
           return [
             {
               a: lm[H],
               b: lm[K],
-              color: "#f97316",
+              color: hex(sideAnalysis?.hipAngle.status),
+              label: `Бедро ${sideAnalysis?.hipAngle.value.toFixed(0) ?? ""}°`,
+            },
+            {
+              a: lm[K],
+              b: lm[A],
+              color: hex(sideAnalysis?.kneeAngle.status),
               label: `Колено ${sideAnalysis?.kneeAngle.value.toFixed(0) ?? ""}°`,
             },
             {
               a: lm[S],
               b: lm[H],
-              color: "#22c55e",
-              label: `Бедро ${sideAnalysis?.hipAngle.value.toFixed(0) ?? ""}°`,
+              color: hex(sideAnalysis?.backAngle.status),
+              label: `Корпус ${sideAnalysis?.backAngle.value.toFixed(0) ?? ""}°`,
             },
           ];
         }

@@ -136,6 +136,13 @@ export interface AngleResult {
     max: number;
     label: string;
   };
+  // Единица измерения значения (v1.14.28). По умолчанию «°»; для KOPS —
+  // «мм» или «у.е.». Раньше KOPS рисовался как «0.5°» — ложный знак градуса.
+  unit?: string;
+  // Знаковое значение (только KOPS): > 0 — колено ВПЕРЕДИ оси педали,
+  // < 0 — позади. abs(signedValue) ≈ value. Раньше знак терялся (value —
+  // модуль), и направление сдвига седла в советах угадывалось неверно.
+  signedValue?: number;
   // Цвет для UI (Tailwind классы)
   color: {
     text: string;
@@ -181,7 +188,8 @@ function makeResult(
   label: string,
   description: string,
   recommendation: string,
-  flexion?: AngleResult["flexion"]
+  flexion?: AngleResult["flexion"],
+  unit?: string
 ): AngleResult {
   const status = classifyStatus(value, min, max);
   return {
@@ -193,6 +201,7 @@ function makeResult(
     description,
     recommendation,
     flexion,
+    unit,
     color: STATUS_COLORS[status],
   };
 }
@@ -374,20 +383,28 @@ export function analyzeBikeFit(
     : kopsRaw * 100; // условные единицы
   const kopsLimit = hasScale ? 10 : 3;
   const kopsUnit = hasScale ? "мм" : "у.е.";
-  const kops = makeResult(
-    Math.abs(kopsValue),
-    0,
-    kopsLimit,
-    `KOPS (колено над осью педали, ${kopsUnit})`,
-    "Горизонтальное смещение колена относительно оси педали. Идеал — колено ровно над осью (норма ±10 мм).",
-    kopsValue > kopsLimit
-      ? `Колено впереди оси педали на ${Math.abs(kopsValue).toFixed(0)} ${kopsUnit} — сдвиньте седло назад на 5–10 мм.`
-      : kopsValue < -kopsLimit
-        ? `Колено позади оси педали на ${Math.abs(kopsValue).toFixed(0)} ${kopsUnit} — сдвиньте седло вперёд на 5–10 мм.`
-        : "Отличное положение колена над осью педали."
-  );
+  const kops = {
+    ...makeResult(
+      Math.abs(kopsValue),
+      0,
+      kopsLimit,
+      `KOPS (колено над осью педали, ${kopsUnit})`,
+      "Горизонтальное смещение колена относительно оси педали. Идеал — колено ровно над осью (норма ±10 мм).",
+      kopsValue > kopsLimit
+        ? `Колено впереди оси педали на ${Math.abs(kopsValue).toFixed(0)} ${kopsUnit} — сдвиньте седло назад на 5–10 мм.`
+        : kopsValue < -kopsLimit
+          ? `Колено позади оси педали на ${Math.abs(kopsValue).toFixed(0)} ${kopsUnit} — сдвиньте седло вперёд на 5–10 мм.`
+          : "Отличное положение колена над осью педали.",
+      undefined,
+      kopsUnit
+    ),
+    signedValue: kopsValue,
+  };
 
-  return {
+  // Кросс-валидация советов внутри одного кадра (v1.14.28): при вертикальном
+  // корпусе советы «поднимите руль» (плечо) и «сократите дистанцию» (бедро)
+  // противоречили совету корпуса «опустите/удлините вынос».
+  return applyCrossMetricLogic({
     kneeAngle,
     hipAngle,
     backAngle,
@@ -395,7 +412,73 @@ export function analyzeBikeFit(
     shoulderAngle,
     kops,
     side,
-  };
+  });
+}
+
+/**
+ * Кросс-валидация советов внутри одного анализа бокового кадра (v1.14.28).
+ *
+ * Раньше каждая метрика советовала изолированно, и при вертикальном корпусе
+ * карточки противоречили друг другу: «опустите или удлините вынос» (корпус)
+ * соседствовало с «поднимите руль или более короткий вынос» (плечо) и
+ * «сократите дистанцию седло–руль» (бедро). Выполнить оба совета сразу
+ * невозможно. Физика: если корпус избыточно вертикален, первична ДЛИНА
+ * посадки — удлинение наклоняет корпус и заодно открывает угол в плече
+ * и закрывает угол бедра. Возвращает НОВЫЙ объект (аргумент не мутирует),
+ * функция идемпотентна — повторный вызов не меняет тексты.
+ */
+export function applyCrossMetricLogic(analysis: BikeFitAnalysis): BikeFitAnalysis {
+  const { backAngle, shoulderAngle, hipAngle } = analysis;
+  if (backAngle.value <= JOINT_NORMS.torso.max) return analysis;
+
+  let next = analysis;
+  if (shoulderAngle.value < 70) {
+    next = {
+      ...next,
+      shoulderAngle: {
+        ...shoulderAngle,
+        recommendation: `Угол плеча ${shoulderAngle.value.toFixed(0)}° мал, но спина избыточно вертикальна (${backAngle.value.toFixed(0)}°) — поднимать руль нельзя, корпус выпрямится ещё сильнее. Первична длина посадки: удлините её до целевой — корпус наклонится, и угол в плече откроется сам.`,
+      },
+    };
+  }
+  if (hipAngle.value > JOINT_NORMS.hip.max) {
+    next = {
+      ...next,
+      hipAngle: {
+        ...hipAngle,
+        recommendation: `Угол бедра ${hipAngle.value.toFixed(0)}° открыт в основном из-за вертикального корпуса (${backAngle.value.toFixed(0)}°) — посадка НЕ растянута, сокращать дистанцию седло–руль нельзя. Удлините посадку до целевой: корпус наклонится, и угол бедра закроется к норме ${JOINT_NORMS.hip.min}–${JOINT_NORMS.hip.max}°.`,
+      },
+    };
+  }
+  return next;
+}
+
+/**
+ * Наложить контекст высоты седла на анализ кадра (v1.14.28).
+ *
+ * Угол колена в НМТ — прямой критерий высоты седла; формула LeMond — лишь
+ * популяционная оценка. Если они противоречат друг другу (нога выглядит
+ * прямой, но SH ниже целевой — или наоборот), честно сообщаем о противоречии
+ * вместо двух несовместимых советов. Возвращает НОВЫЙ объект анализа
+ * (аргумент не мутирует); при согласованности данных — тот же объект.
+ */
+export function applySaddleHeightContext(
+  analysis: BikeFitAnalysis,
+  currentSH: number | null,
+  targetSH: number | null
+): BikeFitAnalysis {
+  if (!currentSH || !targetSH) return analysis;
+  const knee = analysis.kneeAngle;
+  const shDelta = currentSH - targetSH;
+  const straightButLow = knee.value > 150 && shDelta < -5;
+  const bentButHigh = knee.value < 140 && shDelta > 5;
+  if (!straightButLow && !bentButHigh) return analysis;
+
+  const diff = Math.abs(shDelta);
+  const rec = straightButLow
+    ? `Противоречие данных: по углу колена ${knee.value.toFixed(0)}° нога выглядит прямой (как на завышенном седле), но SH=${currentSH} мм ниже целевых ${targetSH} мм (LeMond) на ${diff} мм. Частые причины: нога в кадре не в нижней точке педали, носок сильно опущен, разметка колена/лодыжки неточна. Седло пока не трогайте — переснимите кадр в НМТ и проверьте разметку.`
+    : `Противоречие данных: по углу колена ${knee.value.toFixed(0)}° нога излишне согнута (как на заниженном седле), но SH=${currentSH} мм выше целевых ${targetSH} мм (LeMond) на ${diff} мм. Частые причины: нога в кадре не в нижней точке педали, разметка неточна. Седло пока не трогайте — переснимите кадр в НМТ и проверьте разметку.`;
+  return { ...analysis, kneeAngle: { ...knee, recommendation: rec } };
 }
 
 /**

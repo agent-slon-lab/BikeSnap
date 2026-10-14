@@ -88,7 +88,8 @@ export function Recommendations({ analysis }: RecommendationsProps) {
                       {item.label}
                     </span>
                     <span className="text-xs text-muted-foreground">
-                      текущее {item.value.toFixed(1)}° · норма {item.min}–{item.max}°
+                      {/* v1.14.28: единица из метрики — KOPS в «у.е.»/«мм» без ложного знака градуса */}
+                      текущее {item.value.toFixed(1)}{item.unit ?? "°"} · норма {item.min}–{item.max}{item.unit ?? "°"}
                       {item.flexion && ` · сгиб ${item.flexion.value.toFixed(0)}° (норма ${item.flexion.min}–${item.flexion.max}°)`}
                     </span>
                   </div>
