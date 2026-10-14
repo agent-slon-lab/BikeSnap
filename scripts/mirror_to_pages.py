@@ -102,6 +102,8 @@ def safe_path(out: str, path: str) -> str:
     path = path.split("?")[0].split("#")[0]
     rel = path.lstrip("/")
     rel = os.path.normpath(rel)
+    if rel in ("", ".", "/"):
+        rel = "index.html"  # корень "/" сохраняем как index.html
     if rel.startswith("..") or os.path.isabs(rel):
         raise ValueError(f"опасный путь из HTML: {path!r}")
     return os.path.join(out, rel)
