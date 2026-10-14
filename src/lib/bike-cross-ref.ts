@@ -13,6 +13,7 @@
 import type { BikeFitAnalysis } from "./bike-fit";
 import type { BikeMeasurements, BodyMeasurements, RiderGoal, CalcResults } from "./bike-calculations";
 import type { Complaint } from "./bike-store";
+import { SADDLE_HIERARCHY_THRESHOLD_MM } from "./poseMetricsEngine";
 import { getCausesForComplaints, type AnalysisResults, type CauseWithTrigger } from "./bike-complaints";
 
 export interface CrossReference {
@@ -58,14 +59,16 @@ export function generateCrossReferences(
 ): CrossRefResult {
   const refs: CrossReference[] = [];
 
-  // Правило склейки советов по седлу (ТЗ v1.14.22): если дельта высоты седла
-  // с LeMond > 20 мм — приоритет у крупной коррекции по формуле рамы,
-  // а микро-подстройки 2–3 мм (угол голеностопа и т.п.) скрываются как шум.
+  // Правило склейки советов по седлу (ТЗ v1.14.22, порог 15 мм с v1.14.29 —
+  // Issue #6): если дельта высоты седла с LeMond > 15 мм — приоритет у крупной
+  // коррекции по формуле рамы, а микро-подстройки 2–3 мм (угол голеностопа
+  // и т.п.) скрываются как шум. Единственный источник порога —
+  // SADDLE_HIERARCHY_THRESHOLD_MM из poseMetricsEngine.
   const shDeltaAbs =
     bike.saddleHeight && calc?.recommendedSaddleHeight
       ? Math.abs(bike.saddleHeight - calc.recommendedSaddleHeight)
       : null;
-  const lemondDominates = shDeltaAbs != null && shDeltaAbs > 20;
+  const lemondDominates = shDeltaAbs != null && shDeltaAbs > SADDLE_HIERARCHY_THRESHOLD_MM;
 
   // === 1. SH (высота седла) ↔ угол колена (анатомический, норма 140–150°) ===
   // v1.14.28: раньше при прямой ноге текст ВСЕГДА писал «седло выше нормы»,
@@ -131,6 +134,22 @@ export function generateCrossReferences(
           sources: ["фото позы (угол колена)", "калибровка (SH)", "формула LeMond"],
         });
       }
+    } else if (shDelta != null && Math.abs(shDelta) > SADDLE_HIERARCHY_THRESHOLD_MM) {
+      // 1b (v1.14.29, Issue #6): дельта SH с LeMond больше порога, а угол
+      // колена в кадре в норме. Спека: «выводить ТОЛЬКО крупную правку
+      // высоты седла» — микро-советы и так подавлены (lemondDominates).
+      // Честно показываем крупную правку, помечая расхождение данных
+      // (философия v1.14.28: вслепую двигать седло нельзя).
+      const diff = Math.abs(shDelta);
+      refs.push({
+        category: "saddle",
+        finding: `Высота седла расходится с расчётной на ${diff} мм (SH=${currentSH} мм, целевая ${targetSH} мм)`,
+        connection: `Формула LeMond (inseam × 0.883) даёт ${targetSH} мм против введённой SH=${currentSH} мм — расхождение превышает порог ${SADDLE_HIERARCHY_THRESHOLD_MM} мм. Угол колена на фото при этом в норме: проверьте кадр (педаль в НМТ) и измерение inseam, затем примените правку.`,
+        action: `${shDelta > 0 ? "Опустите" : "Поднимите"} седло на ${diff} мм`,
+        priority: 1,
+        sources: ["калибровка (SH)", "формула LeMond", "кросс-валидация"],
+        conflict: true,
+      });
     }
   }
 
@@ -262,9 +281,10 @@ export function generateCrossReferences(
   }
 
   // === 7. Угол голеностопа ↔ высота седла (микро-подстройка 2-3 мм).
-  // СКЛЕЙКА СОВЕТОВ (ТЗ v1.14.22): если дельта с LeMond > 20 мм —
-  // приоритет у крупной коррекции высоты (секция 1), микро-подстройку скрываем,
-  // чтобы не советовать «опустите на 41 мм» и тут же «опустите на 2-3 мм». ===
+  // СКЛЕЙКА СОВЕТОВ (ТЗ v1.14.22, порог 15 мм с v1.14.29): если дельта
+  // с LeMond > 15 мм — приоритет у крупной коррекции высоты (секция 1),
+  // микро-подстройку скрываем, чтобы не советовать «опустите на 41 мм»
+  // и тут же «опустите на 2-3 мм». ===
   if (sideAnalysis && bike.saddleHeight && !lemondDominates) {
     const ankleAngle = sideAnalysis.ankleAngle;
     if (ankleAngle.status === "bad" && ankleAngle.value > 110) {

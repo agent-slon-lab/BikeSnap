@@ -7,6 +7,11 @@
  * импортируются отсюда. Раньше угол колена (анатомический, ~145° в НМТ)
  * сравнивался с диапазоном СГИБА 25–35° — отсюда ложные «критично»;
  * текст наклона корпуса был инвертирован. Исправлено по ТЗ.
+ *
+ * v1.14.29 (Issue #6): тексты наклона корпуса синхронизированы с эталоном
+ * (poseMetricsEngine): >45° — «слишком ВЕРТИКАЛЬНО (комфортная посадка)»,
+ * <35° — «слишком ГОРИЗОНТАЛЬНО», значение угла в тексте. Добавлена
+ * extractPoseKeypoints() — сырые 2D-точки суставов для телеметрии отчёта.
  */
 
 import { JOINT_NORMS, KNEE_FLEXION_NORM, kneeFlexion } from "./poseMetricsEngine";
@@ -44,6 +49,46 @@ export const POSE_LANDMARKS = {
   LEFT_FOOT_INDEX: 31,
   RIGHT_FOOT_INDEX: 32,
 } as const;
+
+/** Ключевые суставы для телеметрии отчёта (v1.14.29, Issue #6) */
+export type PoseKeyJoint = "shoulder" | "hip" | "knee" | "ankle" | "toe";
+export type PoseKeypoints = Record<PoseKeyJoint, Point>;
+
+/**
+ * Сырые 2D-точки суставов (нормализованные 0..1) для телеметрии отчёта
+ * отладки (v1.14.29, Issue #6 «Сырые координаты 2D-точек»).
+ *
+ * @param landmarks полный массив точек MediaPipe (33 шт.)
+ * @param side сторона анализа бокового кадра ("left"/"right"); для back/front
+ *        не передаётся — берём левую сторону, если она видима, иначе правую.
+ * @returns 5 суставов или null, если ни одна сторона не видна полностью.
+ */
+export function extractPoseKeypoints(
+  landmarks: Point[] | null | undefined,
+  side?: "left" | "right" | null
+): PoseKeypoints | null {
+  if (!landmarks || landmarks.length === 0) return null;
+
+  const pick = (s: "left" | "right"): PoseKeypoints => {
+    const L = s === "left";
+    return {
+      shoulder: landmarks[L ? POSE_LANDMARKS.LEFT_SHOULDER : POSE_LANDMARKS.RIGHT_SHOULDER],
+      hip: landmarks[L ? POSE_LANDMARKS.LEFT_HIP : POSE_LANDMARKS.RIGHT_HIP],
+      knee: landmarks[L ? POSE_LANDMARKS.LEFT_KNEE : POSE_LANDMARKS.RIGHT_KNEE],
+      ankle: landmarks[L ? POSE_LANDMARKS.LEFT_ANKLE : POSE_LANDMARKS.RIGHT_ANKLE],
+      toe: landmarks[L ? POSE_LANDMARKS.LEFT_FOOT_INDEX : POSE_LANDMARKS.RIGHT_FOOT_INDEX],
+    };
+  };
+  const complete = (p: PoseKeypoints | null): boolean =>
+    !!p && (Object.values(p) as (Point | undefined)[]).every((pt) => isVisible(pt));
+
+  const sides: Array<"left" | "right"> = side ? [side, side === "left" ? "right" : "left"] : ["left", "right"];
+  for (const s of sides) {
+    const p = pick(s);
+    if (complete(p)) return p;
+  }
+  return null;
+}
 
 /**
  * Скалярное произведение
@@ -335,8 +380,8 @@ export function analyzeBikeFit(
     "Наклон корпуса",
     "Угол наклона спины (бедро→плечо) к горизонту: 0° — горизонтально (агрессивная посадка), 90° — вертикально (комфорт). Норма шоссе 35–45°.",
     backAngleValue > JOINT_NORMS.torso.max
-      ? "Спина стоит слишком вертикально — посадка высокая/комфортная. Для аэродинамики опустите или удлините вынос."
-      : "Спина наклонена слишком низко — посадка агрессивная. Поднимите вынос руля для снижения нагрузки на поясницу и руки."
+      ? `Спина стоит слишком ВЕРТИКАЛЬНО (комфортная посадка) — ${backAngleValue.toFixed(1)}°. Для аэродинамики опустите вынос.`
+      : `Спина наклонена слишком ГОРИЗОНТАЛЬНО (агрессивная посадка) — ${backAngleValue.toFixed(1)}°. Для снятия нагрузки с поясницы поднимите вынос.`
   );
 
   // 4. Угол голеностопа (knee-ankle-toe, при недоступности носка — heel).

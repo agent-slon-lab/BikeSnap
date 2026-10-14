@@ -99,6 +99,13 @@ interface BikePhotoCalibratorProps {
    * дозаполненный из фото WB), не трогая введённые вручную поля.
    */
   onClearComputed?: () => void;
+  /**
+   * Телеметрия масштаба для отчёта отладки (v1.14.29, Issue #6):
+   * источник масштаба, мм/пиксель, наклон оси колёс. Вызывается после
+   * каждого расчёта ядра (payload) и при сбросе (null): замена/очистка
+   * фото, старт разметки, ошибка движка.
+   */
+  onScaleInfo?: (info: { scaleMmPerPx: number; scaleSource: string; frameTiltDeg: number } | null) => void;
 }
 
 /** Сжать изображение до maxDim по длинной стороне, JPEG quality */
@@ -160,8 +167,12 @@ const MATCH_COLORS = {
   unknown: { bg: "bg-muted/50", border: "border-border", text: "text-muted-foreground", label: "—" },
 };
 
-export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, initialKeyPoints, onPhotoChange, onClearComputed }: BikePhotoCalibratorProps) {
+export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, initialKeyPoints, onPhotoChange, onClearComputed, onScaleInfo }: BikePhotoCalibratorProps) {
   const bikeType = useBikeStore((s) => s.bikeType);
+  // v1.14.29: колбэк телеметрии масштаба — через ref, чтобы не ронять
+  // deps существующих useCallback/useEffect (вызовы добавлены точечно)
+  const onScaleInfoRef = useRef(onScaleInfo);
+  onScaleInfoRef.current = onScaleInfo;
   // Инициализация: если есть сохранённое фото — восстанавливаем
   const [photoUrl, setPhotoUrl] = useState<string | null>(initialPhotoUrl ?? null);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
@@ -220,6 +231,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     setEngineWarnings([]);
     setEngineResult(null);
     setScaleSourceInfo(null);
+    onScaleInfoRef.current?.(null); // v1.14.29: телеметрия масштаба сброшена (смена велика/фото)
 
     lastEmittedRef.current = {
       photoUrl: initialPhotoUrl ?? null,
@@ -404,6 +416,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     // идентичных точках/значениях (карточка могла быть очищена)
     lastAutoAppliedRef.current = "";
     setAppliedSummary(null);
+    onScaleInfoRef.current?.(null); // v1.14.29: телеметрия масштаба сброшена (новое фото)
     // Конвертируем в base64 и сохраняем
     if (onPhotoChange) {
       const reader = new FileReader();
@@ -445,6 +458,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     // v1.14.25: очистка сбрасывает историю авто-записи и её сводку
     lastAutoAppliedRef.current = "";
     setAppliedSummary(null);
+    onScaleInfoRef.current?.(null); // v1.14.29: телеметрия масштаба сброшена (фото удалено)
     if (onPhotoChange) {
       lastEmittedRef.current = { photoUrl: null, keyPoints: null };
       onPhotoChange(null, null);
@@ -477,6 +491,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     setPointsMissing([]);
     setEngineWarnings([]);
     setScaleSourceInfo(null);
+    onScaleInfoRef.current?.(null); // v1.14.29: телеметрия масштаба сброшена (старт разметки)
     setPlacementMode(true);
     setPlacementPointKey("bb");
 
@@ -768,6 +783,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         setEngineWarnings([]);
         setEngineResult(null);
         setScaleSourceInfo(null);
+        onScaleInfoRef.current?.(null); // v1.14.29: движок упал — телеметрии масштаба нет
         setDebugLog((prev) => [...prev, ``, `  ❌ calculateBikeGeometry: ${msg}`]);
         return;
       }
@@ -779,6 +795,13 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         source: engine.scaleSource,
         tiltDeg: engine.anglesDeg.frameTilt,
         facingRight: engine.frame.facingRight,
+      });
+      // v1.14.29 (Issue #6): телеметрия масштаба — в карточку велика,
+      // оттуда в отчёт отладки (telemetry.calibration)
+      onScaleInfoRef.current?.({
+        scaleMmPerPx: engine.scaleMmPerPx,
+        scaleSource: engine.scaleSource,
+        frameTiltDeg: engine.anglesDeg.frameTilt,
       });
 
       setDebugLog((prev) => [

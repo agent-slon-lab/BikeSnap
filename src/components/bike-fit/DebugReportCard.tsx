@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { buildFitReport, sendReport, type BikeCalibrationInput, type ReportViewInput } from "@/lib/fit-report";
 import { getActiveBike } from "@/lib/bike-storage";
 import { useBikeStore } from "@/lib/bike-store";
+import { useDeviceOrientation } from "@/hooks/use-device-orientation";
 
 interface DebugReportCardProps {
   views: ReportViewInput[];
@@ -44,14 +45,18 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
   // Контекст онбординга — уходит в отчёт, чтобы я видел, в каких условиях
   // считался анализ (тип вела, рост/inseam, размеры рамы, жалобы)
   const { bikeType, goal, complaints, body, bike } = useBikeStore();
+  // v1.14.29 (Issue #6 «Датчики устройства»): живой гироскоп в момент
+  // отправки отчёта (не в момент спуска затвора — тот остаётся в captureMeta)
+  const orientation = useDeviceOrientation(true);
 
   // Калибровка шага 2 (v1.14.15): фото велика + точки разметки из карточки
   // активного велика (bikefit-bikes). «НАДО ЧТОБЫ эти действия ТОЖЕ
   // СОХРАНЯЛИСЬ» — теперь уходят в отчёт вместе с фото позы.
+  // v1.14.29: плюс телеметрия масштаба ядра (scaleSource/мм-пикс/наклон).
   const calibration: BikeCalibrationInput | null = (() => {
     try {
       const b = getActiveBike();
-      if (!b || (!b.photoData && !b.keyPointsData)) return null;
+      if (!b || (!b.photoData && !b.keyPointsData && !b.photoCalib)) return null;
       let points: BikeCalibrationInput["points"] = null;
       if (b.keyPointsData) {
         const parsed = JSON.parse(b.keyPointsData) as Record<
@@ -68,7 +73,17 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
         }
         points = clean;
       }
-      return { photo: b.photoData ?? null, points };
+      return {
+        photo: b.photoData ?? null,
+        points,
+        scale: b.photoCalib
+          ? {
+              scaleMmPerPx: b.photoCalib.scaleMmPerPx,
+              scaleSource: b.photoCalib.scaleSource,
+              frameTiltDeg: b.photoCalib.frameTiltDeg,
+            }
+          : null,
+      };
     } catch {
       return null;
     }
@@ -88,6 +103,8 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
           bike,
         },
         calibration,
+        // v1.14.29: датчики устройства в момент отправки отчёта
+        { roll: orientation.roll, pitch: orientation.pitch, supported: orientation.supported },
       );
 
       try {

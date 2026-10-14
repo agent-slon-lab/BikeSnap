@@ -43,6 +43,17 @@ export interface BikeRecord {
    * сюда не пишутся — они в любом случае чистятся при удалении фото.
    */
   photoDerived?: string[];
+  /**
+   * Телеметрия последнего успешного расчёта ядра геометрии (v1.14.29,
+   * Issue #6): источник масштаба, мм/пиксель, наклон оси колёс в кадре.
+   * Уходит в отчёт отладки (telemetry.calibration). Чистится вместе
+   * с фото (updateBikePhotoScale(id, null) из handleClear/замены фото).
+   */
+  photoCalib?: {
+    scaleMmPerPx: number;
+    scaleSource: string;
+    frameTiltDeg: number;
+  };
   createdAt: number;
   updatedAt: number;
 }
@@ -200,6 +211,31 @@ export function updateBikePhoto(id: string, photoData: string | undefined, keyPo
     b.updatedAt = Date.now();
     save(BIKES_KEY, bikes);
   }
+}
+
+/**
+ * Сохранить/очистить телеметрию фото-калибровки (v1.14.29, Issue #6):
+ * источник масштаба, мм/пиксель и наклон оси колёс — уходят в отчёт отладки.
+ * info = null — сброс (фото удалено/заменено, движок упал).
+ */
+export function updateBikePhotoScale(
+  id: string,
+  info: { scaleMmPerPx: number; scaleSource: string; frameTiltDeg: number } | null
+) {
+  const bikes = getBikes();
+  const b = bikes.find((b) => b.id === id);
+  if (!b) return;
+  if (info && Number.isFinite(info.scaleMmPerPx) && info.scaleMmPerPx > 0) {
+    b.photoCalib = {
+      scaleMmPerPx: Math.round(info.scaleMmPerPx * 10000) / 10000,
+      scaleSource: info.scaleSource,
+      frameTiltDeg: Math.round(info.frameTiltDeg * 10) / 10,
+    };
+  } else {
+    delete b.photoCalib;
+  }
+  b.updatedAt = Date.now();
+  save(BIKES_KEY, bikes);
 }
 
 /**

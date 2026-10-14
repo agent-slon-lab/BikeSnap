@@ -22,6 +22,7 @@ import {
   updateBike,
   updateBikePhoto,
   updateBikePhotoDerived,
+  updateBikePhotoScale,
   type BikeRecord,
 } from "@/lib/bike-storage";
 import type { BikeType } from "@/lib/bike-params";
@@ -487,6 +488,11 @@ export function BikeParametersForm() {
             initialPhotoUrl={activeBike.photoData}
             initialKeyPoints={activeBike.keyPointsData ? JSON.parse(activeBike.keyPointsData) : null}
             onClearComputed={purgePhotoComputed}
+            // v1.14.29 (Issue #6): телеметрия масштаба калибровки — в карточку
+            // велика, чтобы отчёт отладки нёс scaleSource/scaleMmPerPx/наклон
+            onScaleInfo={(info) => {
+              if (activeBike) updateBikePhotoScale(activeBike.id, info);
+            }}
             onPhotoChange={(photoData, keyPoints) => {
               updateBikePhoto(
                 activeBike.id,

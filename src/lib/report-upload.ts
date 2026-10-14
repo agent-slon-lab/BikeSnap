@@ -287,6 +287,28 @@ export async function uploadReportToGithub(
     }, точек ${placed.length}${keys ? ` — ${keys}` : ""}`;
   })();
 
+  // Телеметрия отчёта (v1.14.29, Issue #6): флаги калибровки, датчики,
+  // точки суставов, версии — в человекочитаемой сводке issue
+  const tel = report.telemetry;
+  const telMd = tel
+    ? [
+        `- **Масштаб калибровки:** ${
+            tel.calibration.scaleSource
+              ? `${tel.calibration.scaleSource} (kind: ${tel.calibration.scaleKind}, ${tel.calibration.scaleMmPerPx?.toFixed(4) ?? "—"} мм/px, наклон кадра ${tel.calibration.frameTiltDeg ?? "—"}°)`
+              : "нет"
+          }`,
+        `- **Датчики при отправке:** ${
+            tel.device.isOrientationSupported
+              ? `roll ${tel.device.deviceRoll}° / pitch ${tel.device.devicePitch}°`
+              : "гироскоп недоступен"
+          }`,
+        `- **Точки суставов (telemetry.poseKeypoints):** ${Object.entries(tel.poseKeypoints)
+          .map(([v, kp]) => `${v}: ${kp ? `✓ (${kp.side ?? "—"})` : "—"}`)
+          .join(", ")}`,
+        `- **Движок/среда:** ${tel.engineVersion}, app ${tel.appVersion}, viewport ${tel.viewportSize}`,
+      ].join("\n")
+    : null;
+
   const body = [
     "Авто-отчёт из приложения BikeSnap (кнопка «Отправить отчёт» на шаге «Анализ»).",
     "",
@@ -300,6 +322,7 @@ export async function uploadReportToGithub(
     "**Ракурсы**",
     viewsMd || "- нет ракурсов",
     calibMd ?? null,
+    telMd ?? null,
     "",
     "**Файлы в репозитории**",
     filesMd,

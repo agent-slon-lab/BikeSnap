@@ -13,7 +13,8 @@
  */
 
 import { APP_VERSION } from "@/lib/app-version";
-import type { Point, ViewType } from "@/lib/bike-fit";
+import { POSE_ENGINE_VERSION } from "@/lib/poseMetricsEngine";
+import { extractPoseKeypoints, type Point, type ViewType, type PoseKeypoints } from "@/lib/bike-fit";
 
 /** Гироскоп в момент спуска затвора (прокидывается из CameraCapture). */
 export interface CaptureMeta {
@@ -44,14 +45,15 @@ export interface BikeCalibrationInput {
   photo: string | null;
   /** Точки разметки [0..1], ключи — BikeKeyPoints */
   points: Record<string, { x: number; y: number } | null> | null;
-}
-
-/** Данные калибровки шага 2 (фото велика + точки разметки) для отчёта. */
-export interface BikeCalibrationInput {
-  /** dataURL фото велика (уже сжат при сохранении в карточку) или null */
-  photo: string | null;
-  /** Точки разметки [0..1], ключи — BikeKeyPoints */
-  points: Record<string, { x: number; y: number } | null> | null;
+  /**
+   * Телеметрия масштаба ядра (v1.14.29, Issue #6): источник масштаба,
+   * мм/пиксель, наклон оси колёс — из карточки велика (photoCalib).
+   */
+  scale?: {
+    scaleMmPerPx: number;
+    scaleSource: string;
+    frameTiltDeg: number;
+  } | null;
 }
 
 /** Контекст онбординга (из стора). body/bike — any-структуры, уходят в JSON как есть. */
@@ -61,6 +63,72 @@ export interface FitReportContext {
   complaints?: readonly string[];
   body?: unknown;
   bike?: unknown;
+}
+
+/** Живые датчики устройства в момент отправки отчёта (v1.14.29) */
+export interface DeviceOrientationSnapshot {
+  roll: number;
+  pitch: number;
+  supported: boolean;
+}
+
+/**
+ * Телеметрия отчёта отладки (v1.14.29, Issue #6 «Расширение логов
+ * и отчёта отладки»): сырые точки суставов, флаги калибровки масштаба,
+ * датчики устройства, версии движка и среды.
+ */
+export interface FitReportTelemetry {
+  appVersion: string;
+  /** Версия движка метрик позы (poseMetricsEngine) */
+  engineVersion: string;
+  userAgent: string;
+  viewportSize: string;
+  screen: string;
+  language: string;
+  /** Датчики устройства в момент отправки отчёта */
+  device: {
+    deviceRoll: number | null;
+    devicePitch: number | null;
+    isOrientationSupported: boolean;
+  };
+  /** Флаги калибровки масштаба фото велика (шаг 2) */
+  calibration: {
+    /** Сырая строка источника из ядра (USER_OVERRIDE… / CONSENSUS… / FALLBACK_AUTO…) */
+    scaleSource: string | null;
+    /** Нормализованный вид источника (спека Issue #6) */
+    scaleKind:
+      | "USER_SADDLE_HEIGHT"
+      | "USER_OVERRIDE"
+      | "CONSENSUS"
+      | "FALLBACK_WB"
+      | "UNKNOWN"
+      | null;
+    scaleMmPerPx: number | null;
+    frameTiltDeg: number | null;
+  };
+  /** Сырые 2D-точки суставов по ракурсам: нормализованные + пиксели */
+  poseKeypoints: Record<
+    string,
+    {
+      side: "left" | "right" | null;
+      normalized: Record<string, { x: number; y: number } | null>;
+      /** px по размеру приложенного фото (null — фото не прочиталось) */
+      pixels: Record<string, { x: number; y: number } | null> | null;
+      photoSize: { width: number; height: number } | null;
+    }
+    | null
+  >;
+}
+
+/** Нормализованный вид источника масштаба (спека Issue #6: USER_SADDLE_HEIGHT / FALLBACK_WB и т.д.) */
+export function normalizeScaleKind(src: string | null | undefined): FitReportTelemetry["calibration"]["scaleKind"] {
+  if (!src) return null;
+  if (src.startsWith("USER_OVERRIDE")) {
+    return src.includes("saddleHeight") ? "USER_SADDLE_HEIGHT" : "USER_OVERRIDE";
+  }
+  if (src.startsWith("CONSENSUS")) return "CONSENSUS";
+  if (src.startsWith("FALLBACK")) return "FALLBACK_WB";
+  return "UNKNOWN";
 }
 
 export interface FitReport {
@@ -99,7 +167,18 @@ export interface FitReport {
     /** Путь к фото велика в репозитории */
     photoFile?: string | null;
     points: Record<string, { x: number; y: number } | null> | null;
+    /** Телеметрия масштаба (v1.14.29) */
+    scale?: {
+      scaleMmPerPx: number;
+      scaleSource: string;
+      frameTiltDeg: number;
+    } | null;
   } | null;
+  /**
+   * Телеметрия для отладки (v1.14.29, Issue #6): сырые точки суставов,
+   * флаги калибровки, датчики устройства, версии. Собирается всегда.
+   */
+  telemetry?: FitReportTelemetry;
 }
 
 export type ReportSendResult = "shared" | "downloaded" | "cancelled";
@@ -140,32 +219,94 @@ export async function photoToDataUrl(url: string, maxDim = 1280): Promise<string
   }
 }
 
+/** Размеры изображения по URL (для пересчёта норм. точек в пиксели). */
+async function imageSizeOf(url: string): Promise<{ width: number; height: number } | null> {
+  try {
+    if (typeof document === "undefined" || typeof Image === "undefined") return null;
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("image load timeout")), 8000);
+      img.onload = () => { clearTimeout(timer); resolve(); };
+      img.onerror = () => { clearTimeout(timer); reject(new Error("image load error")); };
+      img.src = url;
+    });
+    return img.naturalWidth && img.naturalHeight
+      ? { width: img.naturalWidth, height: img.naturalHeight }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Норм. точки суставов → пиксели по размеру фото. */
+function keypointsToPixels(
+  kp: PoseKeypoints,
+  size: { width: number; height: number }
+): Record<string, { x: number; y: number } | null> {
+  const r1 = (n: number) => Math.round(n * 10) / 10;
+  return {
+    shoulder: { x: r1(kp.shoulder.x * size.width), y: r1(kp.shoulder.y * size.height) },
+    hip: { x: r1(kp.hip.x * size.width), y: r1(kp.hip.y * size.height) },
+    knee: { x: r1(kp.knee.x * size.width), y: r1(kp.knee.y * size.height) },
+    ankle: { x: r1(kp.ankle.x * size.width), y: r1(kp.ankle.y * size.height) },
+    toe: { x: r1(kp.toe.x * size.width), y: r1(kp.toe.y * size.height) },
+  };
+}
+
 /**
  * Сборка отчёта: JSON-строка + имя файла. Фото читаются параллельно.
  * calibration — данные шага 2 (фото велика + точки разметки), v1.14.15.
+ * device — живые датчики в момент отправки (v1.14.29, Issue #6).
  */
 export async function buildFitReport(
   views: ReportViewInput[],
   context: FitReportContext = {},
   calibration?: BikeCalibrationInput | null,
+  device?: DeviceOrientationSnapshot | null,
 ): Promise<{ report: FitReport; json: string; filename: string }> {
+  // v1.14.29: сырые точки суставов по ракурсам — заполняются ниже
+  const poseKeypoints: FitReportTelemetry["poseKeypoints"] = {};
   const viewsOut: FitReport["views"] = await Promise.all(
-    views.map(async (v) => ({
-      view: v.view,
-      analyzed: !!v.analysis,
-      error: v.error ?? null,
-      landmarksCount: v.landmarks?.length ?? 0,
-      landmarks: v.landmarks
-        ? v.landmarks.map((p) => ({
-            x: r4(p.x),
-            y: r4(p.y),
-            ...(p.visibility !== undefined ? { visibility: r4(p.visibility) } : {}),
-          }))
-        : null,
-      analysis: v.analysis ?? null,
-      captureMeta: v.captureMeta ?? null,
-      photo: v.url ? await photoToDataUrl(v.url) : null,
-    })),
+    views.map(async (v) => {
+      const photo = v.url ? await photoToDataUrl(v.url) : null;
+      // v1.14.29: сырые точки суставов (нормализованные + пиксели приложенного фото)
+      const analysisSide = (v.analysis as { side?: "left" | "right" } | null)?.side ?? null;
+      const kp = extractPoseKeypoints(v.landmarks, analysisSide);
+      let poseEntry: FitReportTelemetry["poseKeypoints"][string] = null;
+      if (kp) {
+        const size = photo ? await imageSizeOf(photo) : null;
+        poseEntry = {
+          side: analysisSide,
+          normalized: {
+            shoulder: { x: r4(kp.shoulder.x), y: r4(kp.shoulder.y) },
+            hip: { x: r4(kp.hip.x), y: r4(kp.hip.y) },
+            knee: { x: r4(kp.knee.x), y: r4(kp.knee.y) },
+            ankle: { x: r4(kp.ankle.x), y: r4(kp.ankle.y) },
+            toe: { x: r4(kp.toe.x), y: r4(kp.toe.y) },
+          },
+          pixels: size ? keypointsToPixels(kp, size) : null,
+          photoSize: size,
+        };
+      }
+      poseKeypoints[v.view] = poseEntry;
+
+      return {
+        view: v.view,
+        analyzed: !!v.analysis,
+        error: v.error ?? null,
+        landmarksCount: v.landmarks?.length ?? 0,
+        landmarks: v.landmarks
+          ? v.landmarks.map((p) => ({
+              x: r4(p.x),
+              y: r4(p.y),
+              ...(p.visibility !== undefined ? { visibility: r4(p.visibility) } : {}),
+            }))
+          : null,
+        analysis: v.analysis ?? null,
+        captureMeta: v.captureMeta ?? null,
+        photo,
+      };
+    }),
   );
 
   const calibOut: FitReport["bikeCalibration"] = calibration
@@ -173,6 +314,7 @@ export async function buildFitReport(
         photo: calibration.photo ? await photoToDataUrl(calibration.photo) : null,
         photoFile: null,
         points: calibration.points ?? null,
+        ...(calibration.scale ? { scale: calibration.scale } : {}),
       }
     : null;
 
@@ -197,6 +339,31 @@ export async function buildFitReport(
     context,
     views: viewsOut,
     ...(calibOut ? { bikeCalibration: calibOut } : {}),
+    telemetry: {
+      appVersion: APP_VERSION,
+      engineVersion: POSE_ENGINE_VERSION,
+      userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
+      viewportSize:
+        typeof window !== "undefined"
+          ? `${window.innerWidth}x${window.innerHeight}`
+          : "unknown",
+      screen: typeof screen !== "undefined" ? `${screen.width}x${screen.height}` : "unknown",
+      language: typeof navigator !== "undefined" ? navigator.language : "unknown",
+      device: {
+        // Живые датчики в момент отправки; на десктопе supported=false —
+        // пишем null, чтобы не путать мусорные нули с реальными данными
+        deviceRoll: device?.supported ? Math.round(device.roll * 10) / 10 : null,
+        devicePitch: device?.supported ? Math.round(device.pitch * 10) / 10 : null,
+        isOrientationSupported: !!device?.supported,
+      },
+      calibration: {
+        scaleSource: calibration?.scale?.scaleSource ?? null,
+        scaleKind: normalizeScaleKind(calibration?.scale?.scaleSource),
+        scaleMmPerPx: calibration?.scale?.scaleMmPerPx ?? null,
+        frameTiltDeg: calibration?.scale?.frameTiltDeg ?? null,
+      },
+      poseKeypoints,
+    },
   };
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);

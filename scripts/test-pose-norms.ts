@@ -86,7 +86,9 @@ console.log("=== 1. Движок poseMetricsEngine ===");
   const upright = analyzeRiderPose(mkTorso(60));
   check("торс 60° → TOO_HIGH + «вертикально»", upright.torsoAngle.status === "TOO_HIGH" && /вертикально/i.test(upright.torsoAngle.recommendation ?? ""), upright.torsoAngle.recommendation);
   const low = analyzeRiderPose(mkTorso(25));
-  check("торс 25° → TOO_LOW + «низко»", low.torsoAngle.status === "TOO_LOW" && /низко/i.test(low.torsoAngle.recommendation ?? ""), low.torsoAngle.recommendation);
+  // v1.14.29 (Issue #6): текст по ТЗ — «слишком ГОРИЗОНТАЛЬНО» (было «низко»)
+  check("торс 25° → TOO_LOW + «ГОРИЗОНТАЛЬНО»", low.torsoAngle.status === "TOO_LOW" && /горизонтально/i.test(low.torsoAngle.recommendation ?? ""), low.torsoAngle.recommendation);
+  check("торс 25°: причина правки — поясница", /поясниц/i.test(low.torsoAngle.recommendation ?? ""), low.torsoAngle.recommendation);
   const mid = analyzeRiderPose(mkTorso(40));
   check("торс 40° → OPTIMAL", mid.torsoAngle.status === "OPTIMAL", mid.torsoAngle.recommendation);
 }
