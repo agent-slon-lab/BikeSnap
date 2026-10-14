@@ -7,6 +7,57 @@
 
 ---
 
+## [1.14.33] — 2026-10-15 — Офлайн-режим v2, зеркало на GitHub Pages, обновление по кнопке
+
+### Контекст
+Зона *.vercel.app заблокирована в РФ по SNI (TLS дропается на DPI) — сайт
+не открывается без VPN, хотя github.com и github.io доступны. Требуется:
+запасной вход (зеркало), полный офлайн для уже посещавших и авто-синхронизация
+зеркала при каждом пуше в main.
+
+### Изменения
+- **Service worker v2 (`public/sw.js`)**:
+  - навигация/HTML — сеть-первым (онлайн = всегда свежая версия), офлайн —
+    кэш + фолбэк на оболочку «/»;
+  - `/version.json` — сеть-первым (детектор обновлений);
+  - `/_next/static/*` — кэш-первым (чанки иммутабельны, имена хэшированы);
+  - install больше НЕ делает skipWaiting: новая версия ждёт, активация
+    только по сообщению SKIP_WAITING от кнопки «Обновить» в баннере;
+  - после activate — фоновый префетч замыкания `/_next/static/*` из HTML
+    (до 400 файлов, скан JS/CSS на вложенные пути): полный офлайн уже после
+    первой успешной загрузки.
+- **Самохостинг MediaPipe**: `public/cdn/mediapipe/wasm/*` (копия
+  @mediapipe/tasks-vision@1.0.1) + `pose_landmarker_lite.task`;
+  `use-pose-landmarker.ts` больше не зависит от jsdelivr/googleapis —
+  анализ поз работает офлайн, на зеркале и в офлайн-пакете.
+- **Баннер обновления (`update-banner.tsx`)**: «Доступна новая версия —
+  Обновить / Позже»; обновление применяется по кнопке, без внезапных
+  перезагрузок; register-sw шлёт `bikesnap-sw-update` при готовности.
+- **`public/version.json`**: точка поллинга для CI и детектора апдейтов.
+- **Зеркало GitHub Pages (`scripts/mirror_to_pages.py`)**: скачивание
+  продакшена замыканием («/» → все /_next/static/* → скан JS/CSS → …),
+  корневые файлы (sw.js, manifest, version.json, иконки, схемы),
+  `.nojekyll` (иначе Jekyll выкидывает каталог `_next`), публикация в
+  репо `agent-slon-lab.github.io`.
+- **Автосинк (`.github/workflows/mirror-to-pages.yml`)**: push в main +
+  workflow_dispatch; ожидание пересборки Vercel (поллинг version.json,
+  60 c…4 мин); публикация по SSH deploy-ключу (секрет PAGES_DEPLOY_KEY),
+  force-push одного коммита.
+- **Офлайн-пакет (`scripts/build-offline-zip.py`)**: zip с mirror/ +
+  start.bat/start.sh (python -m http.server 8642 на 127.0.0.1 + браузер,
+  порт менять нельзя — кэш привязан к origin) + README; прикладывается к
+  GitHub Release (из РФ качается без VPN).
+
+### Проверки
+- SHA-256 сверка зеркала с продакшеном: index.html («/», не «/index.html» —
+  прямой путь на Vercel отдаёт 404), sw.js, manifest.webmanifest, version.json.
+- `/_next/*` на зеркале = 200 (работает .nojekyll), version.json = ожидаемая
+  версия.
+- E2E офлайн-пакета: локальный сервер 127.0.0.1:8642 — SW регистрируется,
+  MediaPipe грузится с /cdn/mediapipe, анализ поз доступен без интернета.
+
+---
+
 ## [1.14.32] — 2026-10-14 — MediaPipe Occlusion: выбор ближней ноги и санитарная проверка стопы
 
 ### Контекст

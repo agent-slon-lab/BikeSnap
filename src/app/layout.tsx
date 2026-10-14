@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "next-themes";
 import RegisterSW from "@/components/pwa/register-sw";
 import ChunkErrorRecovery from "@/components/pwa/chunk-error-recovery";
+import UpdateBanner from "@/components/pwa/update-banner";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -79,6 +80,7 @@ export default function RootLayout({
           <Toaster />
           <RegisterSW />
           <ChunkErrorRecovery />
+          <UpdateBanner />
         </ThemeProvider>
       </body>
     </html>

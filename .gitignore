@@ -70,3 +70,7 @@ server.log
 
 # Deploy key + git helpers (НИКОГДА не коммитить, но живёт в воркспейсе и переживает пересборку)
 /git-helpers/
+
+# Зеркало GitHub Pages и офлайн-пакет (артефакты сборки)
+/mirror/
+/offline-dist/

@@ -53,7 +53,10 @@ interface UsePoseLandmarkerReturn {
  *   const result = detect(videoElement);  // для single-shot
  */
 export function usePoseLandmarker({
-  modelAssetPath = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+  // v1.14.33: модель самохостится с того же origin (/cdn/mediapipe) — работает
+  // офлайн, на зеркале GitHub Pages и в офлайн-пакете; внешний CDN не нужен.
+  // Файл синхронизирован с @mediapipe/tasks-vision (см. комментарий ниже).
+  modelAssetPath = "/cdn/mediapipe/models/pose_landmarker_lite.task",
   numPoses = 1,
   runningMode = "IMAGE",
 }: UsePoseLandmarkerOptions = {}): UsePoseLandmarkerReturn {
@@ -76,8 +79,13 @@ export function usePoseLandmarker({
         setLoading(true);
         setError(null);
 
+        // v1.14.33: WASM MediaPipe тоже самохостится. ВАЖНО: файлы в
+        // public/cdn/mediapipe/wasm/ — копия из
+        // node_modules/@mediapipe/tasks-vision@1.0.1/wasm (vision_wasm_internal
+        // + vision_wasm_nosimd_internal). При обновлении npm-пакета
+        // перезаписать их из нового node_modules, иначе версии разъедутся.
         const filesetResolver = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm"
+          "/cdn/mediapipe/wasm"
         );
 
         // Если компонент размонтировался во время загрузки WASM — выходим

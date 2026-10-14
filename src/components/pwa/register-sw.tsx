@@ -72,6 +72,18 @@ export default function RegisterSW() {
     // Если контроллера ещё не было — это первый визит, перезагружаться не зачем
     const hadController = !!navigator.serviceWorker.controller;
 
+    // v1.14.33: новый SW больше НЕ делает skipWaiting сам — он ждёт в
+    // `waiting`, пока пользователь не нажмёт «Обновить» в баннере (UpdateBanner
+    // шлёт SKIP_WAITING). Здесь мы только сообщаем баннеру о готовности:
+    // CustomEvent "bikesnap-sw-update" при наличии ожидающего работника.
+    const notifyWaiting = (reg: ServiceWorkerRegistration) => {
+      if (reg.waiting && navigator.serviceWorker.controller) {
+        window.dispatchEvent(
+          new CustomEvent("bikesnap-sw-update", { detail: reg })
+        );
+      }
+    };
+
     navigator.serviceWorker.addEventListener(
       "controllerchange",
       () => {
@@ -92,9 +104,20 @@ export default function RegisterSW() {
       navigator.serviceWorker
         .register("/sw.js", { updateViaCache: "none" })
         .then((reg) => {
+          // Баннер: если обновление уже ждёт — показать сразу.
+          notifyWaiting(reg);
+          // Баннер: новый SW дошёл до installed при живом контроллере.
+          reg.addEventListener("updatefound", () => {
+            const sw = reg.installing;
+            if (!sw) return;
+            sw.addEventListener("statechange", () => {
+              if (sw.state === "installed") notifyWaiting(reg);
+            });
+          });
           // Ищем обновление сразу, не дожидаясь следующей навигации.
-          // При новой версии: install → skipWaiting (в sw.js) → activate →
-          // clients.claim → controllerchange выше перезагрузит страницу.
+          // При новой версии: install → WAITING (skipWaiting только по
+          // кнопке в баннере) → SKIP_WAITING → activate → clients.claim →
+          // controllerchange выше перезагрузит страницу.
           reg.update().catch(() => {});
         })
         .catch(() => {
