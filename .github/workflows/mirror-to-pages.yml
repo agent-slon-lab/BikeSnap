@@ -1,0 +1,91 @@
+name: Mirror to GitHub Pages
+
+# Зеркалирование продакшена bike-snap.vercel.app → agent-slon-lab.github.io
+# (запасной вход из сетей, где *.vercel.app заблокирован по SNI).
+# Триггер: каждый пуш в main (после деплоя Vercel) + ручной запуск.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# один прогон за раз; новый пуш ждёт, а не отменяет текущий (иначе можно
+# остаться на полузеркале)
+concurrency:
+  group: mirror-to-pages
+  cancel-in-progress: false
+
+timeout-minutes: 10
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Ждать пересборку Vercel (поллинг /version.json)
+        run: |
+          EXPECTED="v$(node -p "require('./package.json').version")"
+          echo "EXPECTED=$EXPECTED" >> "$GITHUB_ENV"
+          echo "Ждём prod-версию $EXPECTED"
+          # минимум 60 сек: Vercel начинает билд не мгновенно
+          sleep 60
+          # максимум ~4 мин поллинга (10 c × 24)
+          for i in $(seq 1 24); do
+            got=$(curl -fsSL https://bike-snap.vercel.app/version.json \
+              | python3 -c 'import json,sys;print(json.load(sys.stdin).get("version",""))' \
+              || true)
+            echo "poll $i: prod=$got want=$EXPECTED"
+            if [ "$got" = "$EXPECTED" ]; then
+              echo "Прод обновился до $EXPECTED — зеркалим."
+              exit 0
+            fi
+            sleep 10
+          done
+          # Не валим воркфлоу: зеркалим текущее состояние прода (лучше
+          # старое зеркало, чем никакое). Внимание в лог.
+          echo "::warning::Vercel не отдал $EXPECTED за 5 мин — зеркалим текущее состояние"
+
+      - name: Зеркалирование продакшена (замыкание)
+        run: |
+          python3 scripts/mirror_to_pages.py \
+            --src https://bike-snap.vercel.app \
+            --out "$GITHUB_WORKSPACE/mirror"
+
+      - name: Публикация на agent-slon-lab.github.io (SSH deploy key)
+        env:
+          PAGES_DEPLOY_KEY: ${{ secrets.PAGES_DEPLOY_KEY }}
+        run: |
+          set -e
+          # приватный ключ из секрета → файл с правами 600
+          mkdir -p ~/.ssh
+          printf "%s" "$PAGES_DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts
+
+          cd "$GITHUB_WORKSPACE/mirror"
+          # .nojekyll и README уже лежат в зеркале (scripts/mirror_to_pages.py)
+          git init -b main
+          git config user.name  "mirror-bot"
+          git config user.email "mirror-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "mirror: $(date -u +%Y-%m-%dT%H:%MZ) из bike-snap.vercel.app"
+          git remote add origin git@github.com:agent-slon-lab/agent-slon-lab.github.io.git
+          # force-push: история зеркала = один коммит, это нормально
+          git push -f origin main
+
+      - name: Проверка зеркала (version.json)
+        run: |
+          sleep 30   # CDN GitHub Pages инвалидируется до ~10 мин; обычно быстрее
+          for i in $(seq 1 12); do
+            got=$(curl -fsSL https://agent-slon-lab.github.io/version.json \
+              | python3 -c 'import json,sys;print(json.load(sys.stdin).get("version",""))' \
+              || true)
+            echo "check $i: mirror=$got want=$EXPECTED"
+            [ "$got" = "$EXPECTED" ] && exit 0
+            sleep 10
+          done
+          echo "::warning::Зеркало ещё не отдал $EXPECTED (CDN GH Pages кэширует ~10 мин) — проверьте позже"
