@@ -13,7 +13,7 @@
 import type { BikeFitAnalysis } from "./bike-fit";
 import type { BikeMeasurements, BodyMeasurements, RiderGoal, CalcResults } from "./bike-calculations";
 import type { Complaint } from "./bike-store";
-import { SADDLE_HIERARCHY_THRESHOLD_MM } from "./poseMetricsEngine";
+import { SADDLE_HIERARCHY_THRESHOLD_MM, isCalibrationOwnershipValid, type CalibrationOwnership } from "./poseMetricsEngine";
 import { getCausesForComplaints, type AnalysisResults, type CauseWithTrigger } from "./bike-complaints";
 
 export interface CrossReference {
@@ -48,6 +48,12 @@ export interface CrossRefResult {
 
 /**
  * Сгенерировать комплексные рекомендации, связывающие геометрию рамы с позой.
+ *
+ * v1.14.31 (Multi-Bike State Isolation, ТЗ п. A.1): `ownership` — proof of
+ * ownership калибровки SH. При явной передаче и несоответствии
+ * `calibBikeId !== currentBikeId` все секции, использующие SH (дельта
+ * LeMond, SH↔колено, SH↔голеностоп), ЗАПРЕЩЕНЫ: чужое SH не участвует ни в
+ * крупных правках, ни в подавлении микро-советов, ни в «сечении» носка.
  */
 export function generateCrossReferences(
   bike: BikeMeasurements,
@@ -56,8 +62,16 @@ export function generateCrossReferences(
   calc: CalcResults | null,
   sideAnalysis: BikeFitAnalysis | null,
   complaints: Complaint[],
+  ownership?: CalibrationOwnership,
 ): CrossRefResult {
   const refs: CrossReference[] = [];
+
+  // ТЗ п. A.1: калибровка другого вела в отчёте запрещена —
+  // SH-секции ниже пропускаются (см. shUsable в условиях).
+  const shOwnershipOk = isCalibrationOwnershipValid(ownership);
+  // Для секций, где SH самостоятельный вход (без LeMond), достаточно
+  // принадлежности: SH от другого вела не имеет права и в микро-советах.
+  const shUsable = shOwnershipOk;
 
   // Правило склейки советов по седлу (ТЗ v1.14.22, порог 15 мм с v1.14.29 —
   // Issue #6): если дельта высоты седла с LeMond > 15 мм — приоритет у крупной
@@ -65,7 +79,7 @@ export function generateCrossReferences(
   // и т.п.) скрываются как шум. Единственный источник порога —
   // SADDLE_HIERARCHY_THRESHOLD_MM из poseMetricsEngine.
   const shDeltaAbs =
-    bike.saddleHeight && calc?.recommendedSaddleHeight
+    shUsable && bike.saddleHeight && calc?.recommendedSaddleHeight
       ? Math.abs(bike.saddleHeight - calc.recommendedSaddleHeight)
       : null;
   const lemondDominates = shDeltaAbs != null && shDeltaAbs > SADDLE_HIERARCHY_THRESHOLD_MM;
@@ -75,7 +89,7 @@ export function generateCrossReferences(
   // даже когда SH ниже целевой (пользователь: «ввёл 680, целевая 759, а пишет
   // „выше нормы на 79“ и предлагает опустить» — бред). Теперь знак берём из
   // дельты, а при расхождении угла колена и SH честно фиксируем противоречие.
-  if (sideAnalysis && bike.saddleHeight && body.inseam > 0) {
+  if (shUsable && sideAnalysis && bike.saddleHeight && body.inseam > 0) {
     const kneeAngle = sideAnalysis.kneeAngle;
     const targetSH = calc?.recommendedSaddleHeight;
     const currentSH = bike.saddleHeight;
@@ -284,8 +298,10 @@ export function generateCrossReferences(
   // СКЛЕЙКА СОВЕТОВ (ТЗ v1.14.22, порог 15 мм с v1.14.29): если дельта
   // с LeMond > 15 мм — приоритет у крупной коррекции высоты (секция 1),
   // микро-подстройку скрываем, чтобы не советовать «опустите на 41 мм»
-  // и тут же «опустите на 2-3 мм». ===
-  if (sideAnalysis && bike.saddleHeight && !lemondDominates) {
+  // и тут же «опустите на 2-3 мм».
+  // v1.14.31: чужой SH (ownership не доказан) не имеет права и здесь —
+  // без shUsable «седло слишком высоко» строилось бы на SH другого вела. ===
+  if (shUsable && sideAnalysis && bike.saddleHeight && !lemondDominates) {
     const ankleAngle = sideAnalysis.ankleAngle;
     if (ankleAngle.status === "bad" && ankleAngle.value > 110) {
       refs.push({

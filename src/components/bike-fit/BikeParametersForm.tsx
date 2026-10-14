@@ -172,7 +172,8 @@ export function BikeParametersForm() {
       // поля прежнего вела выжить не могут) + синхронизация типоразмера
       // колеса из карточки (иначе фолбэк радиуса в калибраторе берётся
       // от протухшего wheelSizeId).
-      loadBikeData(active.measurements);
+      // v1.14.31: bikeId карточки — proof of ownership для расчётов шага 4.
+      loadBikeData(active.measurements, active.id);
       setWheelSizeId(findWheelSize(null, active.measurements.wheelHeight)?.id ?? "26");
       // v1.12.0: тип велика едет вместе с карточкой (шаг «Контекст» убран)
       setBikeType(active.type);
@@ -237,7 +238,8 @@ export function BikeParametersForm() {
     // CalibratorKey ниже — гарантированный remount калибратора через React key:
     // старое фото, точки и рассчитанные метрики уничтожаются вместе с компонентом.
     resetDraftState();
-    loadBikeData({});
+    // v1.14.31: bikeId созданной карточки — черновик сразу доказуемо «её»
+    loadBikeData({}, bike.id);
     // v1.12.0: тип велика синхронизируется из карточки — шаг «Контекст» убран,
     // тип выбирается здесь, при создании велика (newType в форме)
     setBikeType(newType);
@@ -257,8 +259,9 @@ export function BikeParametersForm() {
     // автосейв через 800 мс записывал заражённый черновик в Bike_B насовсем.
     // Дополнительно: wheelSizeId синхронизируется из WH карточки (фолбэк
     // радиуса в калибраторе больше не берётся от другого вела).
+    // v1.14.31: bikeId карточки — proof of ownership (ТЗ п. A.1).
     resetDraftState();
-    loadBikeData(bike.measurements);
+    loadBikeData(bike.measurements, bike.id);
     setBikeType(bike.type);
     setWheelSizeId(findWheelSize(null, bike.measurements.wheelHeight)?.id ?? "26");
     setActiveBike(bike.id);
@@ -279,7 +282,7 @@ export function BikeParametersForm() {
       resetDraftState();
       if (newActive) {
         setActiveBike(newActive.id);
-        loadBikeData(newActive.measurements);
+        loadBikeData(newActive.measurements, newActive.id);
         setWheelSizeId(findWheelSize(null, newActive.measurements.wheelHeight)?.id ?? "26");
         setBikeType(newActive.type);
         lastSavedJsonRef.current = JSON.stringify(newActive.measurements);

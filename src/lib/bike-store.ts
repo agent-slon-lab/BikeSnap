@@ -7,6 +7,14 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { BikeType } from "@/lib/bike-params";
 import type { BodyMeasurements, BikeMeasurements, RiderGoal } from "@/lib/bike-calculations";
+// v1.14.31: только значения (не типы) — bike-storage не импортирует из
+// bike-store ничего рантаймного (только type Complaint), цикла нет.
+import {
+  getActiveBikeId,
+  getBikes,
+  ACTIVE_BIKE_CHANGED_EVENT,
+  ACTIVE_BIKE_KEY,
+} from "./bike-storage";
 
 export type OnboardingStep =
   | "body" // рост, inseam, цель, жалобы (v1.12.0: сюда переехали цель+жалобы из убранного «Контекста»)
@@ -105,6 +113,20 @@ interface AppState {
   // Велосипед (только для Режима A)
   bike: BikeMeasurements;
 
+  /**
+   * v1.14.31 (Multi-Bike State Isolation, ТЗ п. A.1 «Жёсткая привязка
+   * калибровки»): какому велосипеду принадлежат значения черновика `bike`.
+   * Раньше SH/Reach/Stack были «голыми» числами без proof of ownership —
+   * анализ не мог доказать, что калибровка получена для ТЕКУЩЕГО вела, и
+   * при race (F5 на шаге 4, вторая вкладка, удаление активного вела)
+   * чужое SH=800 попадало в LeMond-сравнение отчёта Bike_B.
+   * null = принадлежность не доказана (чистый/legacy черновик).
+   * Устанавливается ТОЛЬКО через loadBikeData(m, bikeId); проверяется в
+   * точке расчёта (applySaddleHeightContext / generateCrossReferences):
+   * `if (calibration.bikeId !== currentBike.id) — калибровка запрещена`.
+   */
+  bikeId: string | null;
+
   // Типоразмер колеса (26"/27.5"/29"/700c и т.д.) — для dual scale
   // Хранится отдельно, т.к. используется и в форме параметров, и в калибраторе
   wheelSizeId: string;
@@ -129,8 +151,12 @@ interface AppState {
    * measurements протаскивал SH/WB/ETT от прежнего вела — именно так 800 мм
    * от Bike_A попадали в отчёт Bike_B (и автосейвом записывались туда
    * НАСОВСЕМ). Здесь — только известные ключи, всё остальное = undefined.
+   *
+   * v1.14.31: второй параметр `bikeId` — id карточки-источника. ONLY способ
+   * доказать принадлежность калибровки в точке расчёта. Вызов без id
+   * обнуляет bikeId (принадлежность не доказана) — консервативно.
    */
-  loadBikeData: (m: BikeMeasurements) => void;
+  loadBikeData: (m: BikeMeasurements, bikeId?: string | null) => void;
   /**
    * v1.14.30: жёсткий сброс черновика СЦЕНАРИЯ (параметры велика +
    * типоразмер колеса) при смене/создании велосипеда. Тело/цель/жалобы
@@ -180,6 +206,7 @@ export const useBikeStore = create<AppState>()(
       complaints: [],
       body: initialBody,
       bike: initialBike,
+      bikeId: null,
       wheelSizeId: "26",
 
       setMode: (mode) => set({ mode }),
@@ -223,7 +250,8 @@ export const useBikeStore = create<AppState>()(
       // нет вообще, протухшие значения и мусорные ключи старого черновика
       // выжить не могут. merge-поведение setBike остаётся для патчей формы
       // (ввод одного поля не должен стирать остальные).
-      loadBikeData: (m) =>
+      // v1.14.31: bikeId — proof of ownership (см. докмент поля).
+      loadBikeData: (m, bikeId) =>
         set(() => {
           const clean = {} as BikeMeasurements;
           for (const k of Object.keys(initialBike) as Array<keyof BikeMeasurements>) {
@@ -231,11 +259,14 @@ export const useBikeStore = create<AppState>()(
             clean[k] =
               typeof v === "number" && Number.isFinite(v) ? v : undefined;
           }
-          return { bike: clean };
+          return { bike: clean, bikeId: bikeId ?? null };
         }),
 
-      // v1.14.30: жёсткий сброс черновика сценария (без атрибутов райдера)
-      resetDraftState: () => set({ bike: { ...initialBike }, wheelSizeId: "26" }),
+      // v1.14.30: жёсткий сброс черновика сценария (без атрибутов райдера).
+      // v1.14.31: вместе с параметрами стирается и принадлежность (bikeId),
+      // иначе пустой черновик «наследовал» бы id чужого вела.
+      resetDraftState: () =>
+        set({ bike: { ...initialBike }, bikeId: null, wheelSizeId: "26" }),
 
       // ПОЛНЫЙ сброс сценария: вызывается ТОЛЬКО по явному «Начать заново»
       // (кнопка на карточке режима). Чистит данные СЦЕНАРИЯ: позицию шагов,
@@ -251,6 +282,7 @@ export const useBikeStore = create<AppState>()(
           selectStep: 0,
           bikeType: null,
           bike: { ...initialBike },
+          bikeId: null,
           wheelSizeId: "26",
         }),
 
@@ -275,6 +307,7 @@ export const useBikeStore = create<AppState>()(
         complaints: state.complaints,
         body: state.body,
         bike: state.bike,
+        bikeId: state.bikeId,
         wheelSizeId: state.wheelSizeId,
       }),
       // Санитайзер ре-гидрации: старые бэкапы (без mode/step/selectStep) и
@@ -292,8 +325,69 @@ export const useBikeStore = create<AppState>()(
           p.selectStep <= 3
             ? Math.round(p.selectStep)
             : 0;
-        return { ...current, ...p, mode, step, selectStep };
+        return {
+          ...current,
+          ...p,
+          mode,
+          step,
+          selectStep,
+          // v1.14.31: bikeId из персиста — только string|null; legacy-бэкапы
+          // (v1.14.30 и старше) без поля получают null (принадлежность не
+          // доказана → heal ниже загрузит карточку активного вела с его id).
+          bikeId:
+            p.bikeId === null || typeof p.bikeId === "string"
+              ? p.bikeId
+              : null,
+        };
       },
     }
   )
 );
+
+// ==================================================================
+// v1.14.31 (Multi-Bike State Isolation, ТЗ п. A.1/A.2): heal черновика.
+// ==================================================================
+// Черновик ОБЯЗАН следовать за активным велом даже когда компонент формы
+// не смонтирован (F5 прямо на шаге 4, вторая вкладка, удаление активного
+// вела). Раньше loadBikeData вызывался только из BikeParametersForm —
+// при cross-tab смене вела вкладка с шагом 4 продолжала анализировать
+// фото нового вела с SH старого (главная причина «смешанных» отчётов).
+//
+// Правила (консервативные):
+//  • id совпадает → no-op (несохранённые правки черновика не трогаем);
+//  • id чужой/не доказан, активный вел известен → ПОЛНАЯ замена из
+//    карточки, найденной СТРОГО по id (без fallback bikes[0] — иначе
+//    можно приписать черновику чужой id);
+//  • активного вела нет → сброс ТОЛЬКО если черновик claim'ит какой-то
+//    id (осиротевший); legacy-черновик без bikeId не трогаем.
+if (typeof window !== "undefined") {
+  const healDraftOwnership = () => {
+    try {
+      const activeId = getActiveBikeId();
+      const s = useBikeStore.getState();
+      if (s.bikeId === activeId) return; // владение доказано (включ. оба null)
+      if (!activeId) {
+        if (s.bikeId !== null) s.resetDraftState();
+        return;
+      }
+      const card = getBikes().find((b) => b.id === activeId) ?? null;
+      if (card) s.loadBikeData(card.measurements, card.id);
+      else s.resetDraftState();
+    } catch {
+      /* localStorage недоступен — черновик остаётся как есть */
+    }
+  };
+
+  // 1. Мгновенный heal при загрузке модуля (persist localStorage синхронный —
+  //    к этому моменту черновик уже ре-гидрирован).
+  healDraftOwnership();
+
+  // 2. Same-tab смена вела (setActiveBike/createBike/deleteBike).
+  window.addEventListener(ACTIVE_BIKE_CHANGED_EVENT, healDraftOwnership);
+
+  // 3. Cross-tab: только реальная смена ключа активного вела — autosave
+  //    соседней вкладки (bikefit-storage) heal не запускает.
+  window.addEventListener("storage", (e) => {
+    if (e.key === null || e.key === ACTIVE_BIKE_KEY) healDraftOwnership();
+  });
+}

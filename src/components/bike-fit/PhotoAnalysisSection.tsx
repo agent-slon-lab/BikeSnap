@@ -80,6 +80,9 @@ const ANALYZERS: Record<
 
 export function PhotoAnalysisSection() {
   const { bikeType, body, bike, goal } = useBikeStore();
+  // v1.14.31 (ТЗ п. A.1): proof of ownership — черновик обязан доказать, что
+  // SH принадлежит активному велу, иначе LeMond-контекст запрещён.
+  const bikeId = useBikeStore((s) => s.bikeId);
   // Телефон набок: фото слева, рекомендации/метрики справа (две колонки)
   const phoneLandscape = useMediaFlag(PHONE_LANDSCAPE_QUERY);
 
@@ -161,12 +164,16 @@ export function PhotoAnalysisSection() {
   const sideAnalysis = useMemo(() => {
     const raw = views.side.analysis as BikeFitAnalysis | null;
     if (!raw) return null;
+    // v1.14.31 (ТЗ п. A.1 «if (calibration.bikeId !== currentBike.id) return»):
+    // чужая/недоказанная калибровка SH (Bike_A против активного Bike_B) в
+    // LeMond-сравнение не попадает — анализ возвращается без SH-контекста.
     return applySaddleHeightContext(
       applyCrossMetricLogic(raw),
       bike.saddleHeight ?? null,
-      calc?.recommendedSaddleHeight ?? null
+      calc?.recommendedSaddleHeight ?? null,
+      { calibBikeId: bikeId, currentBikeId: activeBikeId }
     );
-  }, [views.side.analysis, bike.saddleHeight, calc]);
+  }, [views.side.analysis, bike.saddleHeight, calc, bikeId, activeBikeId]);
   const backAnalysis = views.back.analysis as BackViewAnalysis | null;
   const frontAnalysis = views.front.analysis as FrontViewAnalysis | null;
 

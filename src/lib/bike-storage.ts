@@ -65,7 +65,12 @@ export interface BikeRecord {
 const RIDERS_KEY = "bikefit-riders";
 const BIKES_KEY = "bikefit-bikes";
 const ACTIVE_RIDER_KEY = "bikefit-active-rider";
-const ACTIVE_BIKE_KEY = "bikefit-active-bike";
+/**
+ * v1.14.31: экспортирован для bike-store — подписка на cross-tab «storage»
+ * фильтруется по этому ключу, чтобы heal черновика запускался ТОЛЬКО при
+ * реальной смене активного вела (а не на каждый autosave из другой вкладки).
+ */
+export const ACTIVE_BIKE_KEY = "bikefit-active-bike";
 
 /**
  * v1.14.30 (Stale State): событие «активный велик сменился».

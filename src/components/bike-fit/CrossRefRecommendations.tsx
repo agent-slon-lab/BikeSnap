@@ -21,6 +21,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useBikeStore } from "@/lib/bike-store";
+import { useActiveBikeId } from "@/hooks/use-active-bike-id";
 import { calculateAll } from "@/lib/bike-calculations";
 import { generateCrossReferences, type CrossReference } from "@/lib/bike-cross-ref";
 import type { BikeFitAnalysis } from "@/lib/bike-fit";
@@ -55,6 +56,10 @@ const PRIORITY_STYLES = {
 
 export function CrossRefRecommendations({ sideAnalysis }: CrossRefRecommendationsProps) {
   const { bike, body, bikeType, goal, complaints } = useBikeStore();
+  // v1.14.31 (ТЗ п. A.1): proof of ownership — SH-секции строятся только
+  // когда калибровка доказуемо принадлежит активному велу.
+  const bikeId = useBikeStore((s) => s.bikeId);
+  const activeBikeId = useActiveBikeId();
 
   const crossRefs = useMemo(() => {
     if (!sideAnalysis || !bikeType || !goal) return null;
@@ -67,10 +72,11 @@ export function CrossRefRecommendations({ sideAnalysis }: CrossRefRecommendation
       calc,
       sideAnalysis,
       complaints,
+      { calibBikeId: bikeId, currentBikeId: activeBikeId },
     );
 
     return result;
-  }, [bike, body, bikeType, goal, complaints, sideAnalysis]);
+  }, [bike, body, bikeType, goal, complaints, sideAnalysis, bikeId, activeBikeId]);
 
   if (!crossRefs || crossRefs.crossReferences.length === 0) return null;
 

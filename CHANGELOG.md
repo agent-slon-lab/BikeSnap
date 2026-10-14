@@ -7,6 +7,52 @@
 
 ---
 
+## [1.14.31] — 2026-10-14 — Multi-Bike State Isolation: жёсткая привязка калибровки к bikeId
+
+### Контекст
+Продолжение фиксации «смешанных отчётов» (v1.14.30 закрыла 3 пути протечки,
+но не выполняла пункт A.1 ТЗ буквально): «В объекте калибровки обязательно
+передавать bikeId. Перед расчётом разницы по LeMond проверять совпадение:
+`if (calibration.bikeId !== currentBike.id) return;`». До этой версии SH в
+черновике был «голым» числом без proof of ownership — анализ не мог ДОКАЗАТЬ,
+что калибровка принадлежит анализируемому велу, и при race-условиях (F5
+прямо на шаге 4, cross-tab смена вела, удаление активного) чужая SH=800 всё
+ещё могла попасть в LeMond-сравнение отчёта Bike_B.
+
+### Изменения
+- **`bike-store.ts`: `bikeId` в черновике** — proof of ownership; ставится
+  ТОЛЬКО через `loadBikeData(m, bikeId)`; `resetDraftState()`/`reset()`
+  стирают; `setBike`-патчи формы не трогают; персистится с санитизацией
+  (legacy-бэкапы без поля → null = принадлежность не доказана).
+- **`bike-store.ts`: heal-подписка** — черновик следует за активным велом
+  при смене (same-tab событие + cross-tab storage, фильтр по ключу
+  bikefit-active-bike), включая мгновенный heal при загрузке модуля. Поиск
+  карточки СТРОГО по id — без fallback `bikes[0]` из getActiveBike().
+- **`bike-fit.ts`: `applySaddleHeightContext(..., ownership?)`** — гвард
+  в точке расчёта: несовпадение/недоказанность → LeMond-контекст запрещён,
+  анализ возвращается без SH-текстов (буквально `if (...) return` из ТЗ).
+- **`bike-cross-ref.ts`: `generateCrossReferences(..., ownership?)`** — при
+  чужой калибровке запрещены ВСЕ SH-секции: дельта LeMond, SH↔колено и
+  микро-совет по голеностопу («седло слишком высоко» больше не строится
+  на SH другого вела).
+- **`PhotoAnalysisSection` / `CrossRefRecommendations`** — передают
+  ownership `{calibBikeId: bikeId черновика, currentBikeId: activeBikeId}`
+  в оба расчёта.
+- **`BikeParametersForm`** — bikeId карточки передаётся во все 4 точки
+  loadBikeData (reload / create / select / delete).
+- **`poseMetricsEngine.ts`** — `CalibrationOwnership` + `isCalibrationOwnershipValid()`
+  (единый источник семантики: строгое совпадение ненулевых id).
+
+### Тесты
+- `scripts/test-calib-ownership-v1431.ts` — 30 OK / 0 FAIL: гвард в точке
+  расчёта ({A,B} → запрещено, {B,B} → как раньше, {null,B} → запрещено),
+  отсутствие saddle-карточек при чужой калибровке, bikeId-семантика стора,
+  E2E сценария баг-репорта (SH=800 от A не даёт «Опустите на 41 мм»).
+- Регрессы: test-stale-state-v1430 42 OK; verify-v1429 46 OK;
+  test-crossref-v1428 OK; test-pose-norms 27 OK; test-bike-photo-persist 10 OK.
+
+---
+
 ## [1.14.30] — 2026-10-14 — Фикс протечки состояния между велосипедами (Stale State)
 
 ### Контекст

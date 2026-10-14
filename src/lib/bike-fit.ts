@@ -14,7 +14,13 @@
  * extractPoseKeypoints() — сырые 2D-точки суставов для телеметрии отчёта.
  */
 
-import { JOINT_NORMS, KNEE_FLEXION_NORM, kneeFlexion } from "./poseMetricsEngine";
+import {
+  JOINT_NORMS,
+  KNEE_FLEXION_NORM,
+  kneeFlexion,
+  isCalibrationOwnershipValid,
+  type CalibrationOwnership,
+} from "./poseMetricsEngine";
 
 export interface Point {
   x: number; // нормализованная координата 0..1
@@ -506,12 +512,21 @@ export function applyCrossMetricLogic(analysis: BikeFitAnalysis): BikeFitAnalysi
  * прямой, но SH ниже целевой — или наоборот), честно сообщаем о противоречии
  * вместо двух несовместимых советов. Возвращает НОВЫЙ объект анализа
  * (аргумент не мутирует); при согласованности данных — тот же объект.
+ *
+ * v1.14.31 (Multi-Bike State Isolation, ТЗ п. A.1): `ownership` — proof of
+ * ownership калибровки. При явной передаче и НЕСОВПАДЕНИИ
+ * `calibBikeId !== currentBikeId` (или неопределённой принадлежности)
+ * LeMond-сравнение ЗАПРЕЩЕНО — чужое SH=800 от Bike_A не может участвовать
+ * в отчёте Bike_B; анализ возвращается без SH-контекста.
  */
 export function applySaddleHeightContext(
   analysis: BikeFitAnalysis,
   currentSH: number | null,
-  targetSH: number | null
+  targetSH: number | null,
+  ownership?: CalibrationOwnership
 ): BikeFitAnalysis {
+  // ТЗ п. A.1: `if (calibration.bikeId !== currentBike.id) return;`
+  if (!isCalibrationOwnershipValid(ownership)) return analysis;
   if (!currentSH || !targetSH) return analysis;
   const knee = analysis.kneeAngle;
   const shDelta = currentSH - targetSH;

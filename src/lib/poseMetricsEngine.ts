@@ -108,6 +108,45 @@ export function kneeFlexion(anatomicalKneeAngle: number): number {
 export const TORSO_UPRIGHT_THRESHOLD_DEG = 50;
 
 /**
+ * v1.14.31 (Multi-Bike State Isolation, ТЗ п. A.1 «Жёсткая привязка
+ * калибровки»): proof of ownership калибровки.
+ *
+ * Любое сравнение «текущая SH ↔ целевая по LeMond» обязано проверить, что
+ * калибровка принадлежит ИМЕННО тому велику, для которого строится отчёт.
+ * Если `calibBikeId !== currentBikeId` (обе известны) — калибровка
+ * ЗАПРЕЩЕНА в расчёте: SH=800 от Bike_A не имеет права участвовать в
+ * LeMond-разнице отчёта Bike_B (корень «смешанных» отчётов из баг-репорта).
+ *
+ * calibBikeId берётся из черновика стора (bike-store.bikeId, устанавливается
+ * только loadBikeData(m, bikeId)); currentBikeId — из useActiveBikeId().
+ * null = принадлежность не доказана → калибровка тоже запрещена (строгий
+ * режим включается только при явной передаче ownership в функцию расчёта).
+ */
+export interface CalibrationOwnership {
+  /** bikeId, которому принадлежит калибровка (SH) — из источника значений */
+  calibBikeId: string | null;
+  /** bikeId велосипеда, для которого строится отчёт — активный вел */
+  currentBikeId: string | null;
+}
+
+/**
+ * Валидация принадлежности калибровки (ТЗ п. A.1):
+ * `if (calibration.bikeId !== currentBike.id) return;`
+ * ownership === undefined → вызыватель не запросил проверку (старые вызовы
+ * без телеметрии ведут себя как раньше — обратная совместимость тестов).
+ */
+export function isCalibrationOwnershipValid(
+  ownership?: CalibrationOwnership
+): boolean {
+  if (!ownership) return true;
+  return (
+    ownership.calibBikeId != null &&
+    ownership.currentBikeId != null &&
+    ownership.calibBikeId === ownership.currentBikeId
+  );
+}
+
+/**
  * Кросс-валидация «жалобы vs поза»: если райдер жалуется на перегруз рук,
  * но спина почти вертикальна (> 50°) — «низкий руль» под вопросом; частая
  * причина — седло, заваленное вперёд, или слишком длинный вынос, из-за
