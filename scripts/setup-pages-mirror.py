@@ -98,6 +98,8 @@ def generate_keypair() -> tuple[str, str]:
     if os.path.exists(KEY_PATH):
         print(f"[key] используем существующий {KEY_PATH}")
         priv_pem = open(KEY_PATH, "rb").read()
+        # PKCS8: эта сборка cryptography не парсит OpenSSH-PEM (bcrypt absent),
+        # а PKCS8 понимают и ssh, и paramiko
         key = serialization.load_pem_private_key(priv_pem, password=None)
         pub = key.public_key().public_bytes(
             serialization.Encoding.OpenSSH,
@@ -106,9 +108,11 @@ def generate_keypair() -> tuple[str, str]:
         return priv_pem.decode(), pub
 
     key = Ed25519PrivateKey.generate()
+    # PKCS8 (BEGIN PRIVATE KEY): ssh/paramiko принимают; OpenSSH-PEM в этой
+    # сборке cryptography не проходит roundtrip (см. выше)
     priv_pem = key.private_bytes(
         serialization.Encoding.PEM,
-        serialization.PrivateFormat.OpenSSH,
+        serialization.PrivateFormat.PKCS8,
         serialization.NoEncryption(),
     )
     pub = key.public_key().public_bytes(
@@ -135,8 +139,9 @@ def put_secret(gh: GH, name: str, value: str) -> bool:
         print("  ! не получили public-key репо для секретов")
         return False
     key_id = pk["key_id"]
+    # sealed box: шифруем значением секрета публичным ключом репо (base64→raw)
     sealed = nacl.public.SealedBox(
-        nacl.public.PublicKey(pk["key"].encode("utf-8"))
+        nacl.public.PublicKey(base64.b64decode(pk["key"]))
     ).encrypt(value.encode("utf-8"))
     st, _ = gh.req(
         "PUT",
@@ -189,7 +194,8 @@ def main() -> int:
 
     # 4. Deploy key (WRITE) на Pages-репо
     st, keys = gh.req("GET", f"/repos/{PAGES_REPO}/keys")
-    have = any(k.get("title") == "bikesnap-pages-mirror" for k in keys.get("keys", [])) if st == 200 else False
+    existing = keys if isinstance(keys, list) else keys.get("keys", [])
+    have = any(k.get("title") == "bikesnap-pages-mirror" for k in existing) if st == 200 else False
     if have:
         print("[deploy-key] уже добавлен")
     else:
