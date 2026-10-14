@@ -268,3 +268,69 @@ Stage Summary:
 - Прод = v1.14.28. Взаимоисключающие советы устранены на двух уровнях (движок комплексных карточек + тексты метрик), противоречия данных теперь честно помечаются бейджем «⚠️ Противоречие данных» с разбором вероятных причин.
 - Подписи оверлея фото приведены в соответствие сегментам скелета; KOPS показывается в своей единице, направление сдвига седла — по знаку.
 - Следующая версия: v1.14.29.
+
+---
+Task ID: 33
+Agent: main (Super Z)
+Task: Спека «Refactoring Spec & Enhanced Debug Telemetry (Issue #6 Fixes)» —
+(А) модуль позы: нормы 180°, тексты наклона корпуса без инверсии, иерархия
+советов по седлу с порогом 15 мм; (Б) телеметрия отчёта отладки: сырые
+2D-точки суставов, флаги калибровки масштаба, датчики устройства, версии.
+
+Work Log:
+- Аудит: нормы 180° уже в JOINT_NORMS с v1.14.22 (knee 140–150 / hip 95–105 /
+  torso 35–45 / ankle 90–110) — зафиксировал тестом; реальные тексты живут в
+  bike-fit.ts analyzeBikeFit (analyzeRiderPose — эталон), микро-совет «2–3 мм»
+  — bike-cross-ref.ts секция 7, порог склейки был 20 мм.
+- poseMetricsEngine.ts: POSE_ENGINE_VERSION="pose-engine@2.1.0",
+  SADDLE_HIERARCHY_THRESHOLD_MM=15 (единый источник); тексты корпуса
+  дословно по ТЗ со значением угла: >45° «слишком ВЕРТИКАЛЬНО (комфортная
+  посадка) — N°. Для аэродинамики опустите вынос», <35° «слишком
+  ГОРИЗОНТАЛЬНО (агрессивная посадка) — N°. Для снятия нагрузки с поясницы
+  поднимите вынос»; колено: «(176.3° при норме 140–150°)» прямо в тексте.
+- bike-fit.ts: те же тексты в боевом analyzeBikeFit; новый
+  extractPoseKeypoints(landmarks, side?) → {shoulder,hip,knee,ankle,toe}
+  (фолбэк лево→право, null если ни одна сторона не видна).
+- bike-cross-ref.ts: порог 20→15 через импорт константы; новая карточка 1b —
+  дельта >15 мм при ОПТИМАЛЬНОМ колене → крупная правка «Опустите/Поднимите
+  седло на N мм» с conflict:true (честно: проверь кадр НМТ и inseam),
+  микро-советы подавлены (lemondDominates).
+- bike-storage.ts: BikeRecord.photoCalib {scaleMmPerPx, scaleSource,
+  frameTiltDeg} + updateBikePhotoScale(id, info|null).
+- BikePhotoCalibrator.tsx: проп onScaleInfo, вызовы во всех 6 точках
+  (успех движка / замена фото / очистка / старт разметки / сбой ядра /
+  смена велика) через onScaleInfoRef (без ломки deps).
+- BikeParametersForm.tsx: onScaleInfo → updateBikePhotoScale.
+- fit-report.ts: FitReportTelemetry (appVersion, engineVersion, userAgent,
+  viewportSize, screen, language, device.deviceRoll/devicePitch/
+  isOrientationSupported, calibration.scaleSource/scaleKind/scaleMmPerPx/
+  frameTiltDeg, poseKeypoints per view: normalized 0..1 + pixels по размеру
+  приложенного фото + photoSize); BikeCalibrationInput += scale?;
+  normalizeScaleKind() → USER_SADDLE_HEIGHT / USER_OVERRIDE / CONSENSUS /
+  FALLBACK_WB / UNKNOWN; buildFitReport(views, context, calibration, device?).
+- DebugReportCard.tsx: useDeviceOrientation(true) — живой гироскоп в момент
+  отправки; scale из activeBike.photoCalib в calibration-вход.
+- report-upload.ts: телеметрия в теле issue (масштаб+kind+мм/px+наклон,
+  датчики, наличие точек суставов по ракурсам, движок/среда).
+- Тесты: scripts/verify-v1429.ts — 46 OK / 0 FAIL (нормы; тексты корпуса и
+  колена в эталоне и в боевом анализаторе; иерархия 79/16/14 мм; регресс
+  противоречия v1.14.28 — ровно одна priority-1 карточка по седлу;
+  extractPoseKeypoints; normalizeScaleKind). Регрессы: test-crossref-v1428.ts
+  — все OK; test-pose-norms.ts — 27 OK (ассерт «низко»→«ГОРИЗОНТАЛЬНО» по ТЗ).
+- tsc --noEmit чисто (кроме несборочного examples/), eslint по изменённым
+  файлам чист (13 старых react-hooks/refs в нетронутом InteractivePhoto.tsx),
+  next build OK; смоук: / → 200, POST /api/report-upload без meta → 400
+  (валидация жива); в бандле v1.14.29 + pose-engine@2.1.0.
+- Bump v1.14.29: app-version.ts, package.json, sw.js (CACHE bikesnap-v1.14.29),
+  whats-new.ts, CHANGELOG.md. Пуш: pull --rebase (remote ушёл вперёд на
+  авто-отчёты user-reports) → коммит 3baec56.
+- Прод-проверка: bike-snap.vercel.app → HTTP 200; чанк
+  4883548f73d676c5.js содержит v1.14.29 и pose-engine@2.1.0 — деплой живой.
+
+Stage Summary:
+- Прод = v1.14.29. Спека Issue #6 закрыта полностью: (А) тексты корпуса/колена
+  дословно по ТЗ в обоих слоях, порог иерархии 15 мм с крупной карточкой
+  правки и подавлением микро-советов; (Б) отчёт отладки несёт сырые точки
+  суставов (норм.+пикс.), флаги калибровки масштаба, датчики и версии —
+  и в JSON, и в теле issue.
+- Следующая версия: v1.14.30.
