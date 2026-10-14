@@ -12,6 +12,22 @@
  * (poseMetricsEngine): >45° — «слишком ВЕРТИКАЛЬНО (комфортная посадка)»,
  * <35° — «слишком ГОРИЗОНТАЛЬНО», значение угла в тексте. Добавлена
  * extractPoseKeypoints() — сырые 2D-точки суставов для телеметрии отчёта.
+ *
+ * v1.14.32 (Bugfix Spec: MediaPipe Occlusion, Side Selection & Ankle
+ * Alignment):
+ *  - getCleanRiderKeypoints() — строгий выбор БЛИЖНЕЙ к камере ноги по
+ *    средней visibility (Hip/Knee/Ankle): для анализа берётся СТРОГО одна
+ *    сторона, перекрёстные векторы LEFT_* ↔ RIGHT_* запрещены;
+ *  - санитарная проверка стопы: если ANKLE/TOE ненадёжны (visibility <
+ *    FOOT_MIN_VISIBILITY = 0.65) или лодыжка НИЖЕ носка (фантомные точки
+ *    от сланцев/пятки) — расчёт стопы сбрасывается, в UI уходит
+ *    предупреждение «Не удалось четко определить стопу…»; при доступной
+ *    оси педали используется упрощённый вектор Колено → Лодыжка → Ось
+ *    педали вместо анатомической точки Toe;
+ *  - жёсткий запрет перекрёстных линий скелета (isCrossLegConnection),
+ *    на боковом кадре рисуется нога ТОЛЬКО выбранной стороны;
+ *  - предупреждения кадра (warnings) в BikeFitAnalysis + подсказка про
+ *    обувь в инструкциях съёмки (FOOTWEAR_WARNING).
  */
 
 import {
@@ -94,6 +110,144 @@ export function extractPoseKeypoints(
     if (complete(p)) return p;
   }
   return null;
+}
+
+// ==================================================================
+// v1.14.32 — SIDE SELECTION, OCCLUSION FILTERS & ANKLE SANITY
+// ==================================================================
+
+/** Порог надёжности точек стопы (ТЗ п. B.1): ниже — стопа не считается */
+export const FOOT_MIN_VISIBILITY = 0.65;
+
+/** Порог надёжности опорных точек ноги (ТЗ п. A, sanity check) */
+export const LEG_MIN_VISIBILITY = 0.5;
+
+/** Предупреждение UI при неудачном распознавании стопы (ТЗ п. B.2) */
+export const FOOT_SANITY_WARNING =
+  "Не удалось четко определить стопу. Проверьте контрастность кадра или смените обувь";
+
+/** Подсказка про обувь для инструкций съёмки (ТЗ п. C, фильтр кадра) */
+export const FOOTWEAR_WARNING =
+  "Для точного анализа надевайте велотуфли или кроссовки. Шлёпанцы и широкая одежда могут исказить определение суставов.";
+
+/** Суставы ног по сторонам (бедро + цепочка ниже) — для side-фильтра скелета */
+const LEG_JOINTS = {
+  left: new Set<number>([23, 25, 27, 29, 31]), // Hip, Knee, Ankle, Heel, FootIndex
+  right: new Set<number>([24, 26, 28, 30, 32]),
+} as const;
+
+/** Колено/лодыжка/пятка/носок — именно они «переползают» на чужую ногу */
+const LOWER_LEG_JOINTS = new Set<number>([25, 26, 27, 28, 29, 30, 31, 32]);
+
+/**
+ * Жёсткий запрет «перекрёстных» векторов (ТЗ v1.14.32, п. A.2).
+ *
+ * Линия между РАЗНЫМИ сторонами запрещена, если хотя бы один её конец —
+ * колено/лодыжка/пятка/носок (именно эти точки фантомят на чужую ногу).
+ * Линия таза [23,24] и линии плеч [11,12] — анатомически легитимные
+ * поперечные линии корпуса и НЕ считаются перекрёстными.
+ *
+ * Используется при отрисовке скелета как страховка: даже если
+ * в POSE_CONNECTIONS когда-нибудь появится перекрёстная линия, она не
+ * будет нарисована.
+ */
+export function isCrossLegConnection(a: number, b: number): boolean {
+  const sideOf = (i: number): "left" | "right" | null =>
+    LEG_JOINTS.left.has(i)
+      ? "left"
+      : LEG_JOINTS.right.has(i)
+        ? "right"
+        : null;
+  const sa = sideOf(a);
+  const sb = sideOf(b);
+  if (!sa || !sb || sa === sb) return false;
+  return LOWER_LEG_JOINTS.has(a) || LOWER_LEG_JOINTS.has(b);
+}
+
+/**
+ * Сторона ноги, к которой относится линия скелета
+ * (null — линия не принадлежит ноге: корпус, руки, таз/плечи).
+ */
+export function legConnectionSide(a: number, b: number): "left" | "right" | null {
+  if (LEG_JOINTS.left.has(a) && LEG_JOINTS.left.has(b)) return "left";
+  if (LEG_JOINTS.right.has(a) && LEG_JOINTS.right.has(b)) return "right";
+  return null;
+}
+
+/** Результат строгого выбора ближней ноги (v1.14.32, ТЗ п. A) */
+export interface CleanRiderKeypointsResult {
+  /** Сторона с максимальной средней видимостью (ближняя к камере) */
+  side: "left" | "right";
+  /** Пять суставов выбранной стороны (строго один префикс) или null */
+  keypoints: PoseKeypoints | null;
+  /** Человекочитаемая ошибка для UI, если надёжность недостаточна */
+  error: string | null;
+}
+
+/**
+ * Строгий выбор ближней к камере ноги (ТЗ v1.14.32, п. A.1).
+ *
+ * На боковом снимке дальняя нога перекрыта рамой/шатунами/ближней ногой;
+ * MediaPipe генерирует для неё фантомные точки с низкой visibility и
+ * «паутину» перекрёстных линий. Правило:
+ *  1. Средняя visibility по (Hip, Knee, Ankle) отдельно для LEFT и RIGHT;
+ *  2. Для анализа и скелета берётся СТРОГО одна сторона — с максимумом;
+ *  3. Если у выбранной стороны hip/knee/ankle ненадёжны (< 0.5) — анализ
+ *     невозможен: возвращаем ошибку для UI, keypoints = null.
+ */
+export function getCleanRiderKeypoints(
+  landmarks: (Point | undefined)[] | null | undefined
+): CleanRiderKeypointsResult {
+  const fail = (error: string): CleanRiderKeypointsResult => ({
+    side: "right",
+    keypoints: null,
+    error,
+  });
+  if (!landmarks || landmarks.length === 0) {
+    return fail("Поза не распознана — ключевые точки отсутствуют.");
+  }
+
+  // 1. Средняя видимость стороны (ТЗ: (hip + knee + ankle) / 3)
+  const sideScore = (s: "left" | "right"): number => {
+    const ids =
+      s === "left"
+        ? [POSE_LANDMARKS.LEFT_HIP, POSE_LANDMARKS.LEFT_KNEE, POSE_LANDMARKS.LEFT_ANKLE]
+        : [POSE_LANDMARKS.RIGHT_HIP, POSE_LANDMARKS.RIGHT_KNEE, POSE_LANDMARKS.RIGHT_ANKLE];
+    return (
+      ids.reduce((sum, i) => sum + (landmarks[i]?.visibility ?? 0), 0) / ids.length
+    );
+  };
+  // 2. Строго одна сторона — с максимальной средней видимостью
+  const side: "left" | "right" =
+    sideScore("left") >= sideScore("right") ? "left" : "right";
+  const L = side === "left";
+  const hip = landmarks[L ? POSE_LANDMARKS.LEFT_HIP : POSE_LANDMARKS.RIGHT_HIP];
+  const knee = landmarks[L ? POSE_LANDMARKS.LEFT_KNEE : POSE_LANDMARKS.RIGHT_KNEE];
+  const ankle = landmarks[L ? POSE_LANDMARKS.LEFT_ANKLE : POSE_LANDMARKS.RIGHT_ANKLE];
+  const toe = landmarks[L ? POSE_LANDMARKS.LEFT_FOOT_INDEX : POSE_LANDMARKS.RIGHT_FOOT_INDEX];
+  const shoulder = landmarks[L ? POSE_LANDMARKS.LEFT_SHOULDER : POSE_LANDMARKS.RIGHT_SHOULDER];
+
+  // 3. Санитарная проверка надёжности выбранной стороны (ТЗ п. A.1, к.3)
+  if (
+    (hip?.visibility ?? 0) < LEG_MIN_VISIBILITY ||
+    (knee?.visibility ?? 0) < LEG_MIN_VISIBILITY ||
+    (ankle?.visibility ?? 0) < LEG_MIN_VISIBILITY
+  ) {
+    return fail(
+      "Низкая точность распознавания ноги. Убедитесь, что ближняя нога не перекрыта рамой, и освещение достаточное."
+    );
+  }
+  if (!hip || !knee || !ankle || !shoulder) {
+    return fail("Ключевые суставы не распознаны — попробуйте более полный кадр.");
+  }
+
+  return {
+    side,
+    // toe может отсутствовать (перекрыт педалью) — подставляем лодыжку:
+    // анализатор стопы всё равно проверяет visibility перед расчётом
+    keypoints: { shoulder, hip, knee, ankle, toe: toe ?? ankle },
+    error: null,
+  };
 }
 
 /**
@@ -267,6 +421,14 @@ export interface AnalyzeFitOptions {
   imgWidthPx?: number;
   /** Масштаб мм/px калибровки этого же кадра */
   mmPerPx?: number;
+  /**
+   * Ось педали (Bottom Bracket) из геометрической разметки велосипеда —
+   * нормализованные координаты 0..1 ЭТОГО ЖЕ кадра (v1.14.32, ТЗ п. B.1).
+   * Если точка Toe ненадёжна (сланцы/перекрытие педалью), угол голеностопа
+   * строится по упрощённому вектору Колено → Лодыжка → Ось педали вместо
+   * анатомической точки MediaPipe.
+   */
+  pedalAxis?: Point;
 }
 
 /**
@@ -284,24 +446,30 @@ export interface BikeFitAnalysis {
   kops: AngleResult;
   // сторона тела, выбранная для анализа (левая/правая)
   side: "left" | "right";
+  /**
+   * Предупреждения о качестве кадра (v1.14.32, ТЗ п. B.2): неудачное
+   * распознавание стопы и т.п. Показываются в UI отдельным блоком.
+   * Опционально: анализы, сохранённые до v1.14.32 (localStorage), поля
+   * не содержат.
+   */
+  warnings?: string[];
 }
 
 export function analyzeBikeFit(
   landmarks: Landmarks,
   opts?: AnalyzeFitOptions
 ): BikeFitAnalysis | null {
-  // Определяем, какая сторона тела лучше видна
-  // На боковой съёмке одна сторона ближе к камере и лучше определяется
-  const leftVis =
-    (landmarks[POSE_LANDMARKS.LEFT_HIP]?.visibility ?? 0) +
-    (landmarks[POSE_LANDMARKS.LEFT_KNEE]?.visibility ?? 0) +
-    (landmarks[POSE_LANDMARKS.LEFT_ANKLE]?.visibility ?? 0);
-  const rightVis =
-    (landmarks[POSE_LANDMARKS.RIGHT_HIP]?.visibility ?? 0) +
-    (landmarks[POSE_LANDMARKS.RIGHT_KNEE]?.visibility ?? 0) +
-    (landmarks[POSE_LANDMARKS.RIGHT_ANKLE]?.visibility ?? 0);
+  // v1.14.32 (ТЗ п. A): ЕДИНЫЙ выбор ближней ноги — средняя visibility по
+  // (Hip, Knee, Ankle), строго одна сторона, санитарная проверка надёжности.
+  // Раньше сторона выбиралась по сумме visibility и без проверки порога —
+  // фантомные точки дальней ноги могли попасть в расчёт углов.
+  const clean = getCleanRiderKeypoints(
+    Array.from({ length: 33 }, (_, i) => landmarks[i])
+  );
+  if (!clean.keypoints) return null; // специфичный текст ошибки показывает UI до вызова (analyzePhoto)
+  const warnings: string[] = [];
 
-  const side: "left" | "right" = leftVis >= rightVis ? "left" : "right";
+  const side: "left" | "right" = clean.side;
 
   const S = side === "left" ? POSE_LANDMARKS.LEFT_SHOULDER : POSE_LANDMARKS.RIGHT_SHOULDER;
   const E = side === "left" ? POSE_LANDMARKS.LEFT_ELBOW : POSE_LANDMARKS.RIGHT_ELBOW;
@@ -390,23 +558,72 @@ export function analyzeBikeFit(
       : `Спина наклонена слишком ГОРИЗОНТАЛЬНО (агрессивная посадка) — ${backAngleValue.toFixed(1)}°. Для снятия нагрузки с поясницы поднимите вынос.`
   );
 
-  // 4. Угол голеностопа (knee-ankle-toe, при недоступности носка — heel).
-  //    Норма 90–110°. >110° — носок опущен (седло высоко), <90° — пятка провалена.
-  const ankleAngleValue = isVisible(toe)
-    ? angleBetween(knee, ankle, toe)
-    : isVisible(heel)
-      ? angleBetween(knee, ankle, heel)
-      : 90;
+  // 4. Угол голеностопа (knee-ankle-toe).
+  //    Норма 90–110°. >110° — носок опущен (седло высоко), <90° — пятка
+  //    провалена.
+  //
+  //    v1.14.32 (ТЗ п. B): стопа — самая ненадёжная зона MediaPipe (обувь,
+  //    перекрытие педалью/шатуном). Три уровня достоверности:
+  //      1) Toe надёжен (ankle и toe visibility ≥ 0.65) → анатомический
+  //         угол knee-ankle-toe + санитарная проверка «лодыжка ВЫШЕ носка»;
+  //      2) Toe ненадёжен, но передана ось педали (разметка велосипеда) →
+  //         упрощённый вектор Колено → Лодыжка → Ось педали (п. B.1);
+  //      3) иначе Heel (при надёжной visibility), иначе стопа НЕ
+  //         оценивается: расчёт сбрасывается на нейтральный, совет по
+  //         стопе подавляется, в UI уходит предупреждение (п. B.2).
+  const ankleVis = ankle?.visibility ?? 0;
+  const toeVis = toe?.visibility ?? 0;
+  const heelVis = heel?.visibility ?? 0;
+  const footVisOK = (v: number) => v >= FOOT_MIN_VISIBILITY;
+
+  type AnkleSource = "mediaPipe" | "pedalAxis" | "heel" | "unreliable";
+  let ankleSource: AnkleSource = "unreliable";
+  let ankleAngleValue = 90; // нейтральное значение при сбросе расчёта
+
+  if (footVisOK(ankleVis) && footVisOK(toeVis) && toe) {
+    // Санитарная проверка (п. B.2): лодыжка обязана быть ВЫШЕ носка
+    // (ankle.y < toe.y — в canvas Y растёт вниз). Нарушение = фантомные
+    // точки: пятка задрана на лодыжку, носок «уехал» на сланец и т.п.
+    if (ankle.y < toe.y) {
+      ankleSource = "mediaPipe";
+      ankleAngleValue = angleBetween(knee, ankle, toe);
+    } else {
+      warnings.push(FOOT_SANITY_WARNING);
+    }
+  } else if (opts?.pedalAxis && footVisOK(ankleVis)) {
+    // п. B.1: проекция на ось педали из геометрической разметки
+    ankleSource = "pedalAxis";
+    ankleAngleValue = angleBetween(knee, ankle, opts.pedalAxis);
+  } else if (footVisOK(ankleVis) && footVisOK(heelVis) && heel && ankle.y < heel.y) {
+    ankleSource = "heel";
+    ankleAngleValue = angleBetween(knee, ankle, heel);
+  } else {
+    warnings.push(FOOT_SANITY_WARNING);
+  }
+
   const ankleAngle = makeResult(
     ankleAngleValue,
     JOINT_NORMS.ankle.min,
     JOINT_NORMS.ankle.max,
     "Угол голеностопа",
     "Угол между голенью (колено→лодыжка) и стопой (лодыжка→носок). Норма 90–110°.",
-    ankleAngleValue > JOINT_NORMS.ankle.max
-      ? "Носок слишком опущен вниз — возможно, седло задрано слишком высоко, и вы тянетесь к педали."
-      : "Пятка сильно провалена вниз — проверьте положение шипа на велотуфлях."
+    ankleSource === "unreliable"
+      ? FOOT_SANITY_WARNING
+      : ankleSource === "pedalAxis"
+        ? ankleAngleValue > JOINT_NORMS.ankle.max
+          ? "Носок слишком опущен вниз (оценка по оси педали) — возможно, седло задрано слишком высоко, и вы тянетесь к педали."
+          : ankleAngleValue < JOINT_NORMS.ankle.min
+            ? "Пятка сильно провалена вниз (оценка по оси педали) — проверьте положение шипа на велотуфлях."
+            : "Положение стопы стабильное (оценка по оси педали — стопа распознана неуверенно)."
+        : ankleAngleValue > JOINT_NORMS.ankle.max
+          ? "Носок слишком опущен вниз — возможно, седло задрано слишком высоко, и вы тянетесь к педали."
+          : "Пятка сильно провалена вниз — проверьте положение шипа на велотуфлях."
   );
+  if (ankleSource === "unreliable") {
+    // Нейтральное значение не должно выглядеть как «зелёная норма»
+    ankleAngle.status = "warning";
+    ankleAngle.color = STATUS_COLORS.warning;
+  }
 
   // 5. Угол плеча (elbow-shoulder-hip) — без изменений по ТЗ
   const shoulderAngleValue = isVisible(elbow)
@@ -463,6 +680,7 @@ export function analyzeBikeFit(
     shoulderAngle,
     kops,
     side,
+    warnings,
   });
 }
 
@@ -1017,7 +1235,8 @@ export const VIEW_LABELS: Record<ViewType, { ru: string; short: string; emoji: s
     short: "Сбоку",
     emoji: "➡️",
     description:
-      "ФОТО С ЧЕЛОВЕКОМ НА ВЕЛОСИПЕДЕ. Снимайте сбоку, перпендикулярно велосипеду, на уровне седла. Велосипедист должен сидеть в рабочей посадке. Педаль в НМТ (нижняя точка). Видны: плечо, бедро, колено, голеностоп, стопа на педали.",
+      "ФОТО С ЧЕЛОВЕКОМ НА ВЕЛОСИПЕДЕ. Снимайте сбоку, перпендикулярно велосипеду, на уровне седла. Велосипедист должен сидеть в рабочей посадке. Педаль в НМТ (нижняя точка). Видны: плечо, бедро, колено, голеностоп, стопа на педали. ⚠️ " +
+      FOOTWEAR_WARNING,
   },
   back: {
     ru: "Вид сзади",

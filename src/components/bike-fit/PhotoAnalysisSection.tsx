@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useLayoutEffect, useMemo, useState } from "react";
-import { Camera, AlertCircle, Loader2, Sparkles, Image as ImageIcon } from "lucide-react";
+import { Camera, AlertCircle, AlertTriangle, Loader2, Sparkles, Image as ImageIcon } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -30,7 +30,9 @@ import {
   analyzeFrontView,
   applyCrossMetricLogic,
   applySaddleHeightContext,
+  getCleanRiderKeypoints,
   VIEW_LABELS,
+  FOOTWEAR_WARNING,
   POSE_LANDMARKS,
   type Point,
   type ViewType,
@@ -206,6 +208,18 @@ export function PhotoAnalysisSection() {
           return;
         }
         const lms = result.landmarks[0] as Point[];
+        // v1.14.32 (ТЗ п. A): ранняя проверка надёжности ближней ноги —
+        // если видимость hip/knee/ankle ниже порога, показываем
+        // СПЕЦИФИЧНУЮ ошибку распознавания вместо общей «точки не
+        // определены». Анализ по фантомным точкам не запускается.
+        if (view === "side") {
+          const clean = getCleanRiderKeypoints(lms);
+          if (clean.error || !clean.keypoints) {
+            setUiState(view, { analyzing: false, error: clean.error });
+            setViewResultStore(view, lms, null);
+            return;
+          }
+        }
         const analysis = ANALYZERS[view](lms);
         if (!analysis) {
           setUiState(view, {
@@ -381,6 +395,9 @@ export function PhotoAnalysisSection() {
               <p className="text-xs text-muted-foreground">
                 ⚠️ Все 3 фото — <b>С ЧЕЛОВЕКОМ НА ВЕЛОСИПЕДЕ</b>, в рабочей посадке. Это не фото велосипеда!
               </p>
+              <p className="text-xs font-medium text-amber-600 dark:text-amber-400">
+                ⚠️ {FOOTWEAR_WARNING}
+              </p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-2">
                 {(Object.keys(VIEW_LABELS) as ViewType[]).map((v) => (
                   <div key={v} className="rounded-md bg-background p-2 border">
@@ -452,6 +469,7 @@ export function PhotoAnalysisSection() {
             view="side"
             state={sideState}
             analysis={sideAnalysis}
+            activeSide={sideAnalysis?.side ?? null}
             onPhotoSelected={handlePhotoSelected}
             onClear={handleClear}
             onAnalyze={(img) =>
@@ -461,6 +479,23 @@ export function PhotoAnalysisSection() {
           />
           {sideAnalysis && (
             <>
+              {/* v1.14.32 (ТЗ п. B.2): предупреждения о качестве кадра —
+                  неудачное распознавание стопы и т.п. */}
+              {!!sideAnalysis.warnings?.length && (
+                <div className="flex items-start gap-2 rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50/60 dark:bg-amber-950/20 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+                  <AlertTriangle className="size-4 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="font-medium">Замечания по качеству кадра</p>
+                    <ul className="mt-1 space-y-0.5 text-xs">
+                      {sideAnalysis.warnings.map((w, i) => (
+                        <li key={i} className="list-inside list-disc">
+                          {w}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
               <Recommendations analysis={sideAnalysis} />
               <Card>
                 <CardHeader>
@@ -637,6 +672,8 @@ interface ViewSectionProps {
   view: ViewType;
   state: ViewPhotoState;
   analysis: unknown;
+  /** Ближняя сторона для фильтра скелета (только боковой вид, v1.14.32) */
+  activeSide?: "left" | "right" | null;
   onPhotoSelected: (view: ViewType, file: File, url: string, meta?: CaptureMeta) => void;
   onClear: (view: ViewType) => void;
   onAnalyze: (img: HTMLImageElement) => void;
@@ -647,6 +684,7 @@ function ViewSection({
   view,
   state,
   analysis,
+  activeSide,
   onPhotoSelected,
   onClear,
   onAnalyze,
@@ -696,6 +734,7 @@ function ViewSection({
               hasResults={!!analysis}
               landmarks={state.landmarks}
               overlayLines={overlayLines}
+              activeSide={view === "side" ? (activeSide ?? null) : null}
             />
             {state.error && (
               <div className="flex items-start gap-2 rounded-lg border border-rose-200 dark:border-rose-900 bg-rose-50/50 dark:bg-rose-950/20 px-4 py-3 text-sm text-rose-700 dark:text-rose-400">

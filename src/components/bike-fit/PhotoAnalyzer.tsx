@@ -6,6 +6,9 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   POSE_CONNECTIONS,
+  POSE_LANDMARKS,
+  isCrossLegConnection,
+  legConnectionSide,
   type Point,
   type ViewType,
 } from "@/lib/bike-fit";
@@ -25,6 +28,12 @@ interface PhotoAnalyzerProps {
     label?: string;
     dashed?: boolean;
   }>;
+  /**
+   * Ближняя к камере сторона (v1.14.32, ТЗ п. A): на боковом кадре нога
+   * скелета рисуется ТОЛЬКО этой стороны — фантомные точки дальней ноги
+   * больше не создают «паутину» линий над рамой.
+   */
+  activeSide?: "left" | "right" | null;
 }
 
 export function PhotoAnalyzer({
@@ -35,6 +44,7 @@ export function PhotoAnalyzer({
   hasResults,
   landmarks,
   overlayLines,
+  activeSide,
 }: PhotoAnalyzerProps) {
   const imgRef = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -50,6 +60,7 @@ export function PhotoAnalyzer({
             viewType={viewType}
             landmarks={landmarks}
             overlayLines={overlayLines}
+            activeSide={activeSide}
             imgRef={imgRef}
             canvasRef={canvasRef}
           />
@@ -97,6 +108,7 @@ function PhotoWithOverlay({
   viewType,
   landmarks,
   overlayLines,
+  activeSide,
   imgRef,
   canvasRef,
 }: {
@@ -104,6 +116,7 @@ function PhotoWithOverlay({
   viewType: ViewType;
   landmarks: Point[] | null;
   overlayLines?: Array<{ a: Point; b: Point; color: string; label?: string; dashed?: boolean }>;
+  activeSide?: "left" | "right" | null;
   imgRef: React.RefObject<HTMLImageElement | null>;
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
 }) {
@@ -134,6 +147,16 @@ function PhotoWithOverlay({
     ctx.lineCap = "round";
 
     for (const [a, b] of POSE_CONNECTIONS) {
+      // v1.14.32 (ТЗ п. A.2): жёсткий запрет перекрёстных линий
+      // LEFT_* ↔ RIGHT_* — страховка от «паутины» из смешанных векторов
+      if (isCrossLegConnection(a, b)) continue;
+      // v1.14.32 (ТЗ п. A.1): на боковом кадре нога рисуется ТОЛЬКО
+      // ближней (выбранной по visibility) стороны; дальняя нога перекрыта
+      // рамой и даёт фантомные линии над рамой
+      if (viewType === "side" && activeSide) {
+        const legSide = legConnectionSide(a, b);
+        if (legSide && legSide !== activeSide) continue;
+      }
       const pa = landmarks[a];
       const pb = landmarks[b];
       if (!pa || !pb) continue;
@@ -146,8 +169,25 @@ function PhotoWithOverlay({
 
     // 2. Точки keypoints
     const r = Math.max(5, w / 250);
-    for (const lm of landmarks) {
+    // v1.14.32: суставы обеих ног — на боковом кадре рисуем точки только
+    // ближней стороны (дальняя нога даёт фантомные точки над рамой)
+    const legJointIds = new Set<number>([
+      POSE_LANDMARKS.LEFT_HIP, POSE_LANDMARKS.LEFT_KNEE, POSE_LANDMARKS.LEFT_ANKLE,
+      POSE_LANDMARKS.LEFT_HEEL, POSE_LANDMARKS.LEFT_FOOT_INDEX,
+      POSE_LANDMARKS.RIGHT_HIP, POSE_LANDMARKS.RIGHT_KNEE, POSE_LANDMARKS.RIGHT_ANKLE,
+      POSE_LANDMARKS.RIGHT_HEEL, POSE_LANDMARKS.RIGHT_FOOT_INDEX,
+    ]);
+    const leftIds = new Set<number>([
+      POSE_LANDMARKS.LEFT_HIP, POSE_LANDMARKS.LEFT_KNEE, POSE_LANDMARKS.LEFT_ANKLE,
+      POSE_LANDMARKS.LEFT_HEEL, POSE_LANDMARKS.LEFT_FOOT_INDEX,
+    ]);
+    for (let idx = 0; idx < landmarks.length; idx++) {
+      const lm = landmarks[idx];
       if (!lm || (lm.visibility ?? 1) < 0.3) continue;
+      if (viewType === "side" && activeSide && legJointIds.has(idx)) {
+        const isLeftJoint = leftIds.has(idx);
+        if (isLeftJoint !== (activeSide === "left")) continue;
+      }
       ctx.beginPath();
       ctx.arc(lm.x * w, lm.y * h, r, 0, 2 * Math.PI);
       ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
@@ -191,7 +231,7 @@ function PhotoWithOverlay({
         }
       }
     }
-  }, [landmarks, overlayLines, loaded, imgRef, canvasRef]);
+  }, [landmarks, overlayLines, activeSide, viewType, loaded, imgRef, canvasRef]);
 
   return (
     <div className="relative w-full">

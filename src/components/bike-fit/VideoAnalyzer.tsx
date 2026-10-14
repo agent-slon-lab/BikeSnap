@@ -5,6 +5,7 @@ import { Play, Pause, SkipBack, SkipForward, ScanLine, Loader2 } from "lucide-re
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
+import { isCrossLegConnection } from "@/lib/bike-fit";
 
 interface VideoAnalyzerProps {
   videoUrl: string;
@@ -94,6 +95,9 @@ export function VideoAnalyzer({
       ctx.lineCap = "round";
 
       for (const [a, b] of connections) {
+        // v1.14.32 (ТЗ п. A.2): жёсткий запрет перекрёстных линий
+        // LEFT_* ↔ RIGHT_* — дальняя нога не соединяется с ближней
+        if (isCrossLegConnection(a, b)) continue;
         const pa = landmarksToDraw[a];
         const pb = landmarksToDraw[b];
         if (!pa || !pb) continue;

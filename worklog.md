@@ -475,3 +475,23 @@ Stage Summary:
 - Нормы углов (колено 140–150, бедро 95–105, торс 35–45 + тексты без
   инверсии) и иерархия 15 мм — подтверждены регрессами (B/C ТЗ).
 - Следующая версия: v1.14.32.
+
+---
+Task ID: 34
+Agent: Super Z (main)
+Task: Bugfix Spec — MediaPipe Occlusion, Side Selection & Ankle Alignment (v1.14.32)
+
+Work Log:
+- Прочитан код: bike-fit.ts (side-selection по сумме visibility), PhotoAnalyzer/VideoAnalyzer (отрисовка POSE_CONNECTIONS), PhotoAnalysisSection (analyzePhoto/overlay), use-pose-landmarker.
+- bike-fit.ts: добавлены FOOT_MIN_VISIBILITY=0.65, LEG_MIN_VISIBILITY=0.5, FOOT_SANITY_WARNING, FOOTWEAR_WARNING; getCleanRiderKeypoints() — средняя visibility (Hip/Knee/Ankle) для LEFT/RIGHT, строго одна сторона, отказ при <0.5 с текстом для UI; isCrossLegConnection() — запрет LEFT↔RIGHT при участии колена/лодыжки/пятки/носка (линия таза [23,24] и плеч [11,12] легитимны — первый вариант с хипами в сете дал бы ложный запрет таза, поймано вериф-скриптом); legConnectionSide(); AnalyzeFitOptions.pedalAxis; BikeFitAnalysis.warnings? (опционально — старые localStorage-анализы без поля); analyzeBikeFit переведён на getCleanRiderKeypoints + 4 уровня достоверности стопы (MediaPipe toe → pedalAxis → heel → unreliable с warning-статусом, не зелёной нормой) + санитарная проверка ankle.y < toe.y; VIEW_LABELS.side дополнен FOOTWEAR_WARNING.
+- PhotoAnalyzer: props activeSide; скелет — пропуск isCrossLegConnection, на виде «сбоку» нога/точки рисуются ТОЛЬКО выбранной стороны (баг двойного отрицания в фильтре точек найден и исправлен).
+- PhotoAnalysisSection: ранняя проверка getCleanRiderKeypoints для side (специфичная ошибка вместо общей); warnings-блок «Замечания по качеству кадра» над рекомендациями; FOOTWEAR_WARNING в карточке инструкций; activeSide проброшен через ViewSection.
+- VideoAnalyzer: кросс-ноги запрещены в отрисовке.
+- Версия v1.14.32: app-version.ts, package.json, whats-new.ts, CHANGELOG.md.
+- Верификация: scripts/verify-v1432.ts — 33/33 (side selection, отказ, кросс-запрет, стопа-y, pedalAxis, heel fallback, чистый кадр). Регрессы: verify-v1429 46 OK, test-crossref-v1428 OK, test-calib-ownership-v1431 30 OK, test-pose-norms 27 OK, test-stale-state-v1430 42 OK. tsc чисто; next build OK.
+
+Stage Summary:
+- Дальняя нога больше не попадает в углы: строго одна сторона по средней visibility; «паутина» перекрёстных линий запрещена на уровне drawing guard.
+- Стопа: сланцы/фантомы (toe/heel < 0.65 или ankle ниже toe) → предупреждение в UI, ложный совет по голеностопу подавлен; при разметке велосипеда доступна проекция на ось педали.
+- Обувь: подсказка в инструкциях съёмки.
+- Прод задеплоен (v1.14.32). Следующая версия: v1.14.33.
