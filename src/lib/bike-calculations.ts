@@ -28,7 +28,7 @@ export interface BodyMeasurements {
 }
 
 export interface BikeMeasurements {
-  /** Высота седла, см (от центра BB до верха седла) */
+  /** Высота седла, мм (от центра BB до верха седла; комментарий «см» был протухшим) */
   saddleHeight?: number;
   /** Setback — горизонталь от BB до носа седла, мм */
   setback?: number;

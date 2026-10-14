@@ -530,6 +530,12 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
       const ts = new Date().toLocaleTimeString();
       // Пересчёт обесценивает прошлую запись — сводку обновит авто-запись.
       setAppliedSummary(null);
+      // v1.14.27: новый прогон отменяет прошлую блокировку. Без этого красный
+      // баннер от промежуточного значения при наборе «680» (после клавиш «6»,
+      // «68» авто-расчёт успевал заблокироваться: «SH = 68 мм — вне диапазона»)
+      // висел вечно, хотя следующий прогон с 680 проходил успешно.
+      // Если текущее значение тоже мусорное — setError ниже поставит баннер заново.
+      setError(null);
 
       // === ЗАЩИТА ОТ МУСОРНОГО МАСШТАБА (кейс «SH = 8» вместо «800») ===
       // Значение ВНЕ физического диапазона не допускается до строгого масштаба:
@@ -1098,7 +1104,13 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
       return pt && pt.x != null && pt.y != null;
     });
     if (!allRequired) return;
-    runCalibration(keyPoints, knownValue);
+    // v1.14.27: дебаунс 400 мс — при наборе «680» промежуточные «6»/«68» не
+    // успевают запустить заблокированные прогоны (и не плодят красные баннеры
+    // и мусор в отладочном логе); драг точек не считает ядро на каждый
+    // pointermove. Остановка набора на мусорном значении по-прежнему честно
+    // блокируется через 400 мс.
+    const t = setTimeout(() => runCalibration(keyPoints, knownValue), 400);
+    return () => clearTimeout(t);
   }, [keyPoints, imgSize, knownValue, knownKey, runCalibration]);
 
   // ===== v1.14.25: АВТО-ЗАПИСЬ в карточку велика — кнопка удалена =====
