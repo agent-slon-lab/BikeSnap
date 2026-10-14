@@ -495,3 +495,33 @@ Stage Summary:
 - Стопа: сланцы/фантомы (toe/heel < 0.65 или ankle ниже toe) → предупреждение в UI, ложный совет по голеностопу подавлен; при разметке велосипеда доступна проекция на ось педали.
 - Обувь: подсказка в инструкциях съёмки.
 - Прод задеплоен (v1.14.32). Следующая версия: v1.14.33.
+
+---
+Task ID: 35
+Agent: Super Z (main)
+Task: Офлайн-режим + зеркало GitHub Pages (SNI-блокировка *.vercel.app в РФ), v1.14.33
+
+Work Log:
+- Разведка: PAT (ghp_, scope repo) работает через push-URL/credential store; deploy-ключей в песочнице нет (контейнер пересобран); прод v1.14.32; SW v1.14.31 с skipWaiting на install.
+- ШАГ 0: / — статическая, /api/* — 3 serverless-релея (анализ/калибровка/отчёты) — на зеркале деградируют штатно (SW их пропускает); регистрация SW уже срабатывает при document.readyState === "complete", идемпотентна.
+- public/sw.js (v1.14.33): навигация и /version.json — network-first; /_next/static/* и /cdn/mediapipe/* — cache-first; install БЕЗ skipWaiting; message SKIP_WAITING (строка и {type}); activate — чистка старых bikesnap-* кэшей, clients.claim, фоновой префетч замыкания /_next/static/* из HTML (скан JS/CSS до 400 файлов) + ИИ-ассетов; легаси-CDN (jsdelivr/googleapis) — runtime cache-first.
+- Самохостинг MediaPipe: public/cdn/mediapipe/wasm/* из node_modules/@mediapipe/tasks-vision@1.0.1 (vision_wasm_internal + nosimd; module_internal выброшен — не используется в 1.0.1) + pose_landmarker_lite.task (5.8 МБ); use-pose-landmarker.ts переключён на /cdn/mediapipe/* — офлайн-анализ поз без внешнего CDN.
+- UpdateBanner.tsx (баннер «Обновить/Позже», SKIP_WAITING по кнопке + страховочный reload 1.5с); register-sw.tsx шлёт bikesnap-sw-update при reg.waiting+controller; смонтирован в layout.tsx.
+- public/version.json {"version":"v1.14.33"} — точка поллинга CI.
+- scripts/mirror_to_pages.py: замыкание («/» → /_next/static/* → скан JS/CSS → стабилизация), корневые файлы, .nojekyll, README, mirror-manifest.json; фикс: «/» → index.html (IsADirectoryError в CI).
+- agent-slon-lab.github.io: создан (public), Pages main=/ (409=уже), deploy-ключ bikesnap-pages-mirror (WRITE), секрет PAGES_DEPLOY_KEY в BikeSnap через sealed box + pynacl (PublicKey base64-decode вручную — API pynacl без encoding-параметра).
+- Грабли ключей: эта сборка cryptography не читает OpenSSH-PEM (roundtrip fail) → PKCS8 хранение; paramiko Ed25519Key не читает PKCS8 → локальные копии конвертированы в OpenSSH-формат (пара не менялась); секрет перезалит с OpenSSH+trailing newline (ssh CLI: «invalid format» на PKCS8).
+- .github/workflows/mirror-to-pages.yml: push main + workflow_dispatch, concurrency mirror-to-pages, timeout-minutes 10 на JOB (workflow-level = «Unexpected value» + прогон без джобов — поймано dispatch-ом), поллинг Vercel 60с..4мин, python зеркалирование, публикация: ключ из секрета → ~/.ssh/id_ed25519 (600), ssh-keyscan ed25519, git init -b main, force-push одним коммитом.
+- Грабли пуша workflow-файла: PAT без workflow-scope отвергнут (ожидаемо по ТЗ); SSH deploy-ключ BikeSnap (новый, git-helpers/deploy_key) пушит workflow-файлы УСПЕШНО — pushurl переключён на git@github.com (paramiko-ssh).
+- Пуши: 29aa261 (v1.14.33 приложение), 33fe857 (workflow), 0aaa7ff (timeout-minutes fix), d0e37d2 (mirror safe_path fix), 3cc695b (setup PKCS8 fix). Ушедший «error: failed to push some refs» после строки успеха — косметика paramiko-стрима, ls-remote подтверждает.
+- CI-прогоны: 38655227435 SUCCESS (полный цикл с публикацией), 38655783145 SUCCESS (после fix-пушей); деплой-ключ триггерит Actions — подтверждено.
+- Верификация зеркала (scripts/verify-mirror.py): sha256 «/» (по корню, не /index.html), sw.js, manifest.webmanifest, version.json — MATCH прод; _next-чанк 200, .nojekyll 200, wasm/model 200, version.json=v1.14.33.
+- Офлайн-пакет: scripts/build-offline-zip.py → download/BikeSnap-offline-v1.14.33.zip (30.6 МБ, mirror/ + start.bat + start.sh + README-офлайн.txt, порт 8642 зафиксирован); Release v1.14.33 создан, asset uploaded (201).
+- E2E agent-browser: 127.0.0.1:8642 — SW registered+active, кэш bikesnap-v1.14.33 = 26 файлов (вкл. wasm и .task); set offline on → reload → приложение работает (online:false, controlled:true, UI рендерится, errors пуст); agent-slon-lab.github.io — SW active, offline reload → работает.
+
+Stage Summary:
+- Три уровня входа готовы: https://bike-snap.vercel.app/ (весь мир) → https://agent-slon-lab.github.io/ (РФ без VPN, byte-identical, автосинк Action-ом при каждом пуше) → офлайн (PWA-кэш после первого визита / zip из Release v1.14.33).
+- Обновления по кнопке: install без skipWaiting → баннер → SKIP_WAITING → controllerchange → один reload.
+- Полный офлайн после первой загрузки: префетч замыкания чанков + самохостинг MediaPipe.
+- Нюансы задокументированы в README офлайн-пакета: localStorage привязан к origin; PWA с vercel.app обновляется только с vercel.app; CDN GH Pages держит HTML/sw.js ~10 мин; /api/* на зеркале недоступны (релеи деградируют).
+- Следующая версия: v1.14.34.
