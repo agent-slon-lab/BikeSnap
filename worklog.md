@@ -334,3 +334,73 @@ Stage Summary:
   суставов (норм.+пикс.), флаги калибровки масштаба, датчики и версии —
   и в JSON, и в теле issue.
 - Следующая версия: v1.14.30.
+
+---
+Task ID: 34
+Agent: main (Super Z)
+Task: ТЗ «Critical Fix Spec: State Leakage, Joint Angles & Text Inversion» —
+устранение протечки данных между профилями велосипедов (SH=800 от Bike_A
+налагался на Bike_B), плюс гарантии A/B/C из ТЗ.
+
+Work Log:
+- Диагноз: 3 пути протечки. (1) useBikeStore.setBike = merge {...state.bike,
+  ...b}: handleSelect грузил неполные measurements — поля, которых у Bike_B
+  нет, оставались от Bike_A; (2) автосейв 800 мс писал заражённый черновик
+  в запись Bike_B насовсем; (3) bikefit-photo-analysis (фото/анализы шага 4)
+  был глобальным без bikeId — отчёт Bike_B собирался из углов Bike_A; бонус:
+  wheelSizeId не синхронизировался при смене вела (фолбэк радиуса
+  калибратора от другого вела).
+- bike-store.ts: loadBikeData(m) — ПОЛНАЯ замена черновика (каждый известный
+  ключ = значение|undefined; NaN/мусор/неизвестные ключи фильтруются; спреда
+  state.bike нет) + resetDraftState() — сброс bike+wheelSizeId без атрибутов
+  райдера. Merge-семантика setBike сохранена для патчей формы (тест C).
+- bike-storage.ts: ACTIVE_BIKE_CHANGED_EVENT="bikesnap:active-bike-changed";
+  диспатч из setActiveBike (только при реальной смене) и deleteBike (при
+  удалении активного). notify защищён typeof window.
+- hooks/use-active-bike-id.ts (новый): реактивный id (событие + cross-tab
+  storage), ленивая инициализация — без двойного маунта шагов.
+- page.tsx: шаги bike/summary/analysis рендерятся с key={activeBikeId} —
+  React принудительно размонтирует старые компоненты при смене велика
+  (ТЗ п. A.1).
+- photo-analysis-store.ts: персистится bikeId; syncBikeId(id): тот же id —
+  идемпотентный no-op, другой — жёсткий сброс ВСЕХ ракурсов (ТЗ п. A.2:
+  калибровка Bike_A запрещена в отчёте Bike_B; нет SH — вводить заново).
+- PhotoAnalysisSection.tsx: syncBikeId(activeBikeId) через useLayoutEffect —
+  очистка ДО отрисовки, кадр прежнего вела не мелькает.
+- BikeParametersForm.tsx: reload/handleSelect/handleCreate/handleDelete →
+  resetDraftState + loadBikeData (без merge); wheelSizeId из WH карточки
+  (findWheelSize); lastSavedJsonRef синхронизирован (автосейв не пишет
+  старый JSON).
+- fit-report.ts: FitReportContext += activeBikeId/activeBikeName;
+  DebugReportCard.tsx передаёт их — по отчёту видно, какой вел
+  анализировался (диагностика «смешанных» репортов).
+- B/C из ТЗ (углы 180°, тексты корпуса, иерархия 15 мм) — уже закрыты в
+  v1.14.29, подтверждено регрессами.
+- Бисект ложного eslint-срабатывания react-hooks/preserve-manual-memoization
+  в BikeParametersForm (шаги: деструктуризация OK, handleSelect OK, reload+
+  create+delete OK) — итоговая версия чиста; попытки «селекторы»/«getState»
+  откачены, финал — деструктуризация новых действий вверху компонента.
+- Тест scripts/test-stale-state-v1430.ts (npx tsx, localStorage-полифил до
+  импортов): 42 OK / 0 FAIL — A1–A10 (loadBikeData без merge, NaN/мусор),
+  B1–B6 (resetDraftState бережёт тело/цель/жалобы), C1–C3 (setBike merge
+  жив для патчей), D1–D8 (syncBikeId wipe/idempotent/null), E1–E4
+  (findWheelSize), F1–F10 (E2E: create→switch→autosave — в записи Bike_B
+  ноль полей от Bike_A; возврат на A восстанавливает карточку полностью),
+  G1 (константа события).
+- Регрессы: verify-v1429.ts 46/0; test-crossref-v1428.ts все OK;
+  test-pose-norms.ts 27/0. tsc чисто (кроме несборочного examples/), eslint
+  всех изменённых файлов чист, next build OK.
+- Bump v1.14.30: app-version.ts, package.json, sw.js (bikesnap-v1.14.30),
+  whats-new.ts, CHANGELOG.md. Коммит d30516f; push отклонён (remote ушёл на
+  авто-отчёты) → pull --rebase → 5faffa9; ls-remote == HEAD.
+- Прод: HTTP 200; sw.js CACHE bikesnap-v1.14.30; чанк 6059a15659d07b67.js
+  содержит 1.14.30 ×2, active-bike-changed, pose-engine@2.1.0; agent-browser
+  смоук: стартовый экран рендерится, ошибок консоли нет.
+
+Stage Summary:
+- Прод = v1.14.30. Протечка состояния между великами устранена на всех трёх
+  путях: полная замена черновика (никаких merge-остатков), ремоунт шагов по
+  key={activeBikeId}, привязка фото/анализов шага 4 к велику с жёстким
+  сбросом при смене. Автосейв больше не может записать чужие параметры в
+  новую карточку. В телеметрии отчёта — id/имя активного велика.
+- Следующая версия: v1.14.31.
