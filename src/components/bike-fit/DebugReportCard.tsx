@@ -45,6 +45,16 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
   // Контекст онбординга — уходит в отчёт, чтобы я видел, в каких условиях
   // считался анализ (тип вела, рост/inseam, размеры рамы, жалобы)
   const { bikeType, goal, complaints, body, bike } = useBikeStore();
+  // v1.14.30 (Stale State): id/имя активного велика — в отчёте видно, тот ли
+  // велик анализировался (диагностика «смешанных» отчётов Bike_A × Bike_B)
+  const activeBikeMeta = (() => {
+    try {
+      const b = getActiveBike();
+      return b ? { id: b.id, name: b.name } : null;
+    } catch {
+      return null;
+    }
+  })();
   // v1.14.29 (Issue #6 «Датчики устройства»): живой гироскоп в момент
   // отправки отчёта (не в момент спуска затвора — тот остаётся в captureMeta)
   const orientation = useDeviceOrientation(true);
@@ -101,6 +111,9 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
           complaints,
           body,
           bike,
+          // v1.14.30: привязка отчёта к велику (Stale State-диагностика)
+          activeBikeId: activeBikeMeta?.id ?? null,
+          activeBikeName: activeBikeMeta?.name ?? null,
         },
         calibration,
         // v1.14.29: датчики устройства в момент отправки отчёта

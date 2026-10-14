@@ -29,6 +29,7 @@ import { SummaryScreen } from "@/components/bike-fit/SummaryScreen";
 import { PhotoAnalysisSection } from "@/components/bike-fit/PhotoAnalysisSection";
 import { ModeSelectionScreen } from "@/components/bike-fit/ModeSelectionScreen";
 import { ModelSelectionWizard } from "@/components/bike-fit/ModelSelectionWizard";
+import { useActiveBikeId } from "@/hooks/use-active-bike-id";
 import { Camera } from "lucide-react";
 
 const STEPS: Array<{
@@ -97,6 +98,11 @@ export default function Home() {
   const store = useBikeStore();
   const { mode, step, setStep, resetMode } = store;
   const { resolvedTheme, setTheme } = useTheme();
+  // v1.14.30 (Stale State): id активного велика — ключ рендеринга шагов
+  // «Велосипед/Сводка/Анализ». Смена велика принудительно РАЗМОНТИРУЕТ
+  // старые компоненты (ТЗ п. A.1: key={activeBikeId}) — никакие фото,
+  // расчёты и state прежнего вела не доживают до отчёта нового.
+  const activeBikeId = useActiveBikeId();
 
   // v1.13.0: mode/step персистятся в localStorage. Пока не смонтировались —
   // рендерим заглушку: SSR и первый клиентский рендер должны совпадать,
@@ -308,12 +314,13 @@ export default function Home() {
           </section>
         )}
 
-        {/* Контент шага */}
+        {/* Контент шага. key={activeBikeId} — гарантированный remount при
+            смене/создании/удалении велика (v1.14.30, Stale State) */}
         <div className="mb-8">
           {step === "body" && <OnboardingBody />}
-          {step === "bike" && <BikeParametersForm />}
-          {step === "summary" && <SummaryScreen />}
-          {step === "analysis" && <PhotoAnalysisSection />}
+          {step === "bike" && <BikeParametersForm key={activeBikeId ?? "no-bike"} />}
+          {step === "summary" && <SummaryScreen key={activeBikeId ?? "no-bike"} />}
+          {step === "analysis" && <PhotoAnalysisSection key={activeBikeId ?? "no-bike"} />}
         </div>
 
         {/* Навигация */}

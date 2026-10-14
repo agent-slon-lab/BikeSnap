@@ -147,7 +147,7 @@ const PHOTO_ONLY_KEYS: Array<keyof BikeMeasurements> = [
 ];
 
 export function BikeParametersForm() {
-  const { bike, setBike, setWheelSizeId, setBikeType } = useBikeStore();
+  const { bike, setBike, setWheelSizeId, setBikeType, loadBikeData, resetDraftState } = useBikeStore();
   const [bikes, setBikes] = useState<BikeRecord[]>([]);
   const [activeBike, setActiveBikeState] = useState<BikeRecord | null>(null);
   const [showNew, setShowNew] = useState(false);
@@ -168,11 +168,16 @@ export function BikeParametersForm() {
     const active = getActiveBike();
     setActiveBikeState(active);
     if (active) {
-      setBike(active.measurements);
+      // v1.14.30 (Stale State): ПОЛНАЯ замена черновика (без merge — протухшие
+      // поля прежнего вела выжить не могут) + синхронизация типоразмера
+      // колеса из карточки (иначе фолбэк радиуса в калибраторе берётся
+      // от протухшего wheelSizeId).
+      loadBikeData(active.measurements);
+      setWheelSizeId(findWheelSize(null, active.measurements.wheelHeight)?.id ?? "26");
       // v1.12.0: тип велика едет вместе с карточкой (шаг «Контекст» убран)
       setBikeType(active.type);
     }
-  }, [setBike, setBikeType]);
+  }, [loadBikeData, setWheelSizeId, setBikeType]);
 
   useEffect(() => {
     reload();
@@ -225,11 +230,14 @@ export function BikeParametersForm() {
     if (!newName.trim()) return;
     const bike = createBike(newName.trim(), newType, {});
     // ПОЛНЫЙ resetForm после успешного создания (сброс при submit из ТЗ):
-    // пустые параметры в сторе + чистый типоразмер колеса + чистый черновик.
+    // жёсткий сброс черновика (v1.14.30: resetDraftState — параметры велика
+    // + типоразмер колеса, БЕЗ тела/цели/жалоб райдера) + загрузка пустой
+    // карточки через loadBikeData (полная замена, не merge — 800 мм от
+    // прежнего вела в новый велик попасть не могут).
     // CalibratorKey ниже — гарантированный remount калибратора через React key:
     // старое фото, точки и рассчитанные метрики уничтожаются вместе с компонентом.
-    setBike({});
-    setWheelSizeId("26");
+    resetDraftState();
+    loadBikeData({});
     // v1.12.0: тип велика синхронизируется из карточки — шаг «Контекст» убран,
     // тип выбирается здесь, при создании велика (newType в форме)
     setBikeType(newType);
@@ -242,11 +250,19 @@ export function BikeParametersForm() {
   };
 
   const handleSelect = (bike: BikeRecord) => {
+    // v1.14.30 (Stale State, ТЗ п. A.1/A.2): смена велика = ЖЁСТКИЙ сброс
+    // черновика + полная загрузка карточки БЕЗ merge. Раньше setBike мерджил
+    // measurements: поля, которых у Bike_B нет, оставались от Bike_A
+    // (SH=800 из старой карточки попадали в сводку/анализ/отчёт), а
+    // автосейв через 800 мс записывал заражённый черновик в Bike_B насовсем.
+    // Дополнительно: wheelSizeId синхронизируется из WH карточки (фолбэк
+    // радиуса в калибраторе больше не берётся от другого вела).
+    resetDraftState();
+    loadBikeData(bike.measurements);
+    setBikeType(bike.type);
+    setWheelSizeId(findWheelSize(null, bike.measurements.wheelHeight)?.id ?? "26");
     setActiveBike(bike.id);
     setActiveBikeState(bike);
-    setBike(bike.measurements);
-    // v1.12.0: тип велика едет вместе с карточкой (шаг «Контекст» убран)
-    setBikeType(bike.type);
     lastSavedJsonRef.current = JSON.stringify(bike.measurements);
     setCalibratorKey(k => k + 1);
   };
@@ -259,11 +275,16 @@ export function BikeParametersForm() {
     if (activeBike?.id === id) {
       const newActive = remaining[0] ?? null;
       setActiveBikeState(newActive);
+      // v1.14.30: полный сброс черновика + загрузка новой карточки без merge
+      resetDraftState();
       if (newActive) {
         setActiveBike(newActive.id);
-        setBike(newActive.measurements);
+        loadBikeData(newActive.measurements);
+        setWheelSizeId(findWheelSize(null, newActive.measurements.wheelHeight)?.id ?? "26");
+        setBikeType(newActive.type);
+        lastSavedJsonRef.current = JSON.stringify(newActive.measurements);
       } else {
-        setBike({});
+        lastSavedJsonRef.current = "";
       }
       setCalibratorKey(k => k + 1);
     }

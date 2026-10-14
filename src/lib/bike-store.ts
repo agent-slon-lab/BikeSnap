@@ -122,6 +122,21 @@ interface AppState {
   setComplaints: (list: Complaint[]) => void;
   setBody: (b: Partial<BodyMeasurements>) => void;
   setBike: (b: Partial<BikeMeasurements>) => void;
+  /**
+   * v1.14.30 (Stale State): ПОЛНАЯ замена черновика велика БЕЗ merge со
+   * старым содержимым. Единственный способ загрузить карточку другого
+   * велосипеда: setBick мерджит ({ ...state.bike, ...b }) и при неполных
+   * measurements протаскивал SH/WB/ETT от прежнего вела — именно так 800 мм
+   * от Bike_A попадали в отчёт Bike_B (и автосейвом записывались туда
+   * НАСОВСЕМ). Здесь — только известные ключи, всё остальное = undefined.
+   */
+  loadBikeData: (m: BikeMeasurements) => void;
+  /**
+   * v1.14.30: жёсткий сброс черновика СЦЕНАРИЯ (параметры велика +
+   * типоразмер колеса) при смене/создании велосипеда. Тело/цель/жалобы
+   * НЕ трогает — это атрибуты райдера (как и в reset()).
+   */
+  resetDraftState: () => void;
   setWheelSizeId: (id: string) => void;
   reset: () => void;
 
@@ -203,6 +218,25 @@ export const useBikeStore = create<AppState>()(
 
       setWheelSizeId: (id) => set({ wheelSizeId: id }),
 
+      // v1.14.30 (Stale State): полная замена черновика. Каждый известный
+      // ключ получает значение карточки ЛИБО undefined — спреда state.bike
+      // нет вообще, протухшие значения и мусорные ключи старого черновика
+      // выжить не могут. merge-поведение setBike остаётся для патчей формы
+      // (ввод одного поля не должен стирать остальные).
+      loadBikeData: (m) =>
+        set(() => {
+          const clean = {} as BikeMeasurements;
+          for (const k of Object.keys(initialBike) as Array<keyof BikeMeasurements>) {
+            const v = m[k];
+            clean[k] =
+              typeof v === "number" && Number.isFinite(v) ? v : undefined;
+          }
+          return { bike: clean };
+        }),
+
+      // v1.14.30: жёсткий сброс черновика сценария (без атрибутов райдера)
+      resetDraftState: () => set({ bike: { ...initialBike }, wheelSizeId: "26" }),
+
       // ПОЛНЫЙ сброс сценария: вызывается ТОЛЬКО по явному «Начать заново»
       // (кнопка на карточке режима). Чистит данные СЦЕНАРИЯ: позицию шагов,
       // параметры велика и типоразмер колеса.
@@ -216,7 +250,7 @@ export const useBikeStore = create<AppState>()(
           step: "body",
           selectStep: 0,
           bikeType: null,
-          bike: initialBike,
+          bike: { ...initialBike },
           wheelSizeId: "26",
         }),
 

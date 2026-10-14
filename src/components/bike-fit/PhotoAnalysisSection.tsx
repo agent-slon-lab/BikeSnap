@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useState } from "react";
 import { Camera, AlertCircle, Loader2, Sparkles, Image as ImageIcon } from "lucide-react";
 import {
   Card,
@@ -47,6 +47,7 @@ import { DebugReportCard } from "@/components/bike-fit/DebugReportCard";
 import type { CaptureMeta, ReportViewInput } from "@/lib/fit-report";
 import { photoToDataUrl } from "@/lib/fit-report";
 import { usePhotoAnalysisStore } from "@/lib/photo-analysis-store";
+import { useActiveBikeId } from "@/hooks/use-active-bike-id";
 
 interface ViewPhotoState {
   url: string | null;
@@ -90,6 +91,21 @@ export function PhotoAnalysisSection() {
   const setViewPhotoData = usePhotoAnalysisStore((s) => s.setViewPhotoData);
   const setViewResultStore = usePhotoAnalysisStore((s) => s.setViewResult);
   const clearViewStore = usePhotoAnalysisStore((s) => s.clearView);
+
+  // v1.14.30 (Stale State, ТЗ п. A.2 «Проверка перед расчетом»): фото и
+  // анализы принадлежат КОНКРЕТНОМУ велику. При смене активного вела
+  // syncBikeId жёстко стирает все ракурсы — углы Bike_A физически не могут
+  // попасть в отчёт Bike_B (и в отчёт отладки). Без этой привязки старый
+  // кадр с SH=800 одного вела анализировался контекстом другого.
+  const activeBikeId = useActiveBikeId();
+  const syncBikeId = usePhotoAnalysisStore((s) => s.syncBikeId);
+  // useLayoutEffect (не useEffect): очистка протухших ракурсов происходит
+  // ДО отрисовки — кадр/анализ прежнего вела не мелькает ни на один кадр.
+  // Компонент рендерится только после клиентского маунта (заглушка в
+  // page.tsx), поэтому SSR-предупреждения useLayoutEffect не возникает.
+  useLayoutEffect(() => {
+    syncBikeId(activeBikeId);
+  }, [activeBikeId, syncBikeId]);
 
   // Транзиентное UI-состояние (не персистится): анимация анализа + ошибки
   const [ui, setUi] = useState<

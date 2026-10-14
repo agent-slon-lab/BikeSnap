@@ -7,6 +7,62 @@
 
 ---
 
+## [1.14.30] — 2026-10-14 — Фикс протечки состояния между велосипедами (Stale State)
+
+### Контекст
+Репорт: «Откуда взялись 800 мм и почему в отчёте смешались параметры разных
+велосипедов — главная причина всех невязок». У пользователя было два вела:
+в черновике хранился SH = 800 мм от предыдущего, при переключении на новый
+LeMond считался от нового роста (86 см → 759 мм), разница 41 мм уехала в
+советы, а углы нового фото наложились на геометрию старого вела.
+
+### Корневые причины (3 пути протечки)
+1. `useBikeStore.setBike` делает merge `{ ...state.bike, ...b }`:
+   `handleSelect(Bike_B)` грузил неполные measurements — поля, которых у
+   Bike_B нет, оставались от Bike_A (SH=800 попадал в сводку/анализ/отчёт).
+2. Автосейв (800 мс) записывал заражённый черновик в запись Bike_B
+   насовсем — загрязнение персистилось в bikefit-bikes.
+3. `bikefit-photo-analysis` (фото/анализы шага 4) был глобальным, без
+   привязки к bikeId: отчёт Bike_B собирался из углов Bike_A. Плюс
+   `wheelSizeId` не синхронизировался при смене вела (фолбэк радиуса
+   калибратора брался от другого вела).
+
+### Решение (по ТЗ «Critical Fix Spec: State Leakage»)
+- `bike-store.ts`: новые действия `loadBikeData(m)` — ПОЛНАЯ замена черновика
+  (каждый известный ключ = значение или undefined; NaN/мусор/неизвестные
+  ключи фильтруются) и `resetDraftState()` — жёсткий сброс сценария
+  (bike + wheelSizeId, без атрибутов райдера). Merge-поведение setBike
+  сохранено для патчей формы (регресс-тест C).
+- `bike-storage.ts`: `ACTIVE_BIKE_CHANGED_EVENT` — диспатчится из
+  setActiveBike (только при реальной смене) и deleteBike (при удалении
+  активного).
+- `hooks/use-active-bike-id.ts` (новый): реактивный id активного вела
+  (подписка на событие + cross-tab storage).
+- `page.tsx`: шаги «Велосипед / Сводка / Анализ» рендерятся с
+  `key={activeBikeId}` — React принудительно размонтирует старые компоненты
+  при смене контекста (ТЗ п. A.1).
+- `photo-analysis-store.ts`: персистится `bikeId`; `syncBikeId(id)` — тот же
+  id: идемпотентный no-op, другой id: жёсткий сброс ВСЕХ ракурсов
+  (фото + landmarks + анализы). Вызывается из PhotoAnalysisSection через
+  useLayoutEffect (очистка до отрисовки — кадр прежнего вела не мелькает).
+- `BikeParametersForm.tsx`: handleSelect/handleCreate/handleDelete/reload
+  переведены на resetDraftState + loadBikeData (без merge);
+  wheelSizeId синхронизируется из WH карточки (findWheelSize).
+- `fit-report.ts` + `DebugReportCard.tsx`: в контекст отчёта добавлены
+  activeBikeId/activeBikeName — по отчёту видно, какой вел анализировался.
+
+### Проверки
+- `scripts/test-stale-state-v1430.ts` (npx tsx): 42 OK / 0 FAIL —
+  loadBikeData без merge (A1–A10), фильтрация NaN/мусора, resetDraftState
+  сохраняет тело/цель/жалобы (B1–B6), setBike merge жив для патчей формы
+  (C1–C3), syncBikeId wipe/idempotent/null (D1–D8), findWheelSize (E1–E4),
+  E2E create→switch→autosave: в записи Bike_B нет ни одного поля от Bike_A,
+  обратное переключение восстанавливает карточку A полностью (F1–F10).
+- Регрессы: verify-v1429.ts 46 OK / 0 FAIL; test-crossref-v1428.ts — все OK;
+  test-pose-norms.ts 27 OK / 0 FAIL. tsc --noEmit чисто.
+
+---
+
 ## [1.14.29] — 2026-10-14 — Иерархия советов по седлу (15 мм) + телеметрия отчёта отладки
 
 ### Контекст

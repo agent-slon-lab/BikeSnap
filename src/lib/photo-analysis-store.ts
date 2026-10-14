@@ -58,7 +58,21 @@ const emptyViews = (): Record<ViewType, PersistedViewPhoto> => ({
 });
 
 interface PhotoAnalysisState {
+  /**
+   * v1.14.30 (Stale State): какому велику принадлежат фото/анализы.
+   * Отчёт Bike_B, собранный из углов Bike_A («система наложила углы нового
+   * фото на геометрию старого вела») — главный источник невязок. Теперь
+   * ракурсы жёстко привязаны к активному велику: syncBikeId при смене
+   * стирает ВСЁ (фото + landmarks + анализы) и пишет новый id.
+   */
+  bikeId: string | null;
   views: Record<ViewType, PersistedViewPhoto>;
+  /**
+   * v1.14.30: вызывается из PhotoAnalysisSection при маунте/смене активного
+   * велика. Тот же id — идемпотентный no-op; другой id — жёсткий сброс всех
+   * ракурсов (фото/анализы прежнего вела не имеют права попасть в отчёт).
+   */
+  syncBikeId: (bikeId: string | null) => void;
   /** Новое фото: мгновенно показываем url (может быть blob:), analysis сбрасываем. */
   setViewPhoto: (
     view: ViewType,
@@ -111,7 +125,19 @@ const sanitize = (v: string | null): string | null =>
 export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
   persist(
     (set) => ({
+      bikeId: null,
       views: emptyViews(),
+
+      // v1.14.30 (Stale State): привязка ракурсов к велику. Сменился велик —
+      // жёсткий сброс ВСЕХ фото и анализов: калибровка/углы Bike_A запрещены
+      // в отчёте Bike_B (ТЗ, п. A.2 «Проверка перед расчетом»). Если высоты
+      // седла у нового вела нет — она обязана быть введена заново, а не
+      // подтягиваться из протухшего черновика.
+      syncBikeId: (bikeId) =>
+        set((s) => {
+          if (s.bikeId === bikeId) return {}; // тот же велик — ничего не трогаем
+          return { bikeId, views: emptyViews() };
+        }),
 
       setViewPhoto: (view, { photoData, captureMeta }) =>
         set((s) => ({
@@ -154,7 +180,7 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
     {
       name: "bikefit-photo-analysis",
       storage: createJSONStorage(() => safeStorage),
-      partialize: (state) => ({ views: state.views }),
+      partialize: (state) => ({ bikeId: state.bikeId, views: state.views }),
       // Гидрация: выбрасываем мёртвые blob:-ссылки, чиним битые структуры.
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<PhotoAnalysisState>;
@@ -171,7 +197,10 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
             savedAt: typeof saved.savedAt === "number" ? saved.savedAt : null,
           };
         });
-        return { ...current, views };
+        // v1.14.30: bikeId из персиста (string|null). Если пользователь
+        // обновил страницу — привязка ракурсов к велику сохраняется.
+        const bikeId = typeof p.bikeId === "string" ? p.bikeId : null;
+        return { ...current, bikeId, views };
       },
     }
   )

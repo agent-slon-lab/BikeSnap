@@ -63,6 +63,13 @@ export interface FitReportContext {
   complaints?: readonly string[];
   body?: unknown;
   bike?: unknown;
+  /**
+   * v1.14.30 (Stale State): какой велик был активен в момент отчёта.
+   * Раньше параметры Bike_A (SH=800) смешивались с углами фото Bike_B —
+   * по id/имени в отчёте сразу видно, тот ли велик анализировался.
+   */
+  activeBikeId?: string | null;
+  activeBikeName?: string | null;
 }
 
 /** Живые датчики устройства в момент отправки отчёта (v1.14.29) */

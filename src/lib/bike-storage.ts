@@ -67,6 +67,24 @@ const BIKES_KEY = "bikefit-bikes";
 const ACTIVE_RIDER_KEY = "bikefit-active-rider";
 const ACTIVE_BIKE_KEY = "bikefit-active-bike";
 
+/**
+ * v1.14.30 (Stale State): событие «активный велик сменился».
+ * Диспатчится из setActiveBike/createBike/deleteBike. Подписчики
+ * (useActiveBikeId → key={activeBikeId} на шагах онбординга) принудительно
+ * перемонтируют форму/сводку/анализ — старые данные протухшего вела
+ * размонтируются React'ом, а не «доживают» в useState.
+ */
+export const ACTIVE_BIKE_CHANGED_EVENT = "bikesnap:active-bike-changed";
+
+function notifyActiveBikeChanged() {
+  if (typeof window === "undefined") return;
+  try {
+    window.dispatchEvent(new CustomEvent(ACTIVE_BIKE_CHANGED_EVENT));
+  } catch {
+    /* окружение без Event API — просто без уведомления */
+  }
+}
+
 // ============================================================
 // УТИЛИТЫ
 // ============================================================
@@ -261,6 +279,8 @@ export function deleteBike(id: string) {
   save(BIKES_KEY, bikes);
   if (getActiveBikeId() === id) {
     localStorage.removeItem(ACTIVE_BIKE_KEY);
+    // v1.14.30: активный велик удалён — подписчики обязаны узнать
+    notifyActiveBikeChanged();
   }
 }
 
@@ -276,7 +296,11 @@ export function getActiveBike(): BikeRecord | null {
 }
 
 export function setActiveBike(id: string) {
+  const prev = getActiveBikeId();
   localStorage.setItem(ACTIVE_BIKE_KEY, id);
+  // v1.14.30: диспатчим только при РЕАЛЬНОЙ смене — лишние ремоунты
+  // шагов при повторном клике по уже активной карточке не нужны
+  if (prev !== id) notifyActiveBikeChanged();
 }
 
 // ============================================================
