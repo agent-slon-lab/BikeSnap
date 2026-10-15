@@ -53,6 +53,8 @@ export interface BikeRecord {
     scaleMmPerPx: number;
     scaleSource: string;
     frameTiltDeg: number;
+    /** v1.14.34 (ТЗ п. 5.4): pxWheelbase/pxWheelDiameter по фото вела */
+    wheelRatio?: number;
   };
   createdAt: number;
   updatedAt: number;
@@ -239,11 +241,20 @@ export function updateBikePhoto(id: string, photoData: string | undefined, keyPo
 /**
  * Сохранить/очистить телеметрию фото-калибровки (v1.14.29, Issue #6):
  * источник масштаба, мм/пиксель и наклон оси колёс — уходят в отчёт отладки.
+ * v1.14.34 (ТЗ п. 5.4): + wheelRatio — масштабно-инвариантная пропорция
+ * «колёсная база / диаметр колеса» по фото вела (Шаг 2). Используется
+ * Bike Match Validation: сравнение с фото райдера (Шаг 1), расхождение
+ * > 12% → «возможно, фото двух разных велосипедов».
  * info = null — сброс (фото удалено/заменено, движок упал).
  */
 export function updateBikePhotoScale(
   id: string,
-  info: { scaleMmPerPx: number; scaleSource: string; frameTiltDeg: number } | null
+  info: {
+    scaleMmPerPx: number;
+    scaleSource: string;
+    frameTiltDeg: number;
+    wheelRatio?: number | null;
+  } | null
 ) {
   const bikes = getBikes();
   const b = bikes.find((b) => b.id === id);
@@ -253,6 +264,9 @@ export function updateBikePhotoScale(
       scaleMmPerPx: Math.round(info.scaleMmPerPx * 10000) / 10000,
       scaleSource: info.scaleSource,
       frameTiltDeg: Math.round(info.frameTiltDeg * 10) / 10,
+      ...(info.wheelRatio != null && Number.isFinite(info.wheelRatio) && info.wheelRatio > 0
+        ? { wheelRatio: Math.round(info.wheelRatio * 1000) / 1000 }
+        : {}),
     };
   } else {
     delete b.photoCalib;

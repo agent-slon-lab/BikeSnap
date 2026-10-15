@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useLayoutEffect, useMemo, useState } from "react";
-import { Camera, AlertCircle, AlertTriangle, Loader2, Sparkles, Image as ImageIcon } from "lucide-react";
+import { Camera, AlertCircle, AlertTriangle, Loader2, Sparkles, Image as ImageIcon, RotateCcw, Undo2, Repeat } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -31,6 +31,8 @@ import {
   applyCrossMetricLogic,
   applySaddleHeightContext,
   getCleanRiderKeypoints,
+  getPoseVisibilityScore,
+  PERSON_MIN_SCORE,
   VIEW_LABELS,
   FOOTWEAR_WARNING,
   POSE_LANDMARKS,
@@ -40,12 +42,29 @@ import {
   type BackViewAnalysis,
   type FrontViewAnalysis,
 } from "@/lib/bike-fit";
+import {
+  computeWheelRatioFromFrame,
+  downscaleToRawFrame,
+  isBikeMismatch,
+  wheelRatioDivergencePct,
+} from "@/lib/bike-wheel-ratio";
+import { getBikes } from "@/lib/bike-storage";
 import { calculateAll } from "@/lib/bike-calculations";
 import { BIKE_TYPES } from "@/lib/bike-params";
 import { useBikeStore } from "@/lib/bike-store";
 import { cn } from "@/lib/utils";
 import { useMediaFlag, PHONE_LANDSCAPE_QUERY } from "@/hooks/use-media-flag";
 import { DebugReportCard } from "@/components/bike-fit/DebugReportCard";
+import { ReFitFeedbackModal } from "@/components/bike-fit/ReFitFeedbackModal";
+import { ComparisonReport } from "@/components/bike-fit/ComparisonReport";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import type { CaptureMeta, ReportViewInput } from "@/lib/fit-report";
 import { photoToDataUrl } from "@/lib/fit-report";
 import { usePhotoAnalysisStore } from "@/lib/photo-analysis-store";
@@ -111,6 +130,31 @@ export function PhotoAnalysisSection() {
   useLayoutEffect(() => {
     syncBikeId(activeBikeId);
   }, [activeBikeId, syncBikeId]);
+
+  // === v1.14.34 (ТЗ п. 5.4): Bike Match Validation ===
+  // Пропорция wheelbase/диаметр по авто-детектору колёс на боковом фото
+  // райдера (Шаг 1) сравнивается с пропорцией по фото вела (Шаг 2,
+  // photoCalib.wheelRatio из карточки). Расхождение > 12% — предупреждение
+  // «возможно, загружены фото двух разных велосипедов».
+  const riderPhotoWheelRatio = usePhotoAnalysisStore((s) => s.riderPhotoWheelRatio);
+  const setRiderPhotoWheelRatio = usePhotoAnalysisStore((s) => s.setRiderPhotoWheelRatio);
+  const bikePhotoWheelRatio = useMemo(() => {
+    if (!activeBikeId) return null;
+    const card = getBikes().find((b) => b.id === activeBikeId);
+    const r = card?.photoCalib?.wheelRatio;
+    return typeof r === "number" && Number.isFinite(r) && r > 0 ? r : null;
+  }, [activeBikeId, views.side.photoData]); // пересчёт и при смене фото вела
+  const bikeMismatchPct = wheelRatioDivergencePct(bikePhotoWheelRatio, riderPhotoWheelRatio);
+  const bikeMismatch = isBikeMismatch(bikePhotoWheelRatio, riderPhotoWheelRatio);
+
+  // === v1.14.34 (ТЗ п. 6): Re-fit Loop — архив прошлого прогона + анкета ===
+  const previousRun = usePhotoAnalysisStore((s) => s.previousRun);
+  const refitMeta = usePhotoAnalysisStore((s) => s.refitMeta);
+  const startRefit = usePhotoAnalysisStore((s) => s.startRefit);
+  const cancelRefit = usePhotoAnalysisStore((s) => s.cancelRefit);
+  const [refitModalOpen, setRefitModalOpen] = useState(false);
+  // v1.14.34 (ТЗ п. 5.2): модалка «Человек не найден на фото» (score < 0.5)
+  const [personModalOpen, setPersonModalOpen] = useState(false);
 
   // Транзиентное UI-состояние (не персистится): анимация анализа + ошибки
   const [ui, setUi] = useState<
@@ -200,14 +244,29 @@ export function PhotoAnalysisSection() {
         if (!result || !result.landmarks || result.landmarks.length === 0) {
           setUiState(view, {
             analyzing: false,
+            // v1.14.34 (ТЗ п. 5.2): детектор вообще никого не нашёл —
+            // модалка «Человек не найден» + блок расчёта.
             error:
-              "Не удалось обнаружить позу на фото. Убедитесь, что велосипедист полностью виден в кадре, попробуйте более чёткое фото.",
+              "Человек не найден на фото. Загрузите снимок верхом на велосипеде.",
           });
-          // landmarks не трогаем — прежние успешные метки живут (как и раньше)
+          setPersonModalOpen(true);
           setViewResultStore(view, undefined, null);
           return;
         }
         const lms = result.landmarks[0] as Point[];
+        // v1.14.34 (ТЗ п. 5.2): poseLandmarksScore < 0.5 — человека нет,
+        // переход к расчёту ЗАБЛОКИРОВАН + модалка (по ТЗ).
+        const personScore = getPoseVisibilityScore(lms);
+        if (personScore < PERSON_MIN_SCORE) {
+          setUiState(view, {
+            analyzing: false,
+            error:
+              "Человек не найден на фото. Загрузите снимок верхом на велосипеде.",
+          });
+          setPersonModalOpen(true);
+          setViewResultStore(view, lms, null);
+          return;
+        }
         // v1.14.32 (ТЗ п. A): ранняя проверка надёжности ближней ноги —
         // если видимость hip/knee/ankle ниже порога, показываем
         // СПЕЦИФИЧНУЮ ошибку распознавания вместо общей «точки не
@@ -241,7 +300,7 @@ export function PhotoAnalysisSection() {
         setViewResultStore(view, undefined, null);
       }
     },
-    [modelLoading, modelError, detect, setUiState, setViewResultStore]
+    [modelLoading, modelError, detect, setUiState, setViewResultStore, setPersonModalOpen]
   );
 
   // Контекст-карточка с введёнными данными
@@ -351,8 +410,28 @@ export function PhotoAnalysisSection() {
         // Если сжать не удалось — остаётся blob: до конца сессии,
         // при гидрации персист его отбросит (sanitize в store)
       });
+
+      // v1.14.34 (ТЗ п. 5.4): Bike Match Validation на боковом фото —
+      // авто-детектор колёс считает пропорцию wheelbase/диаметр (Шаг 1).
+      // Фото райдера могло замениться — проверяем перед записью.
+      if (view === "side") {
+        const img = new Image();
+        img.onload = () => {
+          const cur = usePhotoAnalysisStore.getState().views.side.photoData;
+          if (cur !== url) return; // фото уже заменили — результат не актуален
+          try {
+            const frame = downscaleToRawFrame(img);
+            const ratio = frame ? computeWheelRatioFromFrame(frame) : null;
+            setRiderPhotoWheelRatio(ratio);
+          } catch {
+            setRiderPhotoWheelRatio(null);
+          }
+        };
+        img.onerror = () => setRiderPhotoWheelRatio(null);
+        img.src = url;
+      }
     },
-    [setUiState, setViewPhotoStore, setViewPhotoData]
+    [setUiState, setViewPhotoStore, setViewPhotoData, setRiderPhotoWheelRatio]
   );
 
   const handleClear = useCallback(
@@ -428,6 +507,56 @@ export function PhotoAnalysisSection() {
               <span className="font-medium text-emerald-700 dark:text-emerald-400">
                 Проанализировано ракурсов: {totalAnalyses} / 3
               </span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* === v1.14.34 (ТЗ п. 5.4): Bike Match Validation — предупреждение о двух разных велосипедах === */}
+      {bikeMismatch && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+          <AlertTriangle className="size-4 mt-0.5 shrink-0" />
+          <div>
+            <p className="font-medium">
+              Возможно, загружены фото двух разных велосипедов
+            </p>
+            <p className="mt-1 text-xs">
+              Пропорция «колёсная база / диаметр колеса» расходится на {bikeMismatchPct?.toFixed(0)}% между фото с райдером (Шаг 1) и фото вела (Шаг 2):
+              {bikePhotoWheelRatio != null && ` у вела ${bikePhotoWheelRatio.toFixed(2)}${riderPhotoWheelRatio != null ? `, у фото с райдером ${riderPhotoWheelRatio.toFixed(2)}` : ""}.`}
+              {" "}
+              Убедитесь, что оба фото сняты одного и того же велосипеда с одного ракурса. Сравнение с рамой будет ненадёжным.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* === v1.14.34 (ТЗ п. 6): Re-fit Loop — статус повторного замера === */}
+      {refitMeta && !sideAnalysis && (
+        <Card className="border-orange-300 dark:border-orange-800 bg-orange-50/50 dark:bg-orange-950/20">
+          <CardContent className="py-4 space-y-3">
+            <div className="flex items-start gap-3">
+              <RotateCcw className="size-5 shrink-0 text-orange-500 mt-0.5" />
+              <div className="space-y-1 text-sm">
+                <p className="font-medium">
+                  Повторный замер #{previousRun ? "2" : "?"} запущен
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Загрузите новое фото — вид сбоку, в рабочей посадке.
+                  Геометрия рамы (Шаг 2) сохранена: после анализа появится
+                  таблица «Было ➔ Стало».
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={cancelRefit}
+                title="Вернуть фото и анализ прошлого замера"
+              >
+                <Undo2 className="size-4" />
+                Отменить повторный замер
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -614,6 +743,19 @@ export function PhotoAnalysisSection() {
         </TabsContent>
       </Tabs>
 
+      {/* === v1.14.34 (ТЗ п. 6.3): сравнение «Было ➔ Стало» — отчёт второго прогона === */}
+      {refitMeta &&
+        previousRun?.views.side?.analysis &&
+        // снапшот хранит union — сравнивать можно только side-анализы
+        "kneeAngle" in previousRun.views.side.analysis &&
+        sideAnalysis && (
+          <ComparisonReport
+            before={previousRun.views.side.analysis}
+            after={sideAnalysis}
+            meta={refitMeta}
+          />
+        )}
+
       {/* === Умные рекомендации по жалобам === */}
       {(sideAnalysis || backAnalysis || frontAnalysis) && (
         <ComplaintRecommendations
@@ -660,6 +802,66 @@ export function PhotoAnalysisSection() {
       {sideAnalysis && (
         <CrossRefRecommendations sideAnalysis={sideAnalysis} />
       )}
+
+      {/* === v1.14.34 (ТЗ п. 6.1): кнопка повторного замера — геометрия рамы (Шаг 2) НЕ сбрасывается === */}
+      {(sideAnalysis || totalAnalyses > 0) && (
+        <Card className="border-dashed">
+          <CardContent className="py-4">
+            <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-between">
+              <div className="text-sm text-muted-foreground">
+                <p className="font-medium text-foreground">
+                  Изменили посадку? Проверьте результат
+                </p>
+                <p className="mt-0.5 text-xs">
+                  {refitMeta && previousRun
+                    ? "Сделайте ещё один замер — таблица «Было ➔ Стало» обновится"
+                    : "Архивируем текущий прогон и снимаем новое фото — покажем, что изменилось"}
+                </p>
+              </div>
+              <Button
+                onClick={() => setRefitModalOpen(true)}
+                className="shrink-0 bg-orange-500 hover:bg-orange-600"
+              >
+                <Repeat className="size-4" />
+                Измерить новую посадку
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* === v1.14.34 (ТЗ п. 5.2): модалка «Человек не найден на фото» === */}
+      <Dialog open={personModalOpen} onOpenChange={setPersonModalOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <AlertCircle className="size-5 text-rose-500" />
+              Человек не найден на фото
+            </DialogTitle>
+            <DialogDescription className="text-left">
+              Загрузите снимок верхом на велосипеде: человек в кадре должен
+              быть целиком — плечи, бёдра, колени и стопы. Расчёт заблокирован:
+              без фигуры райдера углы посадки не определяются.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end">
+            <Button
+              size="sm"
+              onClick={() => setPersonModalOpen(false)}
+              className="bg-orange-500 hover:bg-orange-600"
+            >
+              Понятно, заменю фото
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* === v1.14.34 (ТЗ п. 6.2): мини-анкета перед повторным замером === */}
+      <ReFitFeedbackModal
+        open={refitModalOpen}
+        onOpenChange={setRefitModalOpen}
+        onConfirm={startRefit}
+      />
     </div>
   );
 }

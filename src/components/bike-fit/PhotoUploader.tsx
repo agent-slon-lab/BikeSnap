@@ -110,21 +110,74 @@ export function PhotoUploader({
   );
 
   if (currentPhotoUrl) {
+    // v1.14.34 (ТЗ п. 5.1): под предпросмотром кадра — группа кнопок на ВСЕХ
+    // этапах с фото: [📷 Переснять] [📁 Выбрать из галереи] [🗑️ Удалить].
+    // Раньше была только «Удалить» — для пересъёмки приходилось сначала
+    // удалять фото, потом загружать заново.
     return (
-      <div className="flex items-center justify-between gap-2 rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/40 px-4 py-3">
-        <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400 min-w-0">
-          <ImageIcon className="size-4 shrink-0" />
-          <span className="text-sm font-medium truncate">Фото загружено</span>
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/40 px-4 py-3">
+          <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400 min-w-0">
+            <ImageIcon className="size-4 shrink-0" />
+            <span className="text-sm font-medium truncate">Фото загружено</span>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={openCamera}
+              title="Снять новое фото камерой (с помощником ракурса)"
+            >
+              <Camera className="size-4" />
+              Переснять
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => inputRef.current?.click()}
+              title="Загрузить другое фото из галереи"
+            >
+              <Upload className="size-4" />
+              Из галереи
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onClear}
+              className="text-muted-foreground hover:text-foreground"
+              title="Удалить фото и все вычисленные по нему значения"
+            >
+              <X className="size-4" />
+              Удалить
+            </Button>
+          </div>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onClear}
-          className="text-muted-foreground hover:text-foreground shrink-0"
-        >
-          <X className="size-4" />
-          Удалить
-        </Button>
+
+        {/* Камера доступна и для пересъёмки (тот же помощник ракурса) */}
+        <CameraCapture
+          open={cameraOpen}
+          onOpenChange={setCameraOpen}
+          onCapture={handleFile}
+          label={label}
+        />
+
+        {/* Скрытый input для «Из галереи» */}
+        <input
+          ref={inputRef}
+          type="file"
+          accept={ACCEPTED_TYPES.join(",")}
+          onChange={onInputChange}
+          className="sr-only"
+        />
+
+        {error && (
+          <div className="flex items-start gap-2 rounded-lg border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 px-4 py-3 text-sm text-rose-700 dark:text-rose-400">
+            <AlertCircle className="size-4 mt-0.5 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
       </div>
     );
   }

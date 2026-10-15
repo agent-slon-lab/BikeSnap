@@ -250,6 +250,56 @@ export function getCleanRiderKeypoints(
   };
 }
 
+// ==================================================================
+// v1.14.34 — PERSON SCORE: валидация «фото с человеком» vs «фото вела»
+// (ТЗ «Architecture, Geometry Engine & Pose Validation Refactoring», п. 5.2/5.3)
+// ==================================================================
+
+/**
+ * Порог «человек не найден» (ТЗ п. 5.2): средняя visibility ключевых
+ * суставов НИЖЕ → на фото нет велосипедиста, расчёт блокируется.
+ */
+export const PERSON_MIN_SCORE = 0.5;
+
+/**
+ * Порог «на фото велосипеда обнаружен человек» (ТЗ п. 5.3): фото Шага 2
+ * обязано быть БЕЗ всадника — score ВЫШЕ означает, что человек в кадре.
+ */
+export const PERSON_BIKE_PHOTO_MAX_SCORE = 0.7;
+
+/**
+ * Средняя visibility «ядра тела» по MediaPipe (poseLandmarksScore из ТЗ).
+ *
+ * Берутся 8 опорных суставов: оба плеча, оба бедра, оба колена, обе
+ * лодыжки — именно они обязаны быть видимы на снимке «велосипедист
+ * верхом» (Шаг 1) и почти гарантированно отсутствуют на фото чистого
+ * велосипеда (Шаг 2). Отсутствующая точка считается visibility = 0,
+ * поэтому «нашлась только рука в углу» даст низкий score.
+ *
+ * Используется:
+ *  - Шаг 1 (фото с человеком): score < PERSON_MIN_SCORE → блок расчёта
+ *    + модалка «Человек не найден на фото»;
+ *  - Шаг 2 (фото вела): score > PERSON_BIKE_PHOTO_MAX_SCORE →
+ *    предупреждение «На фото обнаружен человек».
+ */
+export function getPoseVisibilityScore(
+  landmarks: (Point | undefined)[] | null | undefined
+): number {
+  if (!landmarks || landmarks.length === 0) return 0;
+  const ids = [
+    POSE_LANDMARKS.LEFT_SHOULDER,
+    POSE_LANDMARKS.RIGHT_SHOULDER,
+    POSE_LANDMARKS.LEFT_HIP,
+    POSE_LANDMARKS.RIGHT_HIP,
+    POSE_LANDMARKS.LEFT_KNEE,
+    POSE_LANDMARKS.RIGHT_KNEE,
+    POSE_LANDMARKS.LEFT_ANKLE,
+    POSE_LANDMARKS.RIGHT_ANKLE,
+  ];
+  const sum = ids.reduce((s, i) => s + (landmarks[i]?.visibility ?? 0), 0);
+  return sum / ids.length;
+}
+
 /**
  * Скалярное произведение
  */

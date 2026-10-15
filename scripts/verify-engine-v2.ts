@@ -61,16 +61,27 @@ check("SH (лог: 706, поворот-инвариантен)", r1.metricsMm.sa
 //   Stack = 1549.6px × 0.39255 = 608   (старый 594 = вертикаль в заваленном кадре)
 //   Reach = 1044.8px × 0.39255 = 410   (старый 430)
 //   STA/HTA = сырой угол − tilt: 72.9−2.0 = 70.9; 72.3−2.0 = 70.3
-check("ETT (выровненная система)", r1.metricsMm.ett, 620, 3);
+// v2.3: ось ETT — линия bb→saddleMount (ТЗ п. 2.3). Число: линия седла длиннее
+// трубы ⇒ чуть другой угол ⇒ ETT 625 вместо 620 (ось bb→stTop). Ручная проверка:
+//   backPerUp(седла) = |Δx|/|Δy| по rot: (0.6795−0.5621)·W / (0.6810−0.1864)·H → 8.56px подъёма
+//   ETT = Reach + Stack·cot(θ_седла) = 410 + 608 × 0.354 ≈ 625
+check("ETT (выровненная, ось bb→saddleMount)", r1.metricsMm.ett, 625, 3);
 check("Reach (выровненная система)", r1.metricsMm.reach, 410, 3);
 check("Stack (выровненная система)", r1.metricsMm.stack, 608, 3);
 check("WB (лог: 1079)", r1.metricsMm.wheelbase, 1080, 3);
 check("STA (лог 72.9 − tilt 2.0)", r1.anglesDeg.seatTubeAngle, 70.9, 0.5);
 check("HTA (лог 72.3 − tilt 2.0)", r1.anglesDeg.headTubeAngle, 70.3, 0.5);
 check("ettDirect (выровненная)", r1.extendedMm.ettDirect, 565, 3);
-// Внутренняя согласованность определений: ETT = Reach + Stack / tan(STA)
-const ettFromFormula = r1.metricsMm.reach + r1.metricsMm.stack / Math.tan((r1.anglesDeg.seatTubeAngle * Math.PI) / 180);
-check("ETT = Reach + Stack/tan(STA)", ettFromFormula, r1.metricsMm.ett, 3);
+// Внутренняя согласованность определений (v2.3): ETT по линии bb→saddleMount:
+// ETT = Reach + Stack × cot(θ_седла), θ_седла — угол линии bb→saddleMount
+// в выровненной системе. STA (по трубе) тут больше НЕ источник ETT.
+const rotBB = r1.rotated.bb;
+const rotSM = r1.rotated.saddleMount;
+const saddleBackPerUp =
+  Math.abs(rotSM.x - rotBB.x) / Math.abs(rotBB.y - rotSM.y);
+const ettFromFormula =
+  r1.metricsMm.reach + r1.metricsMm.stack * saddleBackPerUp;
+check("ETT = Reach + Stack·cot(ось седла)", ettFromFormula, r1.metricsMm.ett, 3);
 if (r1.metricsMm.stack <= 0 || r1.metricsMm.reach <= 0) {
   failed++;
   console.log(`  ✗ ПРОВАЛ: велосипед «перевёрнут» — нормализация направления сломана`);
@@ -194,13 +205,18 @@ try {
 } catch (e) {
   console.log(`  ✓ Вырожденные оси → ${e instanceof Error ? e.message.slice(0, 60) + "…" : String(e)}`);
 }
-// Инвертированный saddleMount (ниже stTop)
+// Инвертированный saddleMount (ниже stTop) — жёсткий физический гейт.
+// Нарушения живут в physicsViolations (не в warnings) — тест чинен:
+// раньше строку «НИЖЕ stTop» искали в warnings и проверка всегда падала.
 const rBad = calculateBikeGeometry(
   { ...px, saddleMount: { x: px.saddleMount.x, y: px.bb.y + 50 } },
   { fallbackWheelbaseMm: 1080 }
 );
-const invWarn = rBad.warnings.some((w) => w.includes("НИЖЕ stTop"));
-console.log(`  ${invWarn ? "✓" : "✗ ПРОВАЛ"} Инвертированный saddleMount обнаружен warning'ом`);
+const invWarn = rBad.physicsViolations.some((v) =>
+  v.title.includes("Верх седла НИЖЕ")
+);
+console.log(`  ${invWarn ? "✓" : "✗ ПРОВАЛ"} Инвертированный saddleMount обнаружен физ-гейтом`);
+if (!invWarn) failed++;
 
 console.log(`\n===== РЕЗЮМЕ =====`);
 const fallbackSummary = `fallback: SH=${r1.metricsMm.saddleHeight}/ETT=${r1.metricsMm.ett}/Reach=${r1.metricsMm.reach}/Stack=${r1.metricsMm.stack}/WB=${r1.metricsMm.wheelbase}`;

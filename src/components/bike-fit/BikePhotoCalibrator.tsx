@@ -9,7 +9,7 @@ import {
   ArrowRight,
   ArrowUpDown,
   Ruler,
-  ZoomIn,
+  AlignHorizontalJustifyCenter,
 } from "lucide-react";
 import {
   Card,
@@ -34,7 +34,6 @@ import {
   type KnownDimensionKey,
   type ComputedBikeParams,
   type ComparisonResult,
-  type PerspectiveInfo,
   type NullablePoint,
 } from "@/lib/bike-photo-scale";
 import {
@@ -58,6 +57,12 @@ import {
   confidenceColor,
   type ConfidenceAssessment,
 } from "@/lib/bike-confidence";
+import {
+  getPoseVisibilityScore,
+  PERSON_BIKE_PHOTO_MAX_SCORE,
+} from "@/lib/bike-fit";
+import { computeWheelRatioFromKeypoints, type WheelRatioPoints } from "@/lib/bike-wheel-ratio";
+import { usePoseLandmarker } from "@/hooks/use-pose-landmarker";
 import {
   calculateAutoFitCalibration,
   type CalibrationResult,
@@ -105,7 +110,13 @@ interface BikePhotoCalibratorProps {
    * каждого расчёта ядра (payload) и при сбросе (null): замена/очистка
    * фото, старт разметки, ошибка движка.
    */
-  onScaleInfo?: (info: { scaleMmPerPx: number; scaleSource: string; frameTiltDeg: number } | null) => void;
+  onScaleInfo?: (info: {
+    scaleMmPerPx: number;
+    scaleSource: string;
+    frameTiltDeg: number;
+    /** v1.14.34 (ТЗ п. 5.4): пропорция wheelbase/диаметр по разметке фото вела */
+    wheelRatio?: number | null;
+  } | null) => void;
 }
 
 /** Сжать изображение до maxDim по длинной стороне, JPEG quality */
@@ -224,8 +235,6 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     setDebugLog([]);
     setPlacementMode(false);
     setPlacementPointKey(null);
-    setPerspectiveInfo(null);
-    setDualScale(null);
     setAutoCalibration(null);
     setConfidenceAssessment(null);
     setEngineWarnings([]);
@@ -251,17 +260,60 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
   const [appliedSummary, setAppliedSummary] = useState<string | null>(null);
   const [placementMode, setPlacementMode] = useState(false);
   const [placementPointKey, setPlacementPointKey] = useState<keyof BikeKeyPoints | null>(null);
-  // Перспектива: только ИНФОРМАЦИЯ для dual scale — интерактивная коррекция
-  // удалена: ядро v2 выравнивает кадр автоматически (rotation-first)
-  const [perspectiveInfo, setPerspectiveInfo] = useState<PerspectiveInfo | null>(null);
+  // v1.14.34 (ТЗ п. 2.4): UI-стейты perspectiveInfo/dualScale УДАЛЕНЫ —
+  // выравнивание и перспективная компенсация происходят ТИХО в ядре
+  // (rotation-first + градиент масштаба), в UI — единственная нейтральная
+  // плашка «Горизонт кадра автоматически выровнен». Инженерные числа
+  // (ΔY, радианы, % перспективы) — только в debug-логе: локальные
+  // perspective/computedDualScale внутри runCalibration.
   // NOTE: useMultiCalibration/multiCalibration УБРАНО — теперь авто-выбор primary
   // (через calculateAutoFitCalibration из bike-calibration-helper.ts).
-  // Dual scale + confidence (без авто-выравнивания — точки НЕ мутируются)
-  const [dualScale, setDualScale] = useState<DualScale | null>(null);
   // Авто-калибровка: scale + tiltAngleRad (математическая компенсация, БЕЗ поворота точек)
   const [autoCalibration, setAutoCalibration] = useState<CalibrationResult | null>(null);
   // ЯДРО v2 (bike-geometry-engine): предупреждения и источник рабочего масштаба
   const [engineWarnings, setEngineWarnings] = useState<string[]>([]);
+
+  // === v1.14.34 (ТЗ п. 5.3): валидация фото Шага 2 — «ТОЛЬКО велосипед без всадника» ===
+  // MediaPipe (та же модель, что и Шаг 1) проверяет каждое загруженное фото:
+  // poseLandmarksScore > 0.7 → на фото человек → предупреждение (не блокер —
+  // геометрию считать можно, но сравнение пропорций будет шумным).
+  const { detect: poseDetect } = usePoseLandmarker();
+  const [personOnPhotoScore, setPersonOnPhotoScore] = useState<number | null>(null);
+  const personCheckUrlRef = useRef<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!photoUrl) {
+      setPersonOnPhotoScore(null);
+      personCheckUrlRef.current = null;
+      return;
+    }
+    if (personCheckUrlRef.current === photoUrl) return;
+    personCheckUrlRef.current = photoUrl;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      try {
+        const result = poseDetect(img);
+        const lms = result?.landmarks?.[0];
+        // MediaPipe-landmarks структурно совместимы с Point (x/y/visibility)
+        const score = lms
+          ? getPoseVisibilityScore(lms as unknown as Array<{ x: number; y: number; visibility?: number } | undefined>)
+          : 0;
+        setPersonOnPhotoScore(score);
+      } catch {
+        setPersonOnPhotoScore(null);
+      }
+    };
+    img.onerror = () => {
+      if (!cancelled) setPersonOnPhotoScore(null);
+    };
+    img.src = photoUrl;
+    return () => {
+      cancelled = true;
+    };
+  }, [photoUrl, poseDetect]);
+  const personOnBikePhoto =
+    personOnPhotoScore != null && personOnPhotoScore > PERSON_BIKE_PHOTO_MAX_SCORE;
   const [engineResult, setEngineResult] = useState<BikeGeometryResult | null>(null);
   const [scaleSourceInfo, setScaleSourceInfo] = useState<{
     scaleMmPerPx: number;
@@ -405,8 +457,6 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     setDebugLog([]);
     setPlacementMode(false);
     setPlacementPointKey(null);
-    setPerspectiveInfo(null);
-    setDualScale(null);
     setAutoCalibration(null);
     setConfidenceAssessment(null);
     setEngineWarnings([]);
@@ -448,8 +498,6 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     setDebugLog([]);
     setPlacementMode(false);
     setPlacementPointKey(null);
-    setPerspectiveInfo(null);
-    setDualScale(null);
     setAutoCalibration(null);
     setConfidenceAssessment(null);
     setEngineWarnings([]);
@@ -629,7 +677,6 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
 
       // Детекция перспективы по осям колёс
       const perspective = detectPerspective(pts);
-      setPerspectiveInfo(perspective);
       if (perspective) {
         setDebugLog((prev) => [
           ...prev,
@@ -798,10 +845,21 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
       });
       // v1.14.29 (Issue #6): телеметрия масштаба — в карточку велика,
       // оттуда в отчёт отладки (telemetry.calibration)
+      // v1.14.34 (ТЗ п. 5.4): + пропорция wheelbase/диаметр по разметке —
+      // Bike Match Validation сравнит её с фото райдера (Шаг 1)
+      const bikeWheelRatio = computeWheelRatioFromKeypoints({
+        rearAxle: pts.rearAxle,
+        frontAxle: pts.frontAxle,
+        rearWheelTop: pts.rearWheelTop,
+        frontWheelTop: pts.frontWheelTop,
+        imgWidth: imgSize.width,
+        imgHeight: imgSize.height,
+      });
       onScaleInfoRef.current?.({
         scaleMmPerPx: engine.scaleMmPerPx,
         scaleSource: engine.scaleSource,
         frameTiltDeg: engine.anglesDeg.frameTilt,
+        wheelRatio: bikeWheelRatio,
       });
 
       setDebugLog((prev) => [
@@ -926,7 +984,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
         ``,
         `  Вычисленные параметры (выровненная система, мм):`,
         `    SH (BB→верх седла вдоль трубы) = ${params.saddleHeight ?? "null"} мм`,
-        `    ETT (пересечение горизонали HT с осью ST) = ${params.ett ?? "null"} мм`,
+        `    ETT (горизонталь htTop → линия bb→saddleMount, ТЗ п. 2.3) = ${params.ett ?? "null"} мм`,
         `    ETT прямой (горизонталь ST→HT) = ${params.ettDirect ?? "null"} мм`,
         `    Reach (горизонталь BB→${capPlaced ? "топкап" : "верх стакана — топкап не размечен"}) = ${params.reach ?? "null"} мм`,
         `    Stack (вертикаль BB→${capPlaced ? "топкап" : "верх стакана — топкап не размечен"}) = ${params.stack ?? "null"} мм`,
@@ -972,7 +1030,6 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
           height: imgSize.height,
         });
       }
-      setDualScale(computedDualScale);
       if (computedDualScale) {
         setDebugLog((prev) => [
           ...prev,
@@ -1085,8 +1142,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
 
       // === CONFIDENCE SCORE (вместо null-валидации) ===
       // ВАЖНО: используем СВЕЖУЮ перспективу из этой же итерации (локальная
-      // переменная perspective), а не perspectiveInfo из стейта — тот на один
-      // рендер отстаёт и на первом прогоне всегда null.
+      // переменная perspective, вычисленная выше в runCalibration).
       const photoDistorted = !!(perspective && perspective.needsCorrection && !computedDualScale);
       const assessment = assessConfidence(
         params,
@@ -1493,7 +1549,7 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
           if (next === "rearWheelTop" || next === "frontWheelTop") {
             setDebugLog((prev) => [
               ...prev.slice(-80),
-              `[${new Date().toLocaleTimeString()}] 📌 Переход к опциональной точке ${next} (для dual scale)`,
+              `[${new Date().toLocaleTimeString()}] 📌 Переход к опциональной точке ${next} (точность масштаба)`,
             ]);
           }
         } else {
@@ -1546,6 +1602,23 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
               placementPointKey={placementPointKey}
             />
 
+            {/* v1.14.34 (ТЗ п. 5.3): на фото Шага 2 обнаружен человек */}
+            {personOnBikePhoto && (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+                <AlertCircle className="size-4 mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-medium">
+                    На фото обнаружен человек
+                  </p>
+                  <p className="mt-0.5 text-xs">
+                    На Шаге 2 требуется фото ТОЛЬКО велосипеда без всадника.
+                    Расчёт геометрии рамы по такому кадру будет неточным —
+                    переснимите велосипед без человека.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Панель режима разметки */}
             {placementMode && keyPoints && (
               <div className="rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 p-3 space-y-3">
@@ -1576,8 +1649,8 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                     { key: "htTopCap", label: "Крышка рулевой", color: "#10b981", hint: "Крышка рулевой (топкап) — ИМЕННО до неё считаются Stack и Reach", optional: false },
                     { key: "rearAxle", label: "Ось заднего колеса", color: "#a855f7", hint: "Центр оси заднего колеса", optional: false },
                     { key: "frontAxle", label: "Ось переднего колеса", color: "#ec4899", hint: "Центр оси переднего колеса", optional: false },
-                    { key: "rearWheelTop", label: "Верх заднего колеса", color: "#7c3aed", hint: "ОПЦИОНАЛЬНО: верх покрышки заднего колеса (для dual scale)", optional: true },
-                    { key: "frontWheelTop", label: "Верх переднего колеса", color: "#be185d", hint: "ОПЦИОНАЛЬНО: верх покрышки переднего колеса (для dual scale)", optional: true },
+                    { key: "rearWheelTop", label: "Верх заднего колеса", color: "#7c3aed", hint: "ОПЦИОНАЛЬНО: верх покрышки заднего колеса — повышает точность масштаба (ядро учитывает автоматически)", optional: true },
+                    { key: "frontWheelTop", label: "Верх переднего колеса", color: "#be185d", hint: "ОПЦИОНАЛЬНО: верх покрышки переднего колеса — повышает точность масштаба (ядро учитывает автоматически)", optional: true },
                   ] as const).map(({ key, label, color, hint, optional }) => {
                     const pt = keyPoints[key as keyof BikeKeyPoints] as NullablePoint | undefined;
                     const isPlaced = pt && pt.x != null && pt.y != null;
@@ -1719,40 +1792,18 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                   </div>
                 )}
 
-                {/* ===== DUAL SCALE — компенсация перспективы по двум колёсам ===== */}
-                {dualScale ? (
-                  <div className="rounded-lg border-l-4 border-cyan-400 dark:border-cyan-600 bg-cyan-50 dark:bg-cyan-950/30 p-3 space-y-2">
-                    <div className="flex items-start gap-2">
-                      <ZoomIn className="size-4 mt-0.5 shrink-0 text-cyan-500" />
-                      <div className="flex-1 space-y-1">
-                        <p className="text-sm font-semibold text-cyan-700 dark:text-cyan-400">
-                          Dual Scale активен
-                        </p>
-                        <p className="text-xs text-muted-foreground leading-relaxed">
-                          {dualScale.description}
-                        </p>
-                        <div className="text-[11px] text-muted-foreground mt-1">
-                          Перспектива: <b>{(dualScale.perspectiveSeverity * 100).toFixed(1)}%</b> — масштаб подстраивается под каждое колесо отдельно
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ) : perspectiveInfo && perspectiveInfo.needsCorrection && (
-                  /* Подсказка про dual scale когда перспектив есть, но точки верха не размечены */
-                  <div className="rounded-lg border-l-4 border-cyan-300 dark:border-cyan-700 bg-cyan-50/50 dark:bg-cyan-950/20 p-3 space-y-2">
-                    <div className="flex items-start gap-2">
-                      <ZoomIn className="size-4 mt-0.5 shrink-0 text-cyan-500" />
-                      <div className="flex-1 space-y-1">
-                        <p className="text-sm font-semibold text-cyan-700 dark:text-cyan-400">
-                          💡 Отметь верх колёс для dual scale
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Перспектива обнаружена. Если отметить две опциональные точки
-                          (верх заднего и верх переднего колеса) —dual scale компенсирует
-                          разницу в размерах колёс и улучшит точность на 10–15 мм.
-                        </p>
-                      </div>
-                    </div>
+                {/* ===== Тихая плашка выравнивания (ТЗ п. 2.4) =====
+                    Раньше здесь были две инженерные карточки: «Dual Scale
+                    активен» с процентами перспективы и «Отметь верх колёс
+                    для dual scale». По ТЗ выравнивание происходит ТИХО:
+                    ядро всегда само выравнивает горизонт по осям колёс
+                    ДО всех расчётов, в UI — одна нейтральная плашка.
+                    Инженерные детали (ΔY, радианы, % перспективы) — только
+                    в свёрнутом debug-логе для отчётов. */}
+                {engineResult && engineResult.physicsViolations.length === 0 && (
+                  <div className="flex items-center gap-2 rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50/60 dark:bg-emerald-950/20 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
+                    <AlignHorizontalJustifyCenter className="size-4 shrink-0" />
+                    <span>✓ Горизонт кадра автоматически выровнен</span>
                   </div>
                 )}
 

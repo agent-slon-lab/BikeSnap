@@ -43,6 +43,54 @@ export interface PersistedViewPhoto {
   savedAt: number | null;
 }
 
+/**
+ * v1.14.34 (ТЗ п. 6.2): ответы мини-анкеты перед повторным замером
+ * (Re-fit Loop). Заполняется в ReFitFeedbackModal, хранится рядом
+ * с прогонами — попадает в заголовок сравнения «Было → Стало».
+ */
+export interface RefitMeta {
+  /** Изменил высоту седла */
+  saddleChanged: boolean;
+  /** На сколько мм (со знаком: + поднял / − опустил); null если не указано */
+  saddleDeltaMm: number | null;
+  /** Сдвинул седло / поменял вынос */
+  movedSaddleOrStem: boolean;
+  /** Настройки не менял (повторный замер для контроля) */
+  noChanges: boolean;
+  /** Субъективный комфорт после изменений */
+  comfort: "better" | "same" | "pain";
+  /** Когда запущен повторный замер (мс) */
+  startedAt: number;
+}
+
+/**
+ * v1.14.34 (ТЗ п. 6): снимок ПРОШЛОГО прогона для сравнения «Было → Стало»
+ * и отмены повторного замера. Хранит анализы/landmarks (метрики) и photoData
+ * (dataURL ≤1280px — переживает refresh): cancelRefit возвращает прогон
+ * ЦЕЛИКОМ. При переполнении localStorage safeStorage деградирует штатно
+ * (предупреждение, данные остаются только в памяти сессии).
+ */
+export interface RefitRunSnapshot {
+  savedAt: number;
+  views: {
+    side: {
+      photoData: string | null;
+      landmarks: Point[] | null;
+      analysis: BikeFitAnalysis | BackViewAnalysis | FrontViewAnalysis | null;
+    } | null;
+    back: {
+      photoData: string | null;
+      landmarks: Point[] | null;
+      analysis: BikeFitAnalysis | BackViewAnalysis | FrontViewAnalysis | null;
+    } | null;
+    front: {
+      photoData: string | null;
+      landmarks: Point[] | null;
+      analysis: BikeFitAnalysis | BackViewAnalysis | FrontViewAnalysis | null;
+    } | null;
+  };
+}
+
 const emptyView = (): PersistedViewPhoto => ({
   photoData: null,
   landmarks: null,
@@ -67,6 +115,24 @@ interface PhotoAnalysisState {
    */
   bikeId: string | null;
   views: Record<ViewType, PersistedViewPhoto>;
+  /**
+   * v1.14.34 (ТЗ п. 5.4): пропорция wheelbase/diametr колеса, измеренная
+   * авто-детектором на боковом фото райдера (Шаг 1). Сравнивается с
+   * photoCalib.wheelRatio фото вела (Шаг 2); > 12% — предупреждение
+   * «возможно, фото двух разных велосипедов». Стирается вместе с фото.
+   */
+  riderPhotoWheelRatio: number | null;
+  setRiderPhotoWheelRatio: (ratio: number | null) => void;
+  /**
+   * v1.14.34 (ТЗ п. 6): снимок прошлого прогона + анкета изменений.
+   * startRefit архивирует текущие анализы и очищает ракурсы для нового
+   * замера; cancelRefit возвращает всё обратно (защита от случайного клика).
+   * НЕ трогает геометрию рамы (Шаг 2) — ТЗ: «НЕ сбрасывать геометрию рамы».
+   */
+  previousRun: RefitRunSnapshot | null;
+  refitMeta: RefitMeta | null;
+  startRefit: (meta: RefitMeta) => void;
+  cancelRefit: () => void;
   /**
    * v1.14.30: вызывается из PhotoAnalysisSection при маунте/смене активного
    * велика. Тот же id — идемпотентный no-op; другой id — жёсткий сброс всех
@@ -127,6 +193,78 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
     (set) => ({
       bikeId: null,
       views: emptyViews(),
+      riderPhotoWheelRatio: null,
+      previousRun: null,
+      refitMeta: null,
+
+      setRiderPhotoWheelRatio: (ratio) =>
+        set(() => ({
+          riderPhotoWheelRatio:
+            ratio != null && Number.isFinite(ratio) && ratio > 0 ? ratio : null,
+        })),
+
+      // v1.14.34 (ТЗ п. 6.1): «Измерить новую посадку» НЕ сбрасывает геометрию
+      // рамы — архивируем ТОЛЬКО анализы шага 4 и чистим ракурсы под новые фото.
+      startRefit: (meta) =>
+        set((s) => {
+          const snap = (v: PersistedViewPhoto) =>
+            v.analysis || v.landmarks || v.photoData
+              ? {
+                  photoData: v.photoData,
+                  landmarks: v.landmarks,
+                  analysis: v.analysis,
+                }
+              : null;
+          const previousRun: RefitRunSnapshot = {
+            savedAt: Date.now(),
+            views: {
+              side: snap(s.views.side),
+              back: snap(s.views.back),
+              front: snap(s.views.front),
+            },
+          };
+          return {
+            previousRun,
+            refitMeta: meta,
+            views: emptyViews(),
+            riderPhotoWheelRatio: null,
+          };
+        }),
+
+      // Отмена повторного замера: возвращаем архив ЦЕЛИКОМ (фото + метрики),
+      // анкету стираем. Ракурсы без снимка (были пустые) остаются пустыми.
+      cancelRefit: () =>
+        set((s) => {
+          if (!s.previousRun) return { refitMeta: null };
+          const p = s.previousRun.views;
+          const restored = (
+            snap:
+              | {
+                  photoData: string | null;
+                  landmarks: Point[] | null;
+                  analysis: unknown;
+                }
+              | null
+          ): PersistedViewPhoto =>
+            snap
+              ? {
+                  ...emptyView(),
+                  photoData: snap.photoData && !snap.photoData.startsWith("blob:") ? snap.photoData : null,
+                  landmarks: snap.landmarks,
+                  analysis:
+                    (snap.analysis as BikeFitAnalysis | BackViewAnalysis | FrontViewAnalysis | null) ?? null,
+                }
+              : emptyView();
+          return {
+            previousRun: null,
+            refitMeta: null,
+            views: {
+              side: restored(p.side),
+              back: restored(p.back),
+              front: restored(p.front),
+            },
+          };
+        }),
 
       // v1.14.30 (Stale State): привязка ракурсов к велику. Сменился велик —
       // жёсткий сброс ВСЕХ фото и анализов: калибровка/углы Bike_A запрещены
@@ -136,7 +274,15 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
       syncBikeId: (bikeId) =>
         set((s) => {
           if (s.bikeId === bikeId) return {}; // тот же велик — ничего не трогаем
-          return { bikeId, views: emptyViews() };
+          // v1.14.34: вместе с ракурсами стираются и артефакты Re-fit —
+          // снапшот прогона и пропорции принадлежат прежнему велику.
+          return {
+            bikeId,
+            views: emptyViews(),
+            riderPhotoWheelRatio: null,
+            previousRun: null,
+            refitMeta: null,
+          };
         }),
 
       setViewPhoto: (view, { photoData, captureMeta }) =>
@@ -180,7 +326,13 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
     {
       name: "bikefit-photo-analysis",
       storage: createJSONStorage(() => safeStorage),
-      partialize: (state) => ({ bikeId: state.bikeId, views: state.views }),
+      partialize: (state) => ({
+        bikeId: state.bikeId,
+        views: state.views,
+        riderPhotoWheelRatio: state.riderPhotoWheelRatio,
+        previousRun: state.previousRun,
+        refitMeta: state.refitMeta,
+      }),
       // Гидрация: выбрасываем мёртвые blob:-ссылки, чиним битые структуры.
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<PhotoAnalysisState>;
@@ -200,7 +352,30 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
         // v1.14.30: bikeId из персиста (string|null). Если пользователь
         // обновил страницу — привязка ракурсов к велику сохраняется.
         const bikeId = typeof p.bikeId === "string" ? p.bikeId : null;
-        return { ...current, bikeId, views };
+        // v1.14.34: санитизация Re-fit-артефактов из персиста
+        const riderPhotoWheelRatio =
+          typeof p.riderPhotoWheelRatio === "number" &&
+          Number.isFinite(p.riderPhotoWheelRatio) &&
+          p.riderPhotoWheelRatio > 0
+            ? p.riderPhotoWheelRatio
+            : null;
+        const refitMeta =
+          p.refitMeta && typeof p.refitMeta === "object" && typeof (p.refitMeta as RefitMeta).startedAt === "number"
+            ? (p.refitMeta as RefitMeta)
+            : null;
+        const prevSnap = p.previousRun && typeof p.previousRun === "object" ? (p.previousRun as RefitRunSnapshot) : null;
+        const previousRun =
+          prevSnap && typeof prevSnap.savedAt === "number"
+            ? {
+                savedAt: prevSnap.savedAt,
+                views: {
+                  side: prevSnap.views?.side ?? null,
+                  back: prevSnap.views?.back ?? null,
+                  front: prevSnap.views?.front ?? null,
+                },
+              }
+            : null;
+        return { ...current, bikeId, views, riderPhotoWheelRatio, previousRun, refitMeta };
       },
     }
   )

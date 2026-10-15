@@ -54,6 +54,20 @@
  *    невозможна.
  * h) stackReachRatio = null (а не фейковый 0), когда Stack/Reach невалидны.
  *
+ * v2.3 (ТЗ «Geometry Engine & Pose Validation Refactoring», п. 2):
+ * j) Ось ETT — СТРОГО по ТЗ: горизонтальный отрезок от верхнего торца
+ *    рулевого стакана (htTop) до пересечения с вектором подседельной
+ *    трубы (bb → saddleMount). Линия «каретка—седло» длиннее трубы
+ *    (≈700 мм против ≈450 мм), поэтому угловая ошибка от промаха
+ *    верхней точки меньше; заодно ось ETT совпадает с отрезком
+ *    калибровки SH. Фолбэки: bb → stTop (saddleMount вырожден),
+ *    затем горизонталь stTop → htTop (обе оси вырождены).
+ * k) Выравнивание горизонта происходит ТИХО: поворот по оси колёс
+ *    выполняется всегда до всех расчётов, UI показывает единственную
+ *    нейтральную плашку («Горизонт кадра автоматически выровнен»);
+ *    инженерные детали (ΔY, радианы, проценты перспективы) живут
+ *    только в debug-логе для отчётов.
+ *
  * v2.2 (перспективный градиент масштаба — интеграция dual-scale идеи):
  * i) Единый масштаб консенсуса — это масштаб В ТОЧКЕ отрезка-источника
  *    (калибровки). Между осями колёс масштаб плавно меняется: переднее
@@ -440,27 +454,45 @@ export function calculateBikeGeometry(
   //     толщина набивки) не искажает высоту. Поворот кадра длину
   //     осевого отрезка не меняет;
   //   - wheelbase: строго по X (оси теперь горизонтальны);
-  //   - ett: ПЕРЕСЕЧЕНИЕ горизонтали htTop с осью подседельной трубы
-  //     (тот же определение, что у метрики ETT ниже — иначе калибровка
-  //     по ETT и отчётный ETT разошлись бы на слагаемое Stack/tan(STA));
+  //   - ett: ПЕРЕСЕЧЕНИЕ горизонтали htTop с линией bb → saddleMount
+  //     (v2.3, ТЗ п. 2.3 — единое определение с метрикой ETT ниже, иначе
+  //     калибровка по ETT и отчётный ETT разошлись бы на слагаемое
+  //     Stack/tan(оси)); фолбэк оси — bb → stTop;
   //   - wheelDiameter: не измерим по 7-точечной схеме.
   //
   // ETT-px (пересечение) считаем ДО pxFor — используется и для калибровки
   // по ETT, и как метрика metricsMm.ett.
-  const ettAxisDx = Math.abs(rot.stTop.x - rot.bb.x);
-  const ettAxisDyUp = Math.abs(rot.bb.y - rot.stTop.y);
+  //
+  // v2.3 (ТЗ п. 2.3): ось пересечения — линия bb → saddleMount (реальная
+  // линия «каретка—седло»). Фолбэки: bb → stTop (saddleMount вырожден —
+  // слишком близко к bb), затем горизонталь stTop → htTop (обе оси
+  // вырождены; предупреждение в UI).
+  const smAxisLen = distance(rot.bb, rot.saddleMount);
+  const ettSmDx = Math.abs(rot.saddleMount.x - rot.bb.x);
+  const ettSmDyUp = Math.abs(rot.bb.y - rot.saddleMount.y);
+  const ettStDx = Math.abs(rot.stTop.x - rot.bb.x);
+  const ettStDyUp = Math.abs(rot.bb.y - rot.stTop.y);
   let ettPx: number;
   let ettFallbackUsed = false;
   /** Середина ETT-отрезка по X — точка, в которой берётся локальный масштаб (v2.2) */
   let ettMidX: number;
-  if (ettAxisDyUp > 1e-6) {
-    // Наклон оси: на каждый px подъёма ось уходит назад на ettBackPerUp
-    const ettBackPerUp = ettAxisDx / ettAxisDyUp;
+  if (smAxisLen >= MIN_CALIB_PX && ettSmDyUp > 1e-6) {
+    // Наклон линии седла: на каждый px подъёма ось уходит назад на backPerUp
+    const ettBackPerUp = ettSmDx / ettSmDyUp;
     const ettIntersectX = rot.bb.x - ettBackPerUp * (rot.bb.y - rot.htTop.y);
     ettPx = Math.abs(rot.htTop.x - ettIntersectX);
     ettMidX = (rot.htTop.x + ettIntersectX) / 2;
+  } else if (ettStDyUp > 1e-6 && distance(rot.bb, rot.stTop) >= MIN_CALIB_PX) {
+    // Фолбэк: saddleMount вырожден — ось подседельной трубы bb → stTop
+    const ettBackPerUp = ettStDx / ettStDyUp;
+    const ettIntersectX = rot.bb.x - ettBackPerUp * (rot.bb.y - rot.htTop.y);
+    ettPx = Math.abs(rot.htTop.x - ettIntersectX);
+    ettMidX = (rot.htTop.x + ettIntersectX) / 2;
+    warnings.push(
+      "Точка «Верх седла» вырождена (совпадает с кареткой) — ETT рассчитан по оси подседельной трубы (bb → stTop). Проверьте точку saddleMount."
+    );
   } else {
-    // Вырожденный случай — вертикальная подседельная: ETT = горизонталь ST→HT
+    // Вырожденный случай — обе оси непригодны: ETT = горизонталь ST→HT
     ettPx = Math.abs(rot.htTop.x - rot.stTop.x);
     ettMidX = (rot.htTop.x + rot.stTop.x) / 2;
     ettFallbackUsed = true;
@@ -900,13 +932,13 @@ export function calculateBikeGeometry(
   }
 
   // ETT (Effective Top Tube):
-  // Проекция от верха рулевого стакана по горизонтали до пересечения
-  // с осью подседельной трубы — ettPx уже рассчитан выше (единое
-  // определение для калибровки по ETT и для метрики).
+  // Горизонталь от верха рулевого стакана до пересечения с линией
+  // bb → saddleMount (v2.3, ТЗ п. 2.3) — ettPx уже рассчитан выше
+  // (единое определение для калибровки по ETT и для метрики).
   const ettMm = ettPx * scaleAt(ettMidX);
   if (ettFallbackUsed) {
     warnings.push(
-      "Подседельная ось вертикальна — ETT принят равным горизонтали ST→HT."
+      "Подседельные оси вырождены — ETT принят равным горизонтали ST→HT. Проверьте точки bb/stTop/saddleMount."
     );
   }
 
