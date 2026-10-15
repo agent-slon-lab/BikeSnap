@@ -525,6 +525,7 @@ export function PhotoAnalysisSection() {
               {bikePhotoWheelRatio != null && ` у вела ${bikePhotoWheelRatio.toFixed(2)}${riderPhotoWheelRatio != null ? `, у фото с райдером ${riderPhotoWheelRatio.toFixed(2)}` : ""}.`}
               {" "}
               Убедитесь, что оба фото сняты одного и того же велосипеда с одного ракурса. Сравнение с рамой будет ненадёжным.
+              {` `}Если вы сменили велосипед — переснимите и Шаг 1 (фото с райдером): сейчас в сравнении участвуют кадры разных велосипедов.
             </p>
           </div>
         </div>

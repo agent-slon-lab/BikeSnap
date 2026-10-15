@@ -91,8 +91,14 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
               scaleMmPerPx: b.photoCalib.scaleMmPerPx,
               scaleSource: b.photoCalib.scaleSource,
               frameTiltDeg: b.photoCalib.frameTiltDeg,
+              ...(typeof b.photoCalib.wheelRatio === "number"
+                ? { wheelRatio: b.photoCalib.wheelRatio }
+                : {}),
             }
           : null,
+        // v1.14.35: вердикт нейросети «человек на фото вела» (0..1) или
+        // null — проверка не шла. Диагностика жалоб «ИИ не понял моё фото».
+        personScore: typeof b.photoPersonScore === "number" ? b.photoPersonScore : null,
       };
     } catch {
       return null;

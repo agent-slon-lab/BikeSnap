@@ -23,6 +23,7 @@ import {
   updateBikePhoto,
   updateBikePhotoDerived,
   updateBikePhotoScale,
+  updateBikePhotoPersonScore,
   type BikeRecord,
 } from "@/lib/bike-storage";
 import type { BikeType } from "@/lib/bike-params";
@@ -516,6 +517,11 @@ export function BikeParametersForm() {
             // велика, чтобы отчёт отладки нёс scaleSource/scaleMmPerPx/наклон
             onScaleInfo={(info) => {
               if (activeBike) updateBikePhotoScale(activeBike.id, info);
+            }}
+            // v1.14.35: скор проверки «человек на фото вела» — в карточку,
+            // из неё в отчёт отладки (диагностика «ИИ не понял моё фото»)
+            onPersonScore={(score) => {
+              if (activeBike) updateBikePhotoPersonScore(activeBike.id, score);
             }}
             onPhotoChange={(photoData, keyPoints) => {
               updateBikePhoto(

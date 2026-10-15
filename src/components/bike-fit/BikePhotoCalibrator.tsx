@@ -117,6 +117,12 @@ interface BikePhotoCalibratorProps {
     /** v1.14.34 (ТЗ п. 5.4): пропорция wheelbase/диаметр по разметке фото вела */
     wheelRatio?: number | null;
   } | null) => void;
+  /**
+   * v1.14.35: скор проверки «на фото вела обнаружен человек» (0..1) —
+   * уходит в карточку велика (photoPersonScore) и в отчёт отладки.
+   * null — фото заменено/удалено либо проверка не шла (модель не готова).
+   */
+  onPersonScore?: (score: number | null) => void;
 }
 
 /** Сжать изображение до maxDim по длинной стороне, JPEG quality */
@@ -178,7 +184,7 @@ const MATCH_COLORS = {
   unknown: { bg: "bg-muted/50", border: "border-border", text: "text-muted-foreground", label: "—" },
 };
 
-export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, initialKeyPoints, onPhotoChange, onClearComputed, onScaleInfo }: BikePhotoCalibratorProps) {
+export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, initialKeyPoints, onPhotoChange, onClearComputed, onScaleInfo, onPersonScore }: BikePhotoCalibratorProps) {
   const bikeType = useBikeStore((s) => s.bikeType);
   // v1.14.29: колбэк телеметрии масштаба — через ref, чтобы не ронять
   // deps существующих useCallback/useEffect (вызовы добавлены точечно)
@@ -277,18 +283,35 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
   // MediaPipe (та же модель, что и Шаг 1) проверяет каждое загруженное фото:
   // poseLandmarksScore > 0.7 → на фото человек → предупреждение (не блокер —
   // геометрию считать можно, но сравнение пропорций будет шумным).
-  const { detect: poseDetect } = usePoseLandmarker();
+  //
+  // v1.14.35 (фикс гонки): раньше проверка запускалась по загрузке фото,
+  // и если модель WASM ещё не успела инициализироваться, detect()
+  // возвращал null → score = 0 → проверка МОЛЧА пропускалась навсегда
+  // (даже реальный всадник на фото не обнаруживался). Теперь эффект
+  // ждёт готовности landmarker'а и перезапускается, когда модель готова.
+  const { detect: poseDetect, landmarker: poseLandmarker } = usePoseLandmarker();
   const [personOnPhotoScore, setPersonOnPhotoScore] = useState<number | null>(null);
+  // v1.14.35: пользователь может отклонить предупреждение для ТЕКУЩЕГО
+  // фото — MediaPipe даёт ложные срабатывания на раме/спицах, а
+  // предупреждение разметку не блокирует
+  const [personWarningDismissed, setPersonWarningDismissed] = useState(false);
   const personCheckUrlRef = useRef<string | null>(null);
+  const onPersonScoreRef = useRef(onPersonScore);
+  onPersonScoreRef.current = onPersonScore;
   useEffect(() => {
     let cancelled = false;
     if (!photoUrl) {
       setPersonOnPhotoScore(null);
       personCheckUrlRef.current = null;
+      onPersonScoreRef.current?.(null);
       return;
     }
+    // Модель ещё не готова — проверка откладывается до её загрузки
+    if (!poseLandmarker) return;
     if (personCheckUrlRef.current === photoUrl) return;
     personCheckUrlRef.current = photoUrl;
+    // Новое фото — старый вердикт недействителен (не мигаем прошлым предупреждением)
+    setPersonOnPhotoScore(null);
     const img = new Image();
     img.onload = () => {
       if (cancelled) return;
@@ -300,18 +323,23 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
           ? getPoseVisibilityScore(lms as unknown as Array<{ x: number; y: number; visibility?: number } | undefined>)
           : 0;
         setPersonOnPhotoScore(score);
+        onPersonScoreRef.current?.(score);
       } catch {
         setPersonOnPhotoScore(null);
+        onPersonScoreRef.current?.(null);
       }
     };
     img.onerror = () => {
-      if (!cancelled) setPersonOnPhotoScore(null);
+      if (!cancelled) {
+        setPersonOnPhotoScore(null);
+        onPersonScoreRef.current?.(null);
+      }
     };
     img.src = photoUrl;
     return () => {
       cancelled = true;
     };
-  }, [photoUrl, poseDetect]);
+  }, [photoUrl, poseDetect, poseLandmarker]);
   const personOnBikePhoto =
     personOnPhotoScore != null && personOnPhotoScore > PERSON_BIKE_PHOTO_MAX_SCORE;
   const [engineResult, setEngineResult] = useState<BikeGeometryResult | null>(null);
@@ -462,6 +490,9 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     setEngineWarnings([]);
     setEngineResult(null);
     setScaleSourceInfo(null);
+    // v1.14.35: новое фото — отклонение предупреждения и старый вердикт сброшены
+    setPersonWarningDismissed(false);
+    setPersonOnPhotoScore(null);
     // v1.14.25: новое фото — авто-запись должна сработать заново даже при
     // идентичных точках/значениях (карточка могла быть очищена)
     lastAutoAppliedRef.current = "";
@@ -503,6 +534,9 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
     setEngineWarnings([]);
     setEngineResult(null);
     setScaleSourceInfo(null);
+    // v1.14.35: фото удалено — предупреждение и его отклонение сброшены
+    setPersonWarningDismissed(false);
+    setPersonOnPhotoScore(null);
     // v1.14.25: очистка сбрасывает историю авто-записи и её сводку
     lastAutoAppliedRef.current = "";
     setAppliedSummary(null);
@@ -1602,8 +1636,11 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
               placementPointKey={placementPointKey}
             />
 
-            {/* v1.14.34 (ТЗ п. 5.3): на фото Шага 2 обнаружен человек */}
-            {personOnBikePhoto && (
+            {/* v1.14.34 (ТЗ п. 5.3): на фото Шага 2 обнаружен человек.
+                v1.14.35: предупреждение можно отклонить — MediaPipe даёт
+                ложные срабатывания на раме/спицах, а разметку это
+                предупреждение не блокирует. */}
+            {personOnBikePhoto && !personWarningDismissed && (
               <div className="flex items-start gap-2 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
                 <AlertCircle className="size-4 mt-0.5 shrink-0" />
                 <div>
@@ -1613,8 +1650,17 @@ export function BikePhotoCalibrator({ measured, onAveraged, initialPhotoUrl, ini
                   <p className="mt-0.5 text-xs">
                     На Шаге 2 требуется фото ТОЛЬКО велосипеда без всадника.
                     Расчёт геометрии рамы по такому кадру будет неточным —
-                    переснимите велосипед без человека.
+                    переснимите велосипед без человека. Разметку это
+                    предупреждение не блокирует: точки ставить можно.
                   </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-2 h-7 px-2 text-xs"
+                    onClick={() => setPersonWarningDismissed(true)}
+                  >
+                    Всё равно разметить это фото
+                  </Button>
                 </div>
               </div>
             )}

@@ -56,6 +56,13 @@ export interface BikeRecord {
     /** v1.14.34 (ТЗ п. 5.4): pxWheelbase/pxWheelDiameter по фото вела */
     wheelRatio?: number;
   };
+  /**
+   * v1.14.35: скор авто-проверки «на фото вела обнаружен человек» (0..1)
+   * — ТЗ п. 5.3, порог PERSON_BIKE_PHOTO_MAX_SCORE = 0.7. Уходит в отчёт
+   * отладки (calibration.personScore): по нему видно, что именно нейросеть
+   * сказала о конкретном фото. Чистится при замене/удалении фото.
+   */
+  photoPersonScore?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -233,9 +240,31 @@ export function updateBikePhoto(id: string, photoData: string | undefined, keyPo
   if (b) {
     b.photoData = photoData && photoData.startsWith("blob:") ? undefined : photoData;
     b.keyPointsData = keyPointsData;
+    // v1.14.35: вердикт «человек на фото» относится к СТАРОМУ фото —
+    // при замене/удалении кадра он недействителен
+    delete b.photoPersonScore;
     b.updatedAt = Date.now();
     save(BIKES_KEY, bikes);
   }
+}
+
+/**
+ * v1.14.35: сохранить/очистить скор проверки «на фото вела обнаружен
+ * человек» (ТЗ п. 5.3). score = null — проверка не шла (модель не готова,
+ * фото не загрузилось). Телеметрия уходит в отчёт отладки: жалобы вида
+ * «ИИ не понял моё фото» диагностируются по точному числу.
+ */
+export function updateBikePhotoPersonScore(id: string, score: number | null) {
+  const bikes = getBikes();
+  const b = bikes.find((b) => b.id === id);
+  if (!b) return;
+  if (score != null && Number.isFinite(score) && score >= 0) {
+    b.photoPersonScore = Math.round(score * 1000) / 1000;
+  } else {
+    delete b.photoPersonScore;
+  }
+  b.updatedAt = Date.now();
+  save(BIKES_KEY, bikes);
 }
 
 /**

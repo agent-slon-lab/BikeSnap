@@ -29,7 +29,7 @@
  *  - имя кэша bikesnap-v<версия> синхронизировано с APP_VERSION: бампать
  *    при каждом релизе (activate сам удалит старый кэш).
  */
-const VERSION = "v1.14.34";
+const VERSION = "v1.14.35";
 const CACHE = `bikesnap-${VERSION}`;
 
 const SHELL = [

@@ -1,0 +1,87 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>pose-eval</title></head>
+<body>
+<div id="status">starting</div>
+<script type="module">
+const el = document.getElementById('status');
+function log(m) { el.textContent = m; console.log('[pose-eval]', m); }
+
+// Те же 8 «ядерных» суставов, что в getPoseVisibilityScore (bike-fit.ts)
+const CORE_IDS = [11, 12, 23, 24, 25, 26, 27, 28];
+// Ближняя нога: hip/knee/ankle (getCleanRiderKeypoints, LEG_MIN_VISIBILITY=0.5)
+const LEG_IDS = { left: [23, 25, 27], right: [24, 26, 28] };
+
+try {
+  log('import module...');
+  const { FilesetResolver, PoseLandmarker } = await import(
+    '/node_modules/@mediapipe/tasks-vision/vision_bundle.mjs'
+  );
+  log('fileset...');
+  const fileset = await FilesetResolver.forVisionTasks(
+    '/node_modules/@mediapipe/tasks-vision/wasm'
+  );
+  log('create landmarker (lite, CPU)...');
+  const lm = await PoseLandmarker.createFromOptions(fileset, {
+    baseOptions: {
+      modelAssetPath: '/public/cdn/mediapipe/models/pose_landmarker_lite.task',
+      delegate: 'CPU',
+    },
+    runningMode: 'IMAGE',
+    numPoses: 1,
+  });
+  log('landmarker ready');
+
+  const PHOTOS = window.__PHOTOS;
+  const results = {};
+  for (const [name, url] of PHOTOS) {
+    let img;
+    try {
+      img = new Image();
+      img.crossOrigin = 'anonymous';
+      await new Promise((res, rej) => {
+        img.onload = res; img.onerror = () => rej(new Error('img load fail ' + url));
+        img.src = url;
+      });
+    } catch (e) {
+      results[name] = { error: String(e.message || e) };
+      continue;
+    }
+    let r = null;
+    try { r = lm.detect(img); } catch (e) {
+      results[name] = { error: 'detect: ' + String(e.message || e), w: img.naturalWidth, h: img.naturalHeight };
+      continue;
+    }
+    const lms = r && r.landmarks && r.landmarks[0];
+    if (!lms) {
+      results[name] = { found: false, score: 0, w: img.naturalWidth, h: img.naturalHeight };
+      continue;
+    }
+    const avg = (ids) => ids.reduce((s, i) => s + (lms[i] ? lms[i].visibility ?? 0 : 0), 0) / ids.length;
+    const core = avg(CORE_IDS);
+    const legL = avg(LEG_IDS.left);
+    const legR = avg(LEG_IDS.right);
+    const side = legL >= legR ? 'left' : 'right';
+    // виз. стопы ближней ноги (toe)
+    const toeId = side === 'left' ? 31 : 32;
+    results[name] = {
+      found: true,
+      coreScore: Number(core.toFixed(4)),
+      legL: Number(legL.toFixed(3)),
+      legR: Number(legR.toFixed(3)),
+      activeSide: side,
+      activeLegScore: Number(Math.min(legL, legR) === 0 ? 0 : (side === 'left' ? legL : legR).toFixed(3)),
+      toeVis: Number((lms[toeId] ? lms[toeId].visibility ?? 0 : 0).toFixed(3)),
+      w: img.naturalWidth,
+      h: img.naturalHeight,
+    };
+  }
+  window.__RESULTS = results;
+  log('DONE ' + JSON.stringify(results));
+} catch (e) {
+  window.__RESULTS = { fatal: String((e && e.message) || e) };
+  log('FATAL ' + String((e && e.message) || e));
+}
+</script>
+</body>
+</html>

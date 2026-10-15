@@ -53,7 +53,16 @@ export interface BikeCalibrationInput {
     scaleMmPerPx: number;
     scaleSource: string;
     frameTiltDeg: number;
+    /** v1.14.34 (ТЗ п. 5.4): пропорция wheelbase/диаметр по разметке фото вела */
+    wheelRatio?: number | null;
   } | null;
+  /**
+   * v1.14.35: скор авто-проверки «на фото вела обнаружен человек» (0..1),
+   * из карточки велика (photoPersonScore). null/undefined — проверка не шла
+   * (модель не успела загрузиться, фото без вердикта). Диагностика жалоб
+   * «ИИ не понял моё фото»: в отчёте видно точный вердикт нейросети.
+   */
+  personScore?: number | null;
 }
 
 /** Контекст онбординга (из стора). body/bike — any-структуры, уходят в JSON как есть. */
