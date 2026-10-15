@@ -525,3 +525,88 @@ Stage Summary:
 - Полный офлайн после первой загрузки: префетч замыкания чанков + самохостинг MediaPipe.
 - Нюансы задокументированы в README офлайн-пакета: localStorage привязан к origin; PWA с vercel.app обновляется только с vercel.app; CDN GH Pages держит HTML/sw.js ~10 мин; /api/* на зеркале недоступны (релеи деградируют).
 - Следующая версия: v1.14.34.
+
+---
+Task ID: 36
+Agent: Super Z (main)
+Task: Консолидированное ТЗ «BikeSnap Architecture, Geometry Engine & Pose
+Validation Refactoring» — геометрическое ядро (ось ETT), тихое выравнивание,
+валидация фото (человек/пропорции), кнопки пересъёмки и Re-fit Loop с
+сравнением «Было ➔ Стало» (v1.14.34).
+
+Work Log:
+- Разведка: разделы 1 (изоляция) и 3/4 (MediaPipe-фильтры, нормы) уже
+  закрыты в v1.14.30–32 — подтверждено регрессами, нового кода не требовали.
+- Ядро v2.3 (bike-geometry-engine.ts): ось ETT по ТЗ п. 2.3 — горизонталь
+  от htTop до пересечения с линией bb → saddleMount (длинная база «каретка—
+  седло» менее чувствительна к промаху верхней точки); фолбэки bb → stTop
+  (saddleMount вырожден, с warning) и горизонталь ST→HT (обе вырождены).
+  Поворот-first и строгий override — без изменений, инвариантность поворота
+  4° подтверждена численно (ETT/Stack/SH байт-в-байт).
+- ТЗ п. 2.4: из UI калибратора удалены карточки «Dual Scale активен» (%
+  перспективы) и «Отметь верх колёс для dual scale» (+ стейты
+  perspectiveInfo/dualScale); вместо них — плашка «✓ Горизонт кадра
+  автоматически выровнен» (при успешном расчёте без физ-нарушений).
+  ΔY/радианы — только в свёрнутом debug-логе. Подсказки WH/верхов колёс
+  переформулированы без «вопросов про перспективу».
+- Person Score (bike-fit.ts): getPoseVisibilityScore (средняя visibility
+  8 ядерных суставов), PERSON_MIN_SCORE=0.5, PERSON_BIKE_PHOTO_MAX_SCORE=0.7.
+  Шаг 1 (PhotoAnalysisSection.analyzePhoto): score<0.5 → расчёт заблокирован
+  + модалка «Человек не найден на фото. Загрузите снимок верхом на
+  велосипеде» (Dialog). Шаг 2 (BikePhotoCalibrator): каждое фото прогоняется
+  через usePoseLandmarker; score>0.7 → амбер-предупреждение «На фото
+  обнаружен человек…» (не блокер, ref-гвард от повторных прогонов).
+- Bike Match Validation (новый src/lib/bike-wheel-ratio.ts): ratio =
+  pxWheelbase/pxWheelDiameter; фото вела — по разметке (оси+верха колёс,
+  computeWheelRatioFromKeypoints), фото райдера — авто-детектор колёс
+  (computeWheelRatioFromFrame, кадр 480px, нужно ОБА колеса); расхождение
+  >12% (isBikeMismatch) → предупреждение о двух разных велосипедах.
+  wheelRatio в photoCalib карточки вела (updateBikePhotoScale расширен),
+  riderPhotoWheelRatio в photo-analysis-store; оба стираются при смене
+  вела (syncBikeId).
+- ТЗ п. 5.1: PhotoUploader при загруженном фото рендерит группу
+  [📷 Переснять][📁 Из галереи][🗑️ Удалить] + CameraCapture и скрытый input —
+  работает на всех этапах (3 ракурса, калибратор, сравнение до/после).
+- Re-fit Loop (ТЗ п. 6): кнопка «Измерить новую посадку» на шаге 4
+  (геометрия рамы НЕ сбрасывается); ReFitFeedbackModal.tsx (новый) — чекбоксы
+  «Изменил высоту седла (+/- мм)» / «Сдвинул седло / поменял вынос» /
+  «Настройки не менял» + комфорт [лучше/без изменений/боль]; ComparisonReport.tsx
+  (новый) — таблица «Было ➔ Стало»: Метрика | Прогон #1 (зачёркнуто) |
+  Прогон #2 (жирно) | Δ | Статус (Норма ✅ / Вне нормы ⚠️) по колену, корпусу,
+  бедру, голеностопу + сводка анкеты. photo-analysis-store: previousRun
+  (фото+метрики целиком), refitMeta, startRefit/cancelRefit (отмена
+  возвращает прогон полностью), syncBikeId стирает артефакты Re-fit.
+- Тест scripts/verify-v1434.ts: 34 OK / 0 FAIL — ось ETT (коллинеарный
+  saddleMount = классике; смещённый = линии bb→saddleMount; override ETT
+  строгий; поворот 4° инвариантен), person-пороги, wheel-ratio math + 12%,
+  Re-fit store (архив/отмена/смена вела), photoCalib.wheelRatio. По ходу
+  чинены 2 старые ошибки самого скрипта (направление изменения ETT при
+  наклоне седла; поворот не той фикстуры).
+- Регрессии: verify-engine-v2 обновлён (ETT 625; формула
+  ETT = Reach + Stack·cot(оси седла); физ-гейт «Верх седла НИЖЕ» теперь
+  честно проверяется в physicsViolations — старый чек искал текст в
+  warnings и падал ВСЕГДА ещё до v1.14.34); verify-v1429 46/0,
+  verify-v1432 33/0, test-crossref-v1428 OK, test-calib-ownership-v1431 30/0,
+  test-stale-state-v1430 42/0, test-pose-norms 27/0, test-scale-guard OK,
+  test-bike-photo-persist 10/0. tsc чисто, eslint изменённых чист,
+  next build OK.
+- Bump v1.14.34: app-version.ts, package.json, sw.js (bikesnap-v1.14.34),
+  version.json, whats-new.ts (7 пунктов), CHANGELOG.md.
+- Пуш 44353bc (pushurl paramiko-ssh; «failed to push» после строки успеха —
+  косметика стрима, ls-remote == HEAD).
+- Прод: version.json = v1.14.34; чанк f7b8da6a138d89fb.js содержит 1.14.34 ×2;
+  sw.js VERSION v1.14.34. Зеркало agent-slon-lab.github.io: sha256 «/», sw.js,
+  version.json — MATCH прод; чанк с 1.14.34 присутствует (авто-синк workflow).
+- Смоук agent-browser: стартовый экран и «Что нового» с записью 1.14.34 —
+  чисто; шаг «Анализ» (seeded localStorage) рендерится, MediaPipe
+  инициализируется, ошибок консоли нет; тестовый localStorage удалён.
+
+Stage Summary:
+- Прод = v1.14.34 (Vercel + зеркало GitHub Pages байт-в-байт).
+- ТЗ выполнено: п.1 (регресс-подтверждение), п.2 (ось ETT по bb→saddleMount,
+  тихая плашка выравнивания), п.3 (регресс), п.4 (регресс), п.5 (кнопки
+  пересъёмки, person-валидация 0.5/0.7, Bike Match 12%), п.6 (полный Re-fit
+  Loop: анкета, архив прогона, «Было ➔ Стало»), п.7 (семантика эталонного
+  analyzeRiderPose покрыта связкой poseMetricsEngine + applySaddleHeightContext
+  + bike-cross-ref — подтверждено тестами v1.14.29/31).
+- Следующая версия: v1.14.35.
