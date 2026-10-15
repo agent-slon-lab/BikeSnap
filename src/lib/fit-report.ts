@@ -79,6 +79,13 @@ export interface BikeCalibrationInput {
     divergencePct: number | null;
     /** Статус детекции колёс на фото райдера: pending/ok/notFound */
     riderWheelCheck: string;
+    /** v1.14.37: конфликт происхождения — фото уже было под другим велом */
+    provenance?: {
+      view: string;
+      prevBike: string | null;
+      prevBikeId: string | null;
+      at: number;
+    } | null;
   } | null;
 }
 
@@ -149,6 +156,13 @@ export interface FitReportTelemetry {
       verdict: string;
       divergencePct: number | null;
       riderWheelCheck: string;
+      /** v1.14.37: конфликт происхождения — фото уже было под другим велом */
+      provenance?: {
+        view: string;
+        prevBike: string | null;
+        prevBikeId: string | null;
+        at: number;
+      } | null;
     } | null;
   };
   /** Сырые 2D-точки суставов по ракурсам: нормализованные + пиксели */

@@ -65,6 +65,8 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
   // пропорция фото с райдером + статус детекции колёс
   const riderPhotoWheelRatio = usePhotoAnalysisStore((s) => s.riderPhotoWheelRatio);
   const riderWheelCheck = usePhotoAnalysisStore((s) => s.riderWheelCheck);
+  // v1.14.37: конфликт происхождения (фото уже было под другим велом)
+  const provenanceConflict = usePhotoAnalysisStore((s) => s.provenanceConflict);
 
   // Калибровка шага 2 (v1.14.15): фото велика + точки разметки из карточки
   // активного велика (bikefit-bikes). «НАДО ЧТОБЫ эти действия ТОЖЕ
@@ -121,6 +123,14 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
             verdict: m.verdict,
             divergencePct: m.divergencePct != null ? Math.round(m.divergencePct * 10) / 10 : null,
             riderWheelCheck,
+            provenance: provenanceConflict
+              ? {
+                  view: provenanceConflict.view,
+                  prevBike: provenanceConflict.previous.bikeName,
+                  prevBikeId: provenanceConflict.previous.bikeId,
+                  at: provenanceConflict.previous.at,
+                }
+              : null,
           };
         })(),
       };

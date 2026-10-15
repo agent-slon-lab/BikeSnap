@@ -28,6 +28,10 @@ import type {
   FrontViewAnalysis,
 } from "@/lib/bike-fit";
 import type { CaptureMeta } from "@/lib/fit-report";
+import {
+  pickProvenanceConflict,
+  type PhotoProvenanceEntry,
+} from "@/lib/photo-fingerprint";
 
 /** Что хранится по каждому ракурсу (side/back/front). */
 export interface PersistedViewPhoto {
@@ -135,6 +139,28 @@ interface PhotoAnalysisState {
   riderWheelCheck: "pending" | "ok" | "notFound";
   setRiderWheelCheck: (status: "pending" | "ok" | "notFound") => void;
   /**
+   * v1.14.37: реестр происхождения фото — фингерпринт → под какими велами
+   * фото уже загружалось. Кросс-веловая история (намеренно НЕ чистится при
+   * смене вела): она и есть защита от подмены фото между карточками.
+   */
+  photoProvenance: Record<string, PhotoProvenanceEntry[]>;
+  /**
+   * v1.14.37: активный конфликт — текущее фото уже использовалось с ДРУГИМ
+   * велом. Показывается красной плашкой; сбрасывается при замене фото.
+   */
+  provenanceConflict: {
+    view: ViewType;
+    previous: PhotoProvenanceEntry;
+  } | null;
+  /** Зарегистрировать фото за велом и проверить конфликт происхождения. */
+  registerViewPhoto: (
+    view: ViewType,
+    fingerprint: string,
+    bikeId: string | null,
+    bikeName: string | null
+  ) => void;
+  clearProvenanceConflict: () => void;
+  /**
    * v1.14.34 (ТЗ п. 6): снимок прошлого прогона + анкета изменений.
    * startRefit архивирует текущие анализы и очищает ракурсы для нового
    * замера; cancelRefit возвращает всё обратно (защита от случайного клика).
@@ -206,6 +232,8 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
       views: emptyViews(),
       riderPhotoWheelRatio: null,
       riderWheelCheck: "pending",
+      photoProvenance: {},
+      provenanceConflict: null,
       previousRun: null,
       refitMeta: null,
 
@@ -219,6 +247,40 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
         })),
 
       setRiderWheelCheck: (status) => set(() => ({ riderWheelCheck: status })),
+
+      // v1.14.37: регистрация фото за велом + детект конфликта происхождения.
+      // Реестр КРОСС-ВЕЛОВОЙ (не чистится при смене активного вела) — это и
+      // есть память «где это фото уже было». Вызывается из PhotoAnalysisSection
+      // после сжатия фото в dataURL (фингерпринт стабилен между сессиями).
+      registerViewPhoto: (view, fingerprint, bikeId, bikeName) =>
+        set((s) => {
+          if (!fingerprint) return {};
+          const entries = s.photoProvenance[fingerprint] ?? [];
+          const conflict = pickProvenanceConflict(entries, bikeId);
+          const entry: PhotoProvenanceEntry = {
+            bikeId,
+            bikeName,
+            view,
+            at: Date.now(),
+          };
+          // Гигиена объёма: ≤20 регистраций на фото, ≤200 фото в реестре
+          const nextEntries = [...entries, entry].slice(-20);
+          const photoProvenance = { ...s.photoProvenance, [fingerprint]: nextEntries };
+          const keys = Object.keys(photoProvenance);
+          if (keys.length > 200) {
+            for (const k of keys.slice(0, keys.length - 200)) delete photoProvenance[k];
+          }
+          return {
+            photoProvenance,
+            provenanceConflict: conflict
+              ? { view, previous: conflict }
+              : s.provenanceConflict?.view === view
+                ? null
+                : s.provenanceConflict,
+          };
+        }),
+
+      clearProvenanceConflict: () => set(() => ({ provenanceConflict: null })),
 
       // v1.14.34 (ТЗ п. 6.1): «Измерить новую посадку» НЕ сбрасывает геометрию
       // рамы — архивируем ТОЛЬКО анализы шага 4 и чистим ракурсы под новые фото.
@@ -246,6 +308,7 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
             views: emptyViews(),
             riderPhotoWheelRatio: null,
             riderWheelCheck: "pending",
+            provenanceConflict: null,
           };
         }),
 
@@ -299,6 +362,9 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
             views: emptyViews(),
             riderPhotoWheelRatio: null,
             riderWheelCheck: "pending",
+            // v1.14.37: photoProvenance НЕ чистится — кросс-веловая история
+            // должна пережить смену вела (она и ловит подмену файлов).
+            provenanceConflict: null,
             previousRun: null,
             refitMeta: null,
           };
@@ -319,9 +385,12 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
           // пропорция больше не имеет права жить: до завершения новой
           // детекции сверка обязана быть "pending", а не протухшим числом
           // прежнего кадра (гонка могла замаскировать подмену вела).
+          // v1.14.37: конфликт происхождения тоже сбрасывается — регистра-
+          // ция нового фото выставит его заново, если нужно.
           ...(view === "side"
             ? { riderPhotoWheelRatio: null, riderWheelCheck: "pending" as const }
             : {}),
+          provenanceConflict: null,
         })),
 
       setViewPhotoData: (view, photoData) =>
@@ -351,6 +420,7 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
           ...(view === "side"
             ? { riderPhotoWheelRatio: null, riderWheelCheck: "pending" as const }
             : {}),
+          provenanceConflict: null,
         })),
     }),
     {
@@ -361,6 +431,8 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
         views: state.views,
         riderPhotoWheelRatio: state.riderPhotoWheelRatio,
         riderWheelCheck: state.riderWheelCheck,
+        photoProvenance: state.photoProvenance,
+        provenanceConflict: state.provenanceConflict,
         previousRun: state.previousRun,
         refitMeta: state.refitMeta,
       }),
@@ -400,6 +472,27 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
             : savedCheck === "notFound"
               ? "notFound"
               : "pending";
+        // v1.14.37: санитизация реестра происхождения — только валидные записи
+        const photoProvenance: Record<string, PhotoProvenanceEntry[]> = {};
+        if (p.photoProvenance && typeof p.photoProvenance === "object") {
+          for (const [k, list] of Object.entries(p.photoProvenance)) {
+            if (!Array.isArray(list)) continue;
+            const clean = list.filter(
+              (e): e is PhotoProvenanceEntry =>
+                !!e && typeof e === "object" && typeof e.at === "number"
+            );
+            if (clean.length > 0) photoProvenance[k] = clean.slice(-20);
+          }
+        }
+        const rawConflict = p.provenanceConflict;
+        const provenanceConflict: PhotoAnalysisState["provenanceConflict"] =
+          rawConflict &&
+          typeof rawConflict === "object" &&
+          rawConflict.previous &&
+          typeof rawConflict.previous === "object" &&
+          typeof rawConflict.previous.at === "number"
+            ? { view: rawConflict.view, previous: rawConflict.previous }
+            : null;
         const refitMeta =
           p.refitMeta && typeof p.refitMeta === "object" && typeof (p.refitMeta as RefitMeta).startedAt === "number"
             ? (p.refitMeta as RefitMeta)
@@ -416,7 +509,7 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
                 },
               }
             : null;
-        return { ...current, bikeId, views, riderPhotoWheelRatio, riderWheelCheck, previousRun, refitMeta };
+        return { ...current, bikeId, views, riderPhotoWheelRatio, riderWheelCheck, photoProvenance, provenanceConflict, previousRun, refitMeta };
       },
     }
   )

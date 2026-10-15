@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { Camera, AlertCircle, AlertTriangle, CheckCircle2, Loader2, Sparkles, Image as ImageIcon, RotateCcw, Undo2, Repeat } from "lucide-react";
 import {
   Card,
@@ -48,6 +48,7 @@ import {
   downscaleToRawFrame,
 } from "@/lib/bike-wheel-ratio";
 import { getBikes } from "@/lib/bike-storage";
+import { fingerprintDataUrl } from "@/lib/photo-fingerprint";
 import { calculateAll } from "@/lib/bike-calculations";
 import { BIKE_TYPES } from "@/lib/bike-params";
 import { useBikeStore } from "@/lib/bike-store";
@@ -140,6 +141,10 @@ export function PhotoAnalysisSection() {
   // v1.14.36: честный статус сверки — "notFound" больше не маскируется под «совпадает»
   const riderWheelCheck = usePhotoAnalysisStore((s) => s.riderWheelCheck);
   const setRiderWheelCheck = usePhotoAnalysisStore((s) => s.setRiderWheelCheck);
+  // v1.14.37: реестр происхождения фото + активный конфликт (фото уже было
+  // под другим велом) — детерминированная ловушка подмены
+  const registerViewPhoto = usePhotoAnalysisStore((s) => s.registerViewPhoto);
+  const provenanceConflict = usePhotoAnalysisStore((s) => s.provenanceConflict);
   const bikePhotoWheelRatio = useMemo(() => {
     if (!activeBikeId) return null;
     const card = getBikes().find((b) => b.id === activeBikeId);
@@ -406,13 +411,26 @@ export function PhotoAnalysisSection() {
       // Мгновенный показ — blob: URL; параллельно сжимаем в JPEG dataURL
       // ≤1280px: персистим ТОЛЬКО dataURL (blob: умирает при перезагрузке).
       setViewPhotoStore(view, { photoData: url, captureMeta: meta ?? null });
+      // v1.14.37 (race fix): стор законно заменяет blob на dataURL после
+      // сжатия — прежний guard «cur !== url» отбрасывал результат детекции
+      // колёс, если она просыпалась позже сжатия (реальные отчёты v1.14.36:
+      // riderWheelCheck = "pending" навсегда). Следим за АКТУАЛЬНЫМ значением
+      // в замыкании: guard срабатывает только при РЕАЛЬНОЙ замене фото.
+      let latestPhotoData: string | null = url;
       void photoToDataUrl(url).then((data) => {
         // Пока сжимали, фото могли заменить/удалить — тогда молча выходим
         const cur = usePhotoAnalysisStore.getState().views[view].photoData;
-        if (cur !== url) return;
+        if (cur !== latestPhotoData) return;
         if (data) {
           setViewPhotoData(view, data);
+          latestPhotoData = data;
           URL.revokeObjectURL(url);
+          // v1.14.37: регистрация происхождения фото за активным велом —
+          // фингерпринт по СЖАТОМУ dataURL (стабилен между сессиями).
+          // То же фото под другим велом → provenanceConflict (красная плашка).
+          const bikeId = activeBikeId;
+          const card = bikeId ? getBikes().find((b) => b.id === bikeId) : null;
+          registerViewPhoto(view, fingerprintDataUrl(data), bikeId, card?.name ?? null);
         }
         // Если сжать не удалось — остаётся blob: до конца сессии,
         // при гидрации персист его отбросит (sanitize в store)
@@ -420,12 +438,12 @@ export function PhotoAnalysisSection() {
 
       // v1.14.34 (ТЗ п. 5.4): Bike Match Validation на боковом фото —
       // авто-детектор колёс считает пропорцию wheelbase/диаметр (Шаг 1).
-      // Фото райдера могло замениться — проверяем перед записью.
       if (view === "side") {
         const img = new Image();
         img.onload = () => {
           const cur = usePhotoAnalysisStore.getState().views.side.photoData;
-          if (cur !== url) return; // фото уже заменили — результат не актуален (стор уже сброшен в "pending")
+          // фото заменили (ни blob-оригинал, ни его dataURL больше не в сторе)
+          if (cur !== latestPhotoData) return;
           try {
             const frame = downscaleToRawFrame(img);
             const ratio = frame ? computeWheelRatioFromFrame(frame) : null;
@@ -438,14 +456,51 @@ export function PhotoAnalysisSection() {
           }
         };
         img.onerror = () => {
+          const cur = usePhotoAnalysisStore.getState().views.side.photoData;
+          if (cur !== latestPhotoData) return; // битое фото уже заменили
           setRiderPhotoWheelRatio(null);
           setRiderWheelCheck("notFound");
         };
         img.src = url;
       }
     },
-    [setUiState, setViewPhotoStore, setViewPhotoData, setRiderPhotoWheelRatio, setRiderWheelCheck]
+    [setUiState, setViewPhotoStore, setViewPhotoData, setRiderPhotoWheelRatio, setRiderWheelCheck, registerViewPhoto, activeBikeId]
   );
+
+  // v1.14.37 (Mount Detection): детекция колёс обязана работать и для
+  // фото, загруженных В ПРОШЛЫХ сессиях (persist) — handlePhotoSelected
+  // для них не вызывается, статус оставался "pending" навсегда (отчёты
+  // v1.14.36: riderWheelCheck = "pending" в обоих). Пока фото есть, а
+  // сверка "pending" — досматриваем её; после первой попытки статус
+  // уходит в "ok"/"notFound" и эффект больше не срабатывает.
+  const sidePhotoData = usePhotoAnalysisStore((s) => s.views.side.photoData);
+  useEffect(() => {
+    if (!sidePhotoData) return;
+    const st = usePhotoAnalysisStore.getState();
+    if (st.riderWheelCheck !== "pending") return;
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      // фото могли заменить, пока декодировалось
+      if (usePhotoAnalysisStore.getState().views.side.photoData !== sidePhotoData) return;
+      try {
+        const frame = downscaleToRawFrame(img);
+        const ratio = frame ? computeWheelRatioFromFrame(frame) : null;
+        setRiderPhotoWheelRatio(ratio);
+        setRiderWheelCheck(ratio != null ? "ok" : "notFound");
+      } catch {
+        setRiderPhotoWheelRatio(null);
+        setRiderWheelCheck("notFound");
+      }
+    };
+    // onerror (битое/мёртвое фото) — оставляем "pending": фото всё равно
+    // не анализируется, врать «notFound» про живой кадр не хотим
+    img.src = sidePhotoData;
+    return () => {
+      cancelled = true;
+    };
+  }, [sidePhotoData, setRiderPhotoWheelRatio, setRiderWheelCheck]);
 
   const handleClear = useCallback(
     (view: ViewType) => {
@@ -523,6 +578,28 @@ export function PhotoAnalysisSection() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* === v1.14.37: Photo Provenance — фото уже использовалось с другим велом ===
+          Детерминированная ловушка подмены: фингерпринт фото уже зарегистрирован
+          за другой карточкой вела. Работает даже когда детектор колёс слеп
+          и пропорции велов совпадают. */}
+      {provenanceConflict && (
+        <div className="flex items-start gap-2 rounded-lg border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 px-4 py-3 text-sm text-rose-700 dark:text-rose-400">
+          <AlertTriangle className="size-4 mt-0.5 shrink-0" />
+          <div>
+            <p className="font-medium">
+              Это фото уже использовалось с другим велом
+            </p>
+            <p className="mt-1 text-xs">
+              Ракурс «{provenanceConflict.view === "side" ? "сбоку" : provenanceConflict.view === "back" ? "сзади" : "спереди"}» уже загружался для велосипеда
+              {" "}
+              «{provenanceConflict.previous.bikeName ?? "без имени"}»
+              {new Date(provenanceConflict.previous.at).toLocaleDateString("ru-RU", { day: "numeric", month: "long" }) && ` (${new Date(provenanceConflict.previous.at).toLocaleDateString("ru-RU", { day: "numeric", month: "long" })})`}
+              , а сейчас активна другая карточка. Похоже, фото подменено между шагами — сравнение с рамой и рекомендации будут НЕВЕРНЫМИ. Верните фото правильному велу или переснимите кадр.
+            </p>
+          </div>
+        </div>
       )}
 
       {/* === v1.14.34 (ТЗ п. 5.4) + v1.14.36: Bike Match Validation ===
