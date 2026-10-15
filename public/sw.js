@@ -1,12 +1,21 @@
 /*
- * BikeSnap service worker (v1.14.38) — офлайн-режим v2.
+ * BikeSnap service worker (v1.14.39) — офлайн-режим v3 с зеркальным фейловером.
  *
  * Стратегии:
  *  - /api/*            → только сеть (релеи анализа/калибровки/отчётов —
  *                        серверные функции, не кэшируются и не мешают офлайну)
- *  - навигация (HTML)  → сеть-первым: онлайн = всегда свежий HTML, офлайн =
- *                        кэш + фолбэк на закэшированную оболочку "/";
- *                        !ok (503/404 в окно пропагации деплоя) — тоже фолбэк
+ *  - навигация (HTML)  → ЛЕСТНИЦА (спека пользователя v1.14.39):
+ *                        1) сеть этого origin;
+ *                        2) НЕДОСТУПЕН (сетевая ошибка, напр. SNI-блок
+ *                        vercel без VPN) → живое ли ЗЕРКАЛО agent-slon-lab
+ *                        .github.io? живое → авто-переход на него (та же
+ *                        версия появляется сразу — зеркало синкается с
+ *                        каждым пушем);
+ *                        3) зеркало тоже мёртв (инета нет) → офлайн-кэш.
+ *                        HTTP !ok (503/404 в окно пропагации деплоя) —
+ *                        НЕ редирект, а старый кэш: зеркало несёт то же
+ *                        содержимое, падать на него незачем.
+ *                        Редирект не выполняется на самом зеркале (цикл).
  *  - /version.json     → сеть-первым (детектор обновлений), офлайн → кэш
  *  - /_next/static/*   → кэш-первым: чанки иммутабельны и хэшированы в имени;
  *                        после деплоя новый HTML ссылается на НОВЫЕ имена,
@@ -29,8 +38,65 @@
  *  - имя кэша bikesnap-v<версия> синхронизировано с APP_VERSION: бампать
  *    при каждом релизе (activate сам удалит старый кэш).
  */
-const VERSION = "v1.14.38";
+const VERSION = "v1.14.39";
 const CACHE = `bikesnap-${VERSION}`;
+
+// Зеркало (GitHub Pages) — запасной вход, когда этот origin недоступен
+// (*.vercel.app блокируется по SNI без VPN). Зеркало синкается с каждым
+// пушем в main (mirror-to-pages.yml), поэтому там всегда свежая версия.
+const MIRROR_ORIGIN = "https://agent-slon-lab.github.io";
+
+/**
+ * Зеркальный URL с сохранением пути и query (зеркало развёрнуто в корне
+ * github.io — пути совпадают 1:1). Экспорт не нужен: тест дергает через
+ * vm-сэндбокс (scripts/test-mirror-failover.ts).
+ */
+function mirrorUrlFor(pathname, search) {
+  return MIRROR_ORIGIN + pathname + search;
+}
+
+/**
+ * Жив ли хост: no-cors-запрос с жёстким таймаутом. Резолв = хост ответил
+ * (opaque-ответ, тело не нужно). Реджект/таймаут = недоступен.
+ */
+function probeAlive(url, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    fetch(url, { mode: "no-cors", cache: "no-store" }).then(
+      () => done(true),
+      () => done(false)
+    );
+  });
+}
+
+/**
+ * Авто-переход на зеркало (v1.14.39): инлайновый HTML-редиректор вместо
+ * Response.redirect() — работает во всех браузерах (meta refresh + JS),
+ * не зависит от поддержки редиректов respondWith для навигаций.
+ * location.replace — заменить запись истории, чтобы «Назад» не вело
+ * на мёртвый origin.
+ */
+function mirrorRedirectResponse(target) {
+  const html =
+    "<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\">" +
+    "<meta http-equiv=\"refresh\" content=\"0; url=" + target + "\">" +
+    "<title>BikeSnap — переход на зеркало…</title></head><body>" +
+    "<p style=\"font-family:sans-serif;padding:2rem\">Сайт недоступен, " +
+    "переходим на зеркало…</p>" +
+    "<script>location.replace(" + JSON.stringify(target) + ");</script>" +
+    "</body></html>";
+  return new Response(html, {
+    status: 200,
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  });
+}
 
 const SHELL = [
   "/",
@@ -159,23 +225,43 @@ self.addEventListener("fetch", (event) => {
   // HMR/EventSource в dev — не перехватываем
   if (sameOrigin && url.pathname.startsWith("/_next/webpack-hmr")) return;
 
-  // Навигация: сеть-первым, офлайн/!ok → кэшированная оболочка "/".
-  // Старый рабочий экран лучше белого экрана в окно пропагации деплоя.
+  // Навигация: ЛЕСТНИЦА v1.14.39 —
+  //  1) сеть этого origin (свежий HTML всегда, когда origin жив);
+  //  2) сетевая ошибка (origin недоступен, напр. vercel без VPN) →
+  //     зеркало живое? → авто-переход на него (свежая версия сразу);
+  //  3) зеркало мертво / нет инета → офлайн-кэш (старый рабочий экран
+  //     лучше белого экрана).
+  // HTTP !ok (окно пропагации деплоя) — без редиректа: зеркало несёт то
+  // же содержимое, через мгновение оживёт и этот origin → старый кэш.
   if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (!response.ok) throw new Error("nav-" + response.status);
+      (async () => {
+        try {
+          const response = await fetch(request);
+          if (!response.ok) {
+            const stale =
+              (await caches.match("/")) || (await caches.match(request));
+            return stale || response;
+          }
           const copy = response.clone();
           caches.open(CACHE).then((cache) => cache.put("/", copy));
           return response;
-        })
-        .catch(() =>
-          caches
-            .match("/")
-            .then((hit) => hit || caches.match(request))
-            .then((hit) => hit || Response.error())
-        )
+        } catch (networkError) {
+          // Сетевая ошибка = origin недоступен целиком. На самом зеркале
+          // редирект не делаем (иначе цикл при его недоступности).
+          if (
+            self.location.origin !== MIRROR_ORIGIN &&
+            (await probeAlive(MIRROR_ORIGIN + "/version.json", 3500))
+          ) {
+            return mirrorRedirectResponse(
+              mirrorUrlFor(url.pathname, url.search)
+            );
+          }
+          const hit =
+            (await caches.match("/")) || (await caches.match(request));
+          return hit || Response.error();
+        }
+      })()
     );
     return;
   }
