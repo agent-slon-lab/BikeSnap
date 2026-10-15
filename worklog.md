@@ -687,3 +687,46 @@ Stage Summary:
 - Пуш выполнен PAT-токеном; рекомендация на будущее: токен в конфиге не хранится — при следующем
   «лей» снова понадобится свежий токен либо добавленный deploy-ключ (pubkey из Task 38).
 - Следующая версия: v1.14.36.
+
+---
+Task ID: 40
+Agent: Super Z (main)
+Task: «на шаге 2 был один велик, в шаге 4 другой подсунул — ИИ не увидел» → v1.14.36
+
+Work Log:
+- Диагноз: Bike Match Validation (v1.14.34) сравнивала пропорции ТОЛЬКО когда
+  авто-детектор находил ОБА колеса на фото райдера. При неудаче детекции
+  (нога закрывает колесо — частый случай) ratio = null → «не сверено» молча
+  выглядело как «совпадает» → подмена вела проходила незамеченной.
+- Попутно найдены 2 доп. бага: (а) Stale Ratio — при замене фото райдера
+  старая пропорция жила в сторе до конца новой детекции (маскирует подмену);
+  (б) personScore из v1.14.35 передавался в buildFitReport, но терялся при
+  сборке JSON (calibOut строился заново без поля).
+- Фиксы:
+  1) bike-wheel-ratio.ts: bikeMatchVerdict() → "match"/"mismatch"/"unknown";
+  2) photo-analysis-store.ts: riderWheelCheck ("pending"|"ok"|"notFound"),
+     сброс ratio+статуса в setViewPhoto/clearView для side, при смене вела,
+     Re-fit; санитизация при гидрации;
+  3) PhotoAnalysisSection.tsx: 3-состояний UI — янтарь mismatch (было),
+     янтарь «Не удалось автоматически сверить велосипеды» (новое),
+     зелёная «Велосипеды сверены» с Δ% (новое); статус ставится в
+     handlePhotoSelected вместе с ratio;
+  4) fit-report.ts: telemetry.calibration += bikeWheelRatio/personScore/
+     bikeMatch; bikeCalibration += personScore (фикс потери) + bikeMatch;
+     тип FitReportTelemetry.calibration расширен;
+  5) DebugReportCard.tsx: собирает bikeMatch из стора + карточки вела.
+- Тесты: scripts/test-bike-match.ts (15 проверок: match/mismatch/unknown,
+  границы 11.9/12.1%, мусорные значения) — 15 OK / 0 FAIL.
+  Замечание: ровно 12.0% в float даёт 12.00000000000001 → mismatch
+  (строгое >), в тесте зафиксированы практические границы.
+- Проверки: tsc --noEmit — src/ чист (ошибки в test-stale-state-v1430.ts /
+  verify-v1434.ts ДО-существующие, на чистом HEAD те же); next build OK;
+  смоук: страница 200, version.json v1.14.36, sw.js v1.14.36, бандл с версией.
+- Бамп: app-version/package/sw.js/version.json/whats-new/CHANGELOG.
+
+Stage Summary:
+- v1.14.36: защита от подмены вела стала честной — «не сверено» больше не
+  приравнивается к «совпадает», пользователь видит янтарную плашку;
+  при совпадении — зелёное подтверждение с Δ%; отчёт отладки несёт
+  bikeMatch + починенный personScore.
+- Следующая версия: v1.14.37.

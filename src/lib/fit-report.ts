@@ -63,6 +63,23 @@ export interface BikeCalibrationInput {
    * «ИИ не понял моё фото»: в отчёте видно точный вердикт нейросети.
    */
   personScore?: number | null;
+  /**
+   * v1.14.36: результат Bike Match Validation — сверка пропорций фото вела
+   * (Шаг 2) и фото с райдером (Шаг 1/4). Диагностика жалобы «подменил вел
+   * на шаге 4 — ИИ не увидел»: в отчёте видно, сверялись ли фото вообще
+   * (verdict "unknown" = сверка не состоялась) и что именно посчитано.
+   */
+  bikeMatch?: {
+    /** Пропорция по разметке фото вела (photoCalib.wheelRatio) */
+    bikeRatio: number | null;
+    /** Пропорция по авто-детектору колёс на фото с райдером */
+    riderRatio: number | null;
+    /** "match" | "mismatch" | "unknown" — unknown = сверка не состоялась */
+    verdict: string;
+    divergencePct: number | null;
+    /** Статус детекции колёс на фото райдера: pending/ok/notFound */
+    riderWheelCheck: string;
+  } | null;
 }
 
 /** Контекст онбординга (из стора). body/bike — any-структуры, уходят в JSON как есть. */
@@ -121,6 +138,18 @@ export interface FitReportTelemetry {
       | null;
     scaleMmPerPx: number | null;
     frameTiltDeg: number | null;
+    /** v1.14.36: пропорция wheelbase/диаметр по разметке фото вела */
+    bikeWheelRatio: number | null;
+    /** v1.14.36: скор «человек на фото вела» (0..1), null — проверка не шла */
+    personScore: number | null;
+    /** v1.14.36: вердикт сверки велосипедов между Шагом 2 и фото райдера */
+    bikeMatch: {
+      bikeRatio: number | null;
+      riderRatio: number | null;
+      verdict: string;
+      divergencePct: number | null;
+      riderWheelCheck: string;
+    } | null;
   };
   /** Сырые 2D-точки суставов по ракурсам: нормализованные + пиксели */
   poseKeypoints: Record<
@@ -183,11 +212,22 @@ export interface FitReport {
     /** Путь к фото велика в репозитории */
     photoFile?: string | null;
     points: Record<string, { x: number; y: number } | null> | null;
-    /** Телеметрия масштаба (v1.14.29) */
+    /** Телеметрия масштаба (v1.14.29) + пропорция вела (v1.14.34) */
     scale?: {
       scaleMmPerPx: number;
       scaleSource: string;
       frameTiltDeg: number;
+      wheelRatio?: number | null;
+    } | null;
+    /** v1.14.36: скор проверки «человек на фото вела» (раньше терялся при сборке JSON) */
+    personScore?: number | null;
+    /** v1.14.36: вердикт сверки велосипедов между шагами */
+    bikeMatch?: {
+      bikeRatio: number | null;
+      riderRatio: number | null;
+      verdict: string;
+      divergencePct: number | null;
+      riderWheelCheck: string;
     } | null;
   } | null;
   /**
@@ -331,6 +371,10 @@ export async function buildFitReport(
         photoFile: null,
         points: calibration.points ?? null,
         ...(calibration.scale ? { scale: calibration.scale } : {}),
+        // v1.14.36 (bugfix): personScore передавался с v1.14.35, но терялся
+        // при сборке JSON (объект строился заново без этого поля)
+        ...(calibration.personScore != null ? { personScore: calibration.personScore } : {}),
+        ...(calibration.bikeMatch ? { bikeMatch: calibration.bikeMatch } : {}),
       }
     : null;
 
@@ -377,6 +421,10 @@ export async function buildFitReport(
         scaleKind: normalizeScaleKind(calibration?.scale?.scaleSource),
         scaleMmPerPx: calibration?.scale?.scaleMmPerPx ?? null,
         frameTiltDeg: calibration?.scale?.frameTiltDeg ?? null,
+        // v1.14.36: сверка велосипедов между шагами + скор «человек на фото вела»
+        bikeWheelRatio: calibration?.scale?.wheelRatio ?? null,
+        personScore: calibration?.personScore ?? null,
+        bikeMatch: calibration?.bikeMatch ?? null,
       },
       poseKeypoints,
     },

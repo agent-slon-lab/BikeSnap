@@ -27,6 +27,9 @@ import { Button } from "@/components/ui/button";
 import { buildFitReport, sendReport, type BikeCalibrationInput, type ReportViewInput } from "@/lib/fit-report";
 import { getActiveBike } from "@/lib/bike-storage";
 import { useBikeStore } from "@/lib/bike-store";
+// v1.14.36: телеметрия сверки велосипедов (Bike Match Validation)
+import { usePhotoAnalysisStore } from "@/lib/photo-analysis-store";
+import { bikeMatchVerdict } from "@/lib/bike-wheel-ratio";
 import { useDeviceOrientation } from "@/hooks/use-device-orientation";
 
 interface DebugReportCardProps {
@@ -58,6 +61,10 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
   // v1.14.29 (Issue #6 «Датчики устройства»): живой гироскоп в момент
   // отправки отчёта (не в момент спуска затвора — тот остаётся в captureMeta)
   const orientation = useDeviceOrientation(true);
+  // v1.14.36: артефакты Bike Match Validation из стора ракурсов —
+  // пропорция фото с райдером + статус детекции колёс
+  const riderPhotoWheelRatio = usePhotoAnalysisStore((s) => s.riderPhotoWheelRatio);
+  const riderWheelCheck = usePhotoAnalysisStore((s) => s.riderWheelCheck);
 
   // Калибровка шага 2 (v1.14.15): фото велика + точки разметки из карточки
   // активного велика (bikefit-bikes). «НАДО ЧТОБЫ эти действия ТОЖЕ
@@ -99,6 +106,23 @@ export function DebugReportCard({ views }: DebugReportCardProps) {
         // v1.14.35: вердикт нейросети «человек на фото вела» (0..1) или
         // null — проверка не шла. Диагностика жалоб «ИИ не понял моё фото».
         personScore: typeof b.photoPersonScore === "number" ? b.photoPersonScore : null,
+        // v1.14.36: Bike Match Validation — сверка пропорций вела (Шаг 2)
+        // и фото с райдером (Шаг 1/4). Диагностика жалобы «подменил вел —
+        // ИИ не увидел»: в отчёте видно, сверялись ли фото и что насчитано.
+        bikeMatch: (() => {
+          const bikeRatio =
+            typeof b.photoCalib?.wheelRatio === "number" && Number.isFinite(b.photoCalib.wheelRatio) && b.photoCalib.wheelRatio > 0
+              ? b.photoCalib.wheelRatio
+              : null;
+          const m = bikeMatchVerdict(bikeRatio, riderPhotoWheelRatio);
+          return {
+            bikeRatio,
+            riderRatio: riderPhotoWheelRatio,
+            verdict: m.verdict,
+            divergencePct: m.divergencePct != null ? Math.round(m.divergencePct * 10) / 10 : null,
+            riderWheelCheck,
+          };
+        })(),
       };
     } catch {
       return null;

@@ -124,6 +124,17 @@ interface PhotoAnalysisState {
   riderPhotoWheelRatio: number | null;
   setRiderPhotoWheelRatio: (ratio: number | null) => void;
   /**
+   * v1.14.36: статус автосверки колёс на фото райдера (Шаг 1/4).
+   *   - "pending"  — фото ещё не проверялось (или фото нет/сброшено);
+   *   - "ok"       — детектор нашёл оба колеса, ratio валиден;
+   *   - "notFound" — детектор НЕ смог найти оба колеса — сверка не
+   *     состоялась. Раньше этот случай молча выглядел как «совпадает»
+   *     (ratio null = и «не проверяли», и «не нашли»), из-за чего подмена
+   *     вела на шаге 4 проходила незамеченной.
+   */
+  riderWheelCheck: "pending" | "ok" | "notFound";
+  setRiderWheelCheck: (status: "pending" | "ok" | "notFound") => void;
+  /**
    * v1.14.34 (ТЗ п. 6): снимок прошлого прогона + анкета изменений.
    * startRefit архивирует текущие анализы и очищает ракурсы для нового
    * замера; cancelRefit возвращает всё обратно (защита от случайного клика).
@@ -194,6 +205,7 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
       bikeId: null,
       views: emptyViews(),
       riderPhotoWheelRatio: null,
+      riderWheelCheck: "pending",
       previousRun: null,
       refitMeta: null,
 
@@ -201,7 +213,12 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
         set(() => ({
           riderPhotoWheelRatio:
             ratio != null && Number.isFinite(ratio) && ratio > 0 ? ratio : null,
+          // v1.14.36: ratio == null при попытке детекции = "notFound";
+          // статус дополнительно выставляется setRiderWheelCheck из UI
+          // (порядок вызовов не важен: UI ставит пару вместе).
         })),
+
+      setRiderWheelCheck: (status) => set(() => ({ riderWheelCheck: status })),
 
       // v1.14.34 (ТЗ п. 6.1): «Измерить новую посадку» НЕ сбрасывает геометрию
       // рамы — архивируем ТОЛЬКО анализы шага 4 и чистим ракурсы под новые фото.
@@ -228,6 +245,7 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
             refitMeta: meta,
             views: emptyViews(),
             riderPhotoWheelRatio: null,
+            riderWheelCheck: "pending",
           };
         }),
 
@@ -280,6 +298,7 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
             bikeId,
             views: emptyViews(),
             riderPhotoWheelRatio: null,
+            riderWheelCheck: "pending",
             previousRun: null,
             refitMeta: null,
           };
@@ -296,6 +315,13 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
               savedAt: Date.now(),
             },
           },
+          // v1.14.36 (Stale Ratio): замена фото вела на райдере — старая
+          // пропорция больше не имеет права жить: до завершения новой
+          // детекции сверка обязана быть "pending", а не протухшим числом
+          // прежнего кадра (гонка могла замаскировать подмену вела).
+          ...(view === "side"
+            ? { riderPhotoWheelRatio: null, riderWheelCheck: "pending" as const }
+            : {}),
         })),
 
       setViewPhotoData: (view, photoData) =>
@@ -321,6 +347,10 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
       clearView: (view) =>
         set((s) => ({
           views: { ...s.views, [view]: emptyView() },
+          // v1.14.36: фото с райдером удалено — артефакты сверки тоже
+          ...(view === "side"
+            ? { riderPhotoWheelRatio: null, riderWheelCheck: "pending" as const }
+            : {}),
         })),
     }),
     {
@@ -330,6 +360,7 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
         bikeId: state.bikeId,
         views: state.views,
         riderPhotoWheelRatio: state.riderPhotoWheelRatio,
+        riderWheelCheck: state.riderWheelCheck,
         previousRun: state.previousRun,
         refitMeta: state.refitMeta,
       }),
@@ -359,6 +390,16 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
           p.riderPhotoWheelRatio > 0
             ? p.riderPhotoWheelRatio
             : null;
+        // v1.14.36: санитизация статуса сверки. ratio есть → "ok";
+        // ratio нет, но персист говорил "ok" (старая версия/битый persist)
+        // → "pending" — честнее переспросить детектор, чем верить мусору.
+        const savedCheck = p.riderWheelCheck;
+        const riderWheelCheck: PhotoAnalysisState["riderWheelCheck"] =
+          riderPhotoWheelRatio != null
+            ? "ok"
+            : savedCheck === "notFound"
+              ? "notFound"
+              : "pending";
         const refitMeta =
           p.refitMeta && typeof p.refitMeta === "object" && typeof (p.refitMeta as RefitMeta).startedAt === "number"
             ? (p.refitMeta as RefitMeta)
@@ -375,7 +416,7 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
                 },
               }
             : null;
-        return { ...current, bikeId, views, riderPhotoWheelRatio, previousRun, refitMeta };
+        return { ...current, bikeId, views, riderPhotoWheelRatio, riderWheelCheck, previousRun, refitMeta };
       },
     }
   )

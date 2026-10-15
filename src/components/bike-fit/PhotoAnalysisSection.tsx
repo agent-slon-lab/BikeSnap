@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useLayoutEffect, useMemo, useState } from "react";
-import { Camera, AlertCircle, AlertTriangle, Loader2, Sparkles, Image as ImageIcon, RotateCcw, Undo2, Repeat } from "lucide-react";
+import { Camera, AlertCircle, AlertTriangle, CheckCircle2, Loader2, Sparkles, Image as ImageIcon, RotateCcw, Undo2, Repeat } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -43,10 +43,9 @@ import {
   type FrontViewAnalysis,
 } from "@/lib/bike-fit";
 import {
+  bikeMatchVerdict,
   computeWheelRatioFromFrame,
   downscaleToRawFrame,
-  isBikeMismatch,
-  wheelRatioDivergencePct,
 } from "@/lib/bike-wheel-ratio";
 import { getBikes } from "@/lib/bike-storage";
 import { calculateAll } from "@/lib/bike-calculations";
@@ -138,14 +137,22 @@ export function PhotoAnalysisSection() {
   // «возможно, загружены фото двух разных велосипедов».
   const riderPhotoWheelRatio = usePhotoAnalysisStore((s) => s.riderPhotoWheelRatio);
   const setRiderPhotoWheelRatio = usePhotoAnalysisStore((s) => s.setRiderPhotoWheelRatio);
+  // v1.14.36: честный статус сверки — "notFound" больше не маскируется под «совпадает»
+  const riderWheelCheck = usePhotoAnalysisStore((s) => s.riderWheelCheck);
+  const setRiderWheelCheck = usePhotoAnalysisStore((s) => s.setRiderWheelCheck);
   const bikePhotoWheelRatio = useMemo(() => {
     if (!activeBikeId) return null;
     const card = getBikes().find((b) => b.id === activeBikeId);
     const r = card?.photoCalib?.wheelRatio;
     return typeof r === "number" && Number.isFinite(r) && r > 0 ? r : null;
   }, [activeBikeId, views.side.photoData]); // пересчёт и при смене фото вела
-  const bikeMismatchPct = wheelRatioDivergencePct(bikePhotoWheelRatio, riderPhotoWheelRatio);
-  const bikeMismatch = isBikeMismatch(bikePhotoWheelRatio, riderPhotoWheelRatio);
+  const matchResult = bikeMatchVerdict(bikePhotoWheelRatio, riderPhotoWheelRatio);
+  const bikeMismatch = matchResult.verdict === "mismatch";
+  const bikeMatchOk = matchResult.verdict === "match";
+  // Сверка не состоялась, хотя базу для сравнения знаем (вел размечен):
+  // детектор не нашёл оба колеса на фото райдера — честно показываем «не сверено»
+  const bikeMatchUnknown =
+    matchResult.verdict === "unknown" && bikePhotoWheelRatio != null && riderWheelCheck === "notFound";
 
   // === v1.14.34 (ТЗ п. 6): Re-fit Loop — архив прошлого прогона + анкета ===
   const previousRun = usePhotoAnalysisStore((s) => s.previousRun);
@@ -418,20 +425,26 @@ export function PhotoAnalysisSection() {
         const img = new Image();
         img.onload = () => {
           const cur = usePhotoAnalysisStore.getState().views.side.photoData;
-          if (cur !== url) return; // фото уже заменили — результат не актуален
+          if (cur !== url) return; // фото уже заменили — результат не актуален (стор уже сброшен в "pending")
           try {
             const frame = downscaleToRawFrame(img);
             const ratio = frame ? computeWheelRatioFromFrame(frame) : null;
             setRiderPhotoWheelRatio(ratio);
+            // v1.14.36: честный статус — детектор не нашёл оба колеса ≠ «совпадает»
+            setRiderWheelCheck(ratio != null ? "ok" : "notFound");
           } catch {
             setRiderPhotoWheelRatio(null);
+            setRiderWheelCheck("notFound");
           }
         };
-        img.onerror = () => setRiderPhotoWheelRatio(null);
+        img.onerror = () => {
+          setRiderPhotoWheelRatio(null);
+          setRiderWheelCheck("notFound");
+        };
         img.src = url;
       }
     },
-    [setUiState, setViewPhotoStore, setViewPhotoData, setRiderPhotoWheelRatio]
+    [setUiState, setViewPhotoStore, setViewPhotoData, setRiderPhotoWheelRatio, setRiderWheelCheck]
   );
 
   const handleClear = useCallback(
@@ -512,7 +525,10 @@ export function PhotoAnalysisSection() {
         </Card>
       )}
 
-      {/* === v1.14.34 (ТЗ п. 5.4): Bike Match Validation — предупреждение о двух разных велосипедах === */}
+      {/* === v1.14.34 (ТЗ п. 5.4) + v1.14.36: Bike Match Validation ===
+          Три честных состояния: совпадает / расходится / НЕ СВЕРЕНО.
+          Раньше «не сверено» (колёса не распознаны) молча выглядело как
+          «совпадает» — подмена вела проходила незамеченной. */}
       {bikeMismatch && (
         <div className="flex items-start gap-2 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
           <AlertTriangle className="size-4 mt-0.5 shrink-0" />
@@ -521,13 +537,37 @@ export function PhotoAnalysisSection() {
               Возможно, загружены фото двух разных велосипедов
             </p>
             <p className="mt-1 text-xs">
-              Пропорция «колёсная база / диаметр колеса» расходится на {bikeMismatchPct?.toFixed(0)}% между фото с райдером (Шаг 1) и фото вела (Шаг 2):
+              Пропорция «колёсная база / диаметр колеса» расходится на {matchResult.divergencePct?.toFixed(0)}% между фото с райдером (Шаг 1) и фото вела (Шаг 2):
               {bikePhotoWheelRatio != null && ` у вела ${bikePhotoWheelRatio.toFixed(2)}${riderPhotoWheelRatio != null ? `, у фото с райдером ${riderPhotoWheelRatio.toFixed(2)}` : ""}.`}
               {" "}
               Убедитесь, что оба фото сняты одного и того же велосипеда с одного ракурса. Сравнение с рамой будет ненадёжным.
               {` `}Если вы сменили велосипед — переснимите и Шаг 1 (фото с райдером): сейчас в сравнении участвуют кадры разных велосипедов.
             </p>
           </div>
+        </div>
+      )}
+      {bikeMatchUnknown && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+          <AlertTriangle className="size-4 mt-0.5 shrink-0" />
+          <div>
+            <p className="font-medium">
+              Не удалось автоматически сверить велосипеды
+            </p>
+            <p className="mt-1 text-xs">
+              На фото с райдером не удалось распознать оба колеса (часто мешает нога или ракурс), поэтому автопроверка «тот ли это велосипед, что размечен на Шаге 2» не выполнялась.
+              {bikePhotoWheelRatio != null && ` Пропорция размеченного вела: ${bikePhotoWheelRatio.toFixed(2)}.`}
+              {" "}
+              Если вы меняли велосипед после Шага 2 — вернитесь и переснимите фото с райдером: сравнение с рамой другого вела даст неверные рекомендации.
+            </p>
+          </div>
+        </div>
+      )}
+      {bikeMatchOk && (
+        <div className="flex items-center gap-2 rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50/60 dark:bg-emerald-950/20 px-4 py-2.5 text-sm text-emerald-700 dark:text-emerald-400">
+          <CheckCircle2 className="size-4 shrink-0" />
+          <span className="text-xs">
+            Велосипеды сверены: пропорция «колёсная база / диаметр колеса» совпадает (расхождение {matchResult.divergencePct?.toFixed(0)}% — в пределах нормы). Фото с райдером и фото вела похожи на один велосипед.
+          </span>
         </div>
       )}
 

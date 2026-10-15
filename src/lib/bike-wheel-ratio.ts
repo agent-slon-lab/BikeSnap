@@ -122,6 +122,36 @@ export function isBikeMismatch(
 }
 
 /**
+ * v1.14.36: честный трёхступенчатый вердикт сверки велосипедов.
+ * Раньше «не удалось сверить» (детектор колёс не нашёл оба колеса на фото
+ * райдера — частый случай: нога закрывает колесо) молча выглядел как
+ * «совпадает» — защита от дурака пропускала подмену вела. Теперь:
+ *   - "match"    — обе пропорции известны, расхождение ≤ 12%;
+ *   - "mismatch" — обе известны, расхождение > 12% (два разных вела?);
+ *   - "unknown"  — хоть одна пропорция не посчиталась: сверка НЕ состоялась,
+ *                  это НЕ «совпадение» (UI обязан показать честное «не сверено»).
+ */
+export type BikeMatchVerdict = "match" | "mismatch" | "unknown";
+
+export interface BikeMatchResult {
+  verdict: BikeMatchVerdict;
+  /** Расхождение в %; null, если хотя бы одна пропорция неизвестна */
+  divergencePct: number | null;
+}
+
+export function bikeMatchVerdict(
+  a: number | null | undefined,
+  b: number | null | undefined
+): BikeMatchResult {
+  const divergencePct = wheelRatioDivergencePct(a, b);
+  if (divergencePct == null) return { verdict: "unknown", divergencePct: null };
+  return {
+    verdict: divergencePct > WHEEL_RATIO_MISMATCH_PCT ? "mismatch" : "match",
+    divergencePct,
+  };
+}
+
+/**
  * Уменьшить изображение до рабочего кадра детектора и снять ImageData.
  * Детектор спроектирован под кадры ~320px; 480px по ширине — компромисс
  * точность/скорость (единицы мс). Возвращает null на битом/пустом кадре.
