@@ -6,6 +6,7 @@ import { ThemeProvider } from "next-themes";
 import RegisterSW from "@/components/pwa/register-sw";
 import ChunkErrorRecovery from "@/components/pwa/chunk-error-recovery";
 import UpdateBanner from "@/components/pwa/update-banner";
+import OfflineBadge from "@/components/pwa/offline-badge";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -81,6 +82,7 @@ export default function RootLayout({
           <RegisterSW />
           <ChunkErrorRecovery />
           <UpdateBanner />
+          <OfflineBadge />
         </ThemeProvider>
       </body>
     </html>

@@ -1,5 +1,5 @@
 /*
- * BikeSnap service worker (v1.14.34) — офлайн-режим v2.
+ * BikeSnap service worker (v1.14.38) — офлайн-режим v2.
  *
  * Стратегии:
  *  - /api/*            → только сеть (релеи анализа/калибровки/отчётов —
@@ -29,7 +29,7 @@
  *  - имя кэша bikesnap-v<версия> синхронизировано с APP_VERSION: бампать
  *    при каждом релизе (activate сам удалит старый кэш).
  */
-const VERSION = "v1.14.37";
+const VERSION = "v1.14.38";
 const CACHE = `bikesnap-${VERSION}`;
 
 const SHELL = [
@@ -191,7 +191,19 @@ self.addEventListener("fetch", (event) => {
           return response;
         })
         .catch(() =>
-          caches.match(request).then((hit) => hit || Response.error())
+          caches.match(request).then((hit) => {
+            if (!hit) return Response.error();
+            // v1.14.38: маркер «ответ из кэша — сеть до сервера недоступна».
+            // Страница (OfflineBadge) по нему показывает офлайн-плашку,
+            // вместо молчаливой старой версии («почему обновы не приходят»).
+            const headers = new Headers(hit.headers);
+            headers.set("X-BikeSnap-From-Cache", "1");
+            return new Response(hit.body, {
+              status: hit.status,
+              statusText: hit.statusText,
+              headers,
+            });
+          })
         )
     );
     return;
