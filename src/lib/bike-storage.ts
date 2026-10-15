@@ -352,6 +352,119 @@ export function setActiveBike(id: string) {
 }
 
 // ============================================================
+// ЭКСПОРТ/ИМПОРТ СНАПШОТА (v1.14.40): перенос между origin'ами
+// ============================================================
+//
+// localStorage привязан к домену (правило изоляции origin во всех
+// браузерах): велики, сохранённые на bike-snap.vercel.app, невидимы
+// на зеркале agent-slon-lab.github.io и наоборот. Данные при этом
+// ВСЕГДА лежат только на устройстве пользователя — браузер просто
+// держит по доменные «ящики». readSnapshot/mergeSnapshot — общая
+// механика переноса; файловый ввод/вывод в src/lib/data-transfer.ts.
+
+export interface StorageSnapshot {
+  riders: Rider[];
+  bikes: BikeRecord[];
+  activeRiderId: string | null;
+  activeBikeId: string | null;
+}
+
+export interface MergeResult {
+  ridersAdded: number;
+  ridersSkipped: number;
+  bikesAdded: number;
+  bikesSkipped: number;
+}
+
+/** Снять полный снимок данных этого origin (для экспорта в файл). */
+export function readSnapshot(): StorageSnapshot {
+  return {
+    riders: getRiders(),
+    bikes: getBikes(),
+    activeRiderId: getActiveRiderId(),
+    activeBikeId: getActiveBikeId(),
+  };
+}
+
+/**
+ * Влить снимок (из файла/другого origin) в текущее хранилище.
+ * Merge по id: существующие записи НЕ перезаписываются (безопасно
+ * повторять импорт). Кривые записи пропускаются (ridersSkipped /
+ * bikesSkipped). Если в снимке активный вел/райдер существует —
+ * восстановить активный контекст (диспатчится ACTIVE_BIKE_CHANGED_EVENT).
+ */
+export function mergeSnapshot(incoming: StorageSnapshot): MergeResult {
+  const res: MergeResult = {
+    ridersAdded: 0,
+    ridersSkipped: 0,
+    bikesAdded: 0,
+    bikesSkipped: 0,
+  };
+
+  // --- Райдеры: merge по id, кривые записи пропускаем ---
+  const riders = getRiders();
+  const riderIds = new Set(riders.map((r) => r.id));
+  for (const r of incoming.riders ?? []) {
+    if (!r || typeof r.id !== "string" || typeof r.name !== "string" || !r.body) {
+      res.ridersSkipped++;
+      continue;
+    }
+    if (riderIds.has(r.id)) {
+      res.ridersSkipped++;
+      continue;
+    }
+    riders.push(r);
+    riderIds.add(r.id);
+    res.ridersAdded++;
+  }
+  if (res.ridersAdded > 0) save(RIDERS_KEY, riders);
+
+  // --- Велы: merge по id; blob: URL фото из чужого файла — мусор, режем ---
+  const bikes = getBikes();
+  const bikeIds = new Set(bikes.map((b) => b.id));
+  for (const b of incoming.bikes ?? []) {
+    if (
+      !b ||
+      typeof b.id !== "string" ||
+      typeof b.name !== "string" ||
+      !b.measurements
+    ) {
+      res.bikesSkipped++;
+      continue;
+    }
+    if (bikeIds.has(b.id)) {
+      res.bikesSkipped++;
+      continue;
+    }
+    if (b.photoData && typeof b.photoData === "string" && b.photoData.startsWith("blob:")) {
+      delete b.photoData;
+    }
+    bikes.push(b);
+    bikeIds.add(b.id);
+    res.bikesAdded++;
+  }
+  if (res.bikesAdded > 0) save(BIKES_KEY, bikes);
+
+  // --- Активный контекст: только если импортированный реально существует ---
+  if (
+    incoming.activeBikeId &&
+    bikeIds.has(incoming.activeBikeId) &&
+    getActiveBikeId() !== incoming.activeBikeId
+  ) {
+    setActiveBike(incoming.activeBikeId);
+  }
+  if (
+    incoming.activeRiderId &&
+    riderIds.has(incoming.activeRiderId) &&
+    getActiveRiderId() !== incoming.activeRiderId
+  ) {
+    setActiveRider(incoming.activeRiderId);
+  }
+
+  return res;
+}
+
+// ============================================================
 // ОЧИСТКА
 // ============================================================
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Bike,
   ChevronRight,
@@ -12,6 +12,8 @@ import {
   ListChecks,
   Info,
   Check,
+  Download,
+  Upload,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
@@ -30,6 +32,11 @@ import { PhotoAnalysisSection } from "@/components/bike-fit/PhotoAnalysisSection
 import { ModeSelectionScreen } from "@/components/bike-fit/ModeSelectionScreen";
 import { ModelSelectionWizard } from "@/components/bike-fit/ModelSelectionWizard";
 import { useActiveBikeId } from "@/hooks/use-active-bike-id";
+import { useToast } from "@/hooks/use-toast";
+import {
+  downloadDataFile,
+  importDataFile,
+} from "@/lib/data-transfer";
 import { Camera } from "lucide-react";
 
 const STEPS: Array<{
@@ -371,10 +378,69 @@ export default function Home() {
 function Header({ onLogoClick }: { onLogoClick?: () => void }) {
   const { resolvedTheme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
+  const { toast } = useToast();
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // v1.14.40: экспорт данных в файл — мост между ящиками localStorage
+  // разных доменов (vercel ↔ зеркало). Данные всегда лежат локально,
+  // файл просто перекладывает их из одного ящика в другой.
+  const handleExport = () => {
+    try {
+      const { bikes, riders } = downloadDataFile();
+      toast({
+        title: "Файл сохранён",
+        description: `Велов: ${bikes} · райдеров: ${riders}. Чтобы перенести их на другой сайт (например, с vercel на зеркало), открой его и нажми «Импорт» рядом.`,
+      });
+    } catch (e) {
+      toast({
+        title: "Экспорт не удался",
+        description: e instanceof Error ? e.message : "Неизвестная ошибка",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleImportFile = async (
+    ev: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = ev.target.files?.[0];
+    // сброс, чтобы повторный выбор того же файла снова сработал
+    ev.target.value = "";
+    if (!file || importing) return;
+    setImporting(true);
+    try {
+      const res = await importDataFile(file);
+      const added = res.bikesAdded + res.ridersAdded;
+      toast({
+        title: added > 0 ? "Данные перенесены" : "Всё уже было",
+        description:
+          added > 0
+            ? `Добавлено: велов +${res.bikesAdded}, райдеров +${res.ridersAdded}` +
+              (res.bikesSkipped + res.ridersSkipped > 0
+                ? ` · пропущено совпадающих: ${res.bikesSkipped + res.ridersSkipped}`
+                : "") +
+              " — обновляю страницу…"
+            : "В этом файле нет новых записей для этого сайта — ничего не изменилось",
+      });
+      // Перезагрузка гарантирует свежие списки во всех экранах
+      if (added > 0) {
+        setTimeout(() => window.location.reload(), 1400);
+      }
+    } catch (e) {
+      toast({
+        title: "Импорт не удался",
+        description: e instanceof Error ? e.message : "Неизвестная ошибка",
+        variant: "destructive",
+      });
+    } finally {
+      setImporting(false);
+    }
+  };
 
   return (
     <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-md">
@@ -394,7 +460,32 @@ function Header({ onLogoClick }: { onLogoClick?: () => void }) {
             </span>
           </div>
         </button>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 sm:gap-2">
+          {/* v1.14.40: перенос данных файлом (vercel ↔ зеркало) */}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleExport}
+            title="Экспорт данных в файл (перенос велов и райдеров)"
+          >
+            <Download className="size-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => importInputRef.current?.click()}
+            disabled={importing}
+            title="Импорт данных из файла"
+          >
+            <Upload className="size-4" />
+          </Button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={handleImportFile}
+          />
           <Button
             variant="ghost"
             size="icon"

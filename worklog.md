@@ -872,3 +872,53 @@ Stage Summary:
   перебросит на зеркало. Велы с vercel-хранилища на зеркале не видны
   (раздельные localStorage).
 - Следующая версия: v1.14.40.
+
+---
+Task ID: 44
+Agent: Super Z (main)
+Task: «с чего это данные лежат на верцель? у нас оффлайн прил. все данные
+на тел или компе локально, это очевидно!!!» → объяснение + мост между
+ящиками localStorage (v1.14.40 экспорт/импорт)
+
+Work Log:
+- Верифицировал хвост предыдущей сессии: v1.14.39 (de7bddd) была
+  запушена и задеплоена — remote main == HEAD, SW v1.14.39 на vercel и
+  на зеркале (worklog Task 43 обрывался до пуша). «ahead 15» оказался
+  протухшим tracking-ref'ом: пуш по PAT-in-URL не обновляет origin/main;
+  git fetch восстановил синхронизацию.
+- Объяснение пользователю: данные И правда лежат только на устройстве,
+  на сервер vercel ничего не отправляется; «сохранённые на vercel» —
+  это «в ящике localStorage домена bike-snap.vercel.app». Браузеры
+  изолируют localStorage по origin — два ящика на одном устройстве
+  (vercel и github.io), приложение с одного домена не видит ящик
+  другого. Это политика Chrome/Safari/Firefox, не BikeSnap.
+- v1.14.40 — файловый мост между ящиками:
+  1) bike-storage.ts: readSnapshot() (riders+bikes+activeRiderId/
+     activeBikeId) и mergeSnapshot() — вливание по id, существующие
+     не перезаписываются (безопасный повтор), кривые записи
+     пропускаются, blob:-фото режутся, активный вел/райдер
+     восстанавливается только при существовании записи
+     (+ ACTIVE_BIKE_CHANGED_EVENT).
+  2) src/lib/data-transfer.ts: buildTransferPayload (self-describing
+     JSON app/kind/schema=1/fromVersion/exportedAt), downloadDataFile
+     (Blob → bikesnap-data-ГГГГ-ММ-ДД.json), importDataFile (валидация,
+     понятные ошибки на чужие/битые файлы).
+  3) page.tsx Header: кнопки «Экспорт»/«Импорт» (Download/Upload,
+     скрытый file input) на всех экранах; тосты с количествами,
+     авто-reload через 1.4 с после реального добавления, destructive
+     на ошибки. Фото (base64) и точки калибровки едут в файле.
+- Бамп 1.14.40: package.json / app-version.ts / sw.js / version.json /
+  whats-new.ts (запись с памяткой миграции) / CHANGELOG.md
+  (+исправление опечатки «счего»).
+- Проверки: tsc чисто (фильтр до-существующих scripts/*), next build
+  OK, смоук :3313 — страница 200, version.json и sw.js = v1.14.40,
+  строка «Экспорт данных в файл» в чанке 6b7ed3506e4c3c6b.js,
+  регресс scripts/test-mirror-failover.ts — 14 OK / 0 FAIL.
+
+Stage Summary:
+- v1.14.40: перенос данных файлом закрыл главный практический вопрос
+  фейловера — велики с vercel-ящика переносятся на зеркало за 2 минуты
+  (VPN → «Экспорт» → зеркало → «Импорт»).
+- Формулировка «данные на vercel» признана неудачной: данные всегда на
+  устройстве; разделяются только ящики localStorage по доменам.
+- Следующая версия: v1.14.41.
