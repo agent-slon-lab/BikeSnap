@@ -627,3 +627,40 @@ Work Log:
 Stage Summary:
 - Прод и зеркало = v1.14.34; отображаемая v1.14.32 — устаревший service-worker-кэш у пользователя, обновление подтверждается вручную (один раз).
 - Код не менялся; следующая версия — v1.14.35.
+
+---
+Task ID: 38
+Agent: Super Z (main)
+Task: «я поменял фото велика — ИИ не смог это понять»: диагностика + v1.14.35
+
+Work Log:
+- Диагностика: новых user-reports за 2026-10-15 нет; git fetch — репо на 9135625 (v1.14.34).
+- Стенд scripts/pose-eval (playwright + @mediapipe/tasks-vision из node_modules + lite-модель):
+  все 6 фото вела из отчётов → landmarks НЕ найдены (score 0, ложного «человек обнаружен» нет);
+  все 5 фото райдера → core 0.83–0.90, ближняя нога 0.98 — все пороги v1.14.34 проходят.
+  Вывод: сбой — на НОВОМ фото пользователя; в коде найден реальный баг-гонка.
+- БАГ (Шаг 2, BikePhotoCalibrator): эффект person-проверки не ждал готовности WASM-модели —
+  detect() до инициализации возвращал null → score 0 → проверка молча пропускалась навсегда.
+- v1.14.35 (коммит 825fcc5, НЕ запушен):
+  1) эффект ждёт poseLandmarker и перезапускается по готовности;
+  2) предупреждение «На фото обнаружен человек» отклоняемое («Всё равно разметить это фото»),
+     сброс при замене/удалении фото; текст уточнён (не блокирует разметку);
+  3) «два разных велосипеда» + подсказка «сменил велик — пересними Шаг 1»;
+  4) телеметрия: photoPersonScore в карточке вела (updateBikePhotoPersonScore,
+     чистится в updateBikePhoto) и calibration.personScore/wheelRatio в отчёте отладки;
+  5) whats-new 1.14.35 + CHANGELOG + бамп версии (app-version/package/sw.js/version.json).
+- Проверки: next build OK; verify-v1434.ts 34/0 OK; смоук playwright (футер 1.14.35,
+  «Что нового», консоль чистая) OK. Стенд и смоук: scripts/pose-eval/.
+- Деплой-блокер: воркспейс пересобран — git-helpers/deploy_key и ~/.ssh утеряны
+  (git-restore.sh → «КЛЮЧА НЕТ НИГДЕ»). scripts/rotate-deploy-key.py упал (нет paramiko) —
+  написан scripts/gen-deploy-key.py (чистая cryptography), paramiko 5.0.0 поставлен через uv
+  в /home/z/.venv (для scripts/paramiko-ssh). core.sshCommand настроен.
+  Публичный ключ выдан пользователю для GitHub → Deploy keys (Allow write); после добавления
+  — git push origin main и verify прод/зеркала.
+
+Stage Summary:
+- v1.14.35 готова локально (825fcc5): фикс гонки person-check + отклоняемое предупреждение +
+  подсказка при смене вела + вердикт ИИ в отчёте. Не запушено: ждёт deploy-ключ от пользователя.
+- Пользователю: добавить pubkey в GitHub Deploy keys; при повторе жалобы — отчёт из приложения
+  (теперь несёт personScore).
+- Следующая версия после пуша: v1.14.36.
