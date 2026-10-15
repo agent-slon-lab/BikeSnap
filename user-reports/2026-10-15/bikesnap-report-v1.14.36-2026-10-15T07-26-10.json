@@ -1,0 +1,485 @@
+{
+  "meta": {
+    "app": "BikeSnap",
+    "version": "v1.14.36",
+    "createdAt": "2026-10-15T07:26:10.983Z",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+    "screen": "2560x1440",
+    "viewport": "1920x959",
+    "orientation": "landscape",
+    "language": "ru-RU"
+  },
+  "context": {
+    "bikeType": "road",
+    "goal": "sport",
+    "complaints": [
+      "wrist_numbness"
+    ],
+    "body": {
+      "height": 186,
+      "inseam": 86,
+      "flexibility": 5
+    },
+    "bike": {
+      "saddleHeight": 800,
+      "reach": 455,
+      "stack": 660,
+      "crank": 175,
+      "sta": 78.1,
+      "hta": 77.1,
+      "wheelHeight": 335,
+      "wheelbase": 1110,
+      "frontCenter": 668,
+      "rearCenter": 449,
+      "seatTube": 527,
+      "bbDrop": 97
+    },
+    "activeBikeId": "1791524767326-2kshd8",
+    "activeBikeName": "шш"
+  },
+  "views": [
+    {
+      "view": "side",
+      "analyzed": true,
+      "error": null,
+      "landmarksCount": 33,
+      "landmarks": [
+        {
+          "x": 0.4973,
+          "y": 0.1864,
+          "visibility": 0.9999
+        },
+        {
+          "x": 0.4996,
+          "y": 0.1681,
+          "visibility": 0.9998
+        },
+        {
+          "x": 0.5028,
+          "y": 0.1667,
+          "visibility": 0.9998
+        },
+        {
+          "x": 0.5064,
+          "y": 0.1651,
+          "visibility": 0.9999
+        },
+        {
+          "x": 0.4953,
+          "y": 0.1695,
+          "visibility": 0.9998
+        },
+        {
+          "x": 0.4948,
+          "y": 0.1691,
+          "visibility": 0.9998
+        },
+        {
+          "x": 0.4945,
+          "y": 0.1685,
+          "visibility": 0.9998
+        },
+        {
+          "x": 0.5217,
+          "y": 0.1652,
+          "visibility": 0.9995
+        },
+        {
+          "x": 0.5085,
+          "y": 0.1664,
+          "visibility": 0.9996
+        },
+        {
+          "x": 0.507,
+          "y": 0.1987,
+          "visibility": 0.9996
+        },
+        {
+          "x": 0.5022,
+          "y": 0.199,
+          "visibility": 0.9996
+        },
+        {
+          "x": 0.555,
+          "y": 0.2454,
+          "visibility": 0.9999
+        },
+        {
+          "x": 0.5389,
+          "y": 0.2363,
+          "visibility": 0.9998
+        },
+        {
+          "x": 0.4972,
+          "y": 0.3547,
+          "visibility": 0.9861
+        },
+        {
+          "x": 0.4953,
+          "y": 0.3419,
+          "visibility": 0.2859
+        },
+        {
+          "x": 0.4316,
+          "y": 0.4367,
+          "visibility": 0.9753
+        },
+        {
+          "x": 0.4433,
+          "y": 0.4202,
+          "visibility": 0.4455
+        },
+        {
+          "x": 0.4131,
+          "y": 0.4502,
+          "visibility": 0.9568
+        },
+        {
+          "x": 0.4226,
+          "y": 0.435,
+          "visibility": 0.4524
+        },
+        {
+          "x": 0.4122,
+          "y": 0.4454,
+          "visibility": 0.9534
+        },
+        {
+          "x": 0.4232,
+          "y": 0.4338,
+          "visibility": 0.4596
+        },
+        {
+          "x": 0.4193,
+          "y": 0.4396,
+          "visibility": 0.9343
+        },
+        {
+          "x": 0.4312,
+          "y": 0.4279,
+          "visibility": 0.4646
+        },
+        {
+          "x": 0.6032,
+          "y": 0.4437,
+          "visibility": 0.9998
+        },
+        {
+          "x": 0.5733,
+          "y": 0.4265,
+          "visibility": 0.9994
+        },
+        {
+          "x": 0.5647,
+          "y": 0.5824,
+          "visibility": 0.9762
+        },
+        {
+          "x": 0.4815,
+          "y": 0.4565,
+          "visibility": 0.6801
+        },
+        {
+          "x": 0.5597,
+          "y": 0.7118,
+          "visibility": 0.9685
+        },
+        {
+          "x": 0.5255,
+          "y": 0.5868,
+          "visibility": 0.7307
+        },
+        {
+          "x": 0.5694,
+          "y": 0.7308,
+          "visibility": 0.9308
+        },
+        {
+          "x": 0.5447,
+          "y": 0.6066,
+          "visibility": 0.7628
+        },
+        {
+          "x": 0.5225,
+          "y": 0.7416,
+          "visibility": 0.9603
+        },
+        {
+          "x": 0.4879,
+          "y": 0.6242,
+          "visibility": 0.8277
+        }
+      ],
+      "analysis": {
+        "kneeAngle": {
+          "value": 166.7,
+          "min": 140,
+          "max": 150,
+          "status": "bad",
+          "label": "Угол колена (разгибание)",
+          "description": "Анатомический угол бедро–колено–лодыжка в нижней точке педалирования (НМТ): 180° — нога полностью выпрямлена. Норма 140–150° (сгибу 30–40°). Влияет на мощность и нагрузку на сустав.",
+          "recommendation": "Нога слишком прямая (167°). Опустите седло, чтобы угол в НМТ составлял 140–150°.",
+          "flexion": {
+            "value": 13.3,
+            "min": 30,
+            "max": 40,
+            "label": "сгиб"
+          },
+          "color": {
+            "text": "text-rose-600 dark:text-rose-400",
+            "bg": "bg-rose-50 dark:bg-rose-950/40",
+            "border": "border-rose-200 dark:border-rose-900",
+            "ring": "ring-rose-500/30"
+          }
+        },
+        "hipAngle": {
+          "value": 150.8,
+          "min": 95,
+          "max": 105,
+          "status": "bad",
+          "label": "Угол бедра",
+          "description": "Анатомический угол между туловищем (плечо→бедро) и бедром (бедро→колено). Норма шоссе 95–105°. Определяет закрытость тазобедренного сустава.",
+          "recommendation": "Угол бедра 151° открыт в основном из-за вертикального корпуса (76°) — посадка НЕ растянута, сокращать дистанцию седло–руль нельзя. Удлините посадку до целевой: корпус наклонится, и угол бедра закроется к норме 95–105°.",
+          "color": {
+            "text": "text-rose-600 dark:text-rose-400",
+            "bg": "bg-rose-50 dark:bg-rose-950/40",
+            "border": "border-rose-200 dark:border-rose-900",
+            "ring": "ring-rose-500/30"
+          }
+        },
+        "backAngle": {
+          "value": 76.3,
+          "min": 35,
+          "max": 45,
+          "status": "bad",
+          "label": "Наклон корпуса",
+          "description": "Угол наклона спины (бедро→плечо) к горизонту: 0° — горизонтально (агрессивная посадка), 90° — вертикально (комфорт). Норма шоссе 35–45°.",
+          "recommendation": "Спина стоит слишком ВЕРТИКАЛЬНО (комфортная посадка) — 76.3°. Для аэродинамики опустите вынос.",
+          "color": {
+            "text": "text-rose-600 dark:text-rose-400",
+            "bg": "bg-rose-50 dark:bg-rose-950/40",
+            "border": "border-rose-200 dark:border-rose-900",
+            "ring": "ring-rose-500/30"
+          }
+        },
+        "ankleAngle": {
+          "value": 130.9,
+          "min": 90,
+          "max": 110,
+          "status": "bad",
+          "label": "Угол голеностопа",
+          "description": "Угол между голенью (колено→лодыжка) и стопой (лодыжка→носок). Норма 90–110°.",
+          "recommendation": "Носок слишком опущен вниз — возможно, седло задрано слишком высоко, и вы тянетесь к педали.",
+          "color": {
+            "text": "text-rose-600 dark:text-rose-400",
+            "bg": "bg-rose-50 dark:bg-rose-950/40",
+            "border": "border-rose-200 dark:border-rose-900",
+            "ring": "ring-rose-500/30"
+          }
+        },
+        "shoulderAngle": {
+          "value": 41.5,
+          "min": 70,
+          "max": 100,
+          "status": "bad",
+          "label": "Угол плеча",
+          "description": "Угол между плечом и корпусом. Характеризует положение рук на руле.",
+          "recommendation": "Угол плеча 42° мал, но спина избыточно вертикальна (76°) — поднимать руль нельзя, корпус выпрямится ещё сильнее. Первична длина посадки: удлините её до целевой — корпус наклонится, и угол в плече откроется сам.",
+          "color": {
+            "text": "text-rose-600 dark:text-rose-400",
+            "bg": "bg-rose-50 dark:bg-rose-950/40",
+            "border": "border-rose-200 dark:border-rose-900",
+            "ring": "ring-rose-500/30"
+          }
+        },
+        "kops": {
+          "value": 0.5,
+          "min": 0,
+          "max": 3,
+          "status": "good",
+          "label": "KOPS (колено над осью педали, у.е.)",
+          "description": "Горизонтальное смещение колена относительно оси педали. Идеал — колено ровно над осью (норма ±10 мм).",
+          "recommendation": "Отличное положение колена над осью педали.",
+          "unit": "у.е.",
+          "color": {
+            "text": "text-emerald-600 dark:text-emerald-400",
+            "bg": "bg-emerald-50 dark:bg-emerald-950/40",
+            "border": "border-emerald-200 dark:border-emerald-900",
+            "ring": "ring-emerald-500/30"
+          },
+          "signedValue": 0.5040407180786133
+        },
+        "side": "left",
+        "warnings": []
+      },
+      "captureMeta": null,
+      "photo": null,
+      "photoFile": "user-reports/2026-10-15/bikesnap-report-v1.14.36-2026-10-15T07-26-10-photo-side.jpg"
+    },
+    {
+      "view": "back",
+      "analyzed": false,
+      "error": null,
+      "landmarksCount": 0,
+      "landmarks": null,
+      "analysis": null,
+      "captureMeta": null,
+      "photo": null,
+      "photoFile": null
+    },
+    {
+      "view": "front",
+      "analyzed": false,
+      "error": null,
+      "landmarksCount": 0,
+      "landmarks": null,
+      "analysis": null,
+      "captureMeta": null,
+      "photo": null,
+      "photoFile": null
+    }
+  ],
+  "bikeCalibration": {
+    "photo": null,
+    "photoFile": "user-reports/2026-10-15/bikesnap-report-v1.14.36-2026-10-15T07-26-10-photo-bike-side.jpg",
+    "points": {
+      "bb": {
+        "x": 0.49608514383177443,
+        "y": 0.7241580101751512
+      },
+      "stTop": {
+        "x": 0.5508930773883542,
+        "y": 0.40239276094920073
+      },
+      "saddleMount": {
+        "x": 0.5788563131048605,
+        "y": 0.23555152646956906
+      },
+      "htTop": {
+        "x": 0.2757444000244141,
+        "y": 0.350068662857242
+      },
+      "htBottom": {
+        "x": 0.2634411112467448,
+        "y": 0.4171030804531423
+      },
+      "rearAxle": {
+        "x": 0.7030044555664062,
+        "y": 0.6673649693699709
+      },
+      "htTopCap": {
+        "x": 0.2869292195638021,
+        "y": 0.3068687108724681
+      },
+      "frontAxle": {
+        "x": 0.18626585642496746,
+        "y": 0.6569373737297101
+      },
+      "rearWheelTop": {
+        "x": 0.6962935384114584,
+        "y": 0.4455927130120179
+      },
+      "frontWheelTop": {
+        "x": 0.18850282033284504,
+        "y": 0.43367548020645463
+      }
+    },
+    "scale": {
+      "scaleMmPerPx": 1.7727,
+      "scaleSource": "USER_OVERRIDE (saddleHeight = 800mm) — СТРОГО (консенсус подтверждает: 4/4 кандидатов согласованы)",
+      "frameTiltDeg": -0.9,
+      "wheelRatio": 1.546
+    },
+    "personScore": 0.833,
+    "bikeMatch": {
+      "bikeRatio": 1.546,
+      "riderRatio": null,
+      "verdict": "unknown",
+      "divergencePct": null,
+      "riderWheelCheck": "pending"
+    }
+  },
+  "telemetry": {
+    "appVersion": "v1.14.36",
+    "engineVersion": "pose-engine@2.1.0",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+    "viewportSize": "1920x959",
+    "screen": "2560x1440",
+    "language": "ru-RU",
+    "device": {
+      "deviceRoll": null,
+      "devicePitch": null,
+      "isOrientationSupported": false
+    },
+    "calibration": {
+      "scaleSource": "USER_OVERRIDE (saddleHeight = 800mm) — СТРОГО (консенсус подтверждает: 4/4 кандидатов согласованы)",
+      "scaleKind": "USER_SADDLE_HEIGHT",
+      "scaleMmPerPx": 1.7727,
+      "frameTiltDeg": -0.9,
+      "bikeWheelRatio": 1.546,
+      "personScore": 0.833,
+      "bikeMatch": {
+        "bikeRatio": 1.546,
+        "riderRatio": null,
+        "verdict": "unknown",
+        "divergencePct": null,
+        "riderWheelCheck": "pending"
+      }
+    },
+    "poseKeypoints": {
+      "back": null,
+      "front": null,
+      "side": {
+        "side": "left",
+        "normalized": {
+          "shoulder": {
+            "x": 0.555,
+            "y": 0.2454
+          },
+          "hip": {
+            "x": 0.6032,
+            "y": 0.4437
+          },
+          "knee": {
+            "x": 0.5647,
+            "y": 0.5824
+          },
+          "ankle": {
+            "x": 0.5597,
+            "y": 0.7118
+          },
+          "toe": {
+            "x": 0.5225,
+            "y": 0.7416
+          }
+        },
+        "pixels": {
+          "shoulder": {
+            "x": 709.8,
+            "y": 235.3
+          },
+          "hip": {
+            "x": 771.5,
+            "y": 425.5
+          },
+          "knee": {
+            "x": 722.3,
+            "y": 558.5
+          },
+          "ankle": {
+            "x": 715.8,
+            "y": 682.7
+          },
+          "toe": {
+            "x": 668.3,
+            "y": 711.2
+          }
+        },
+        "photoSize": {
+          "width": 1279,
+          "height": 959
+        }
+      }
+    }
+  }
+}
