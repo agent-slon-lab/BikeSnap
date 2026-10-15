@@ -664,3 +664,26 @@ Stage Summary:
 - Пользователю: добавить pubkey в GitHub Deploy keys; при повторе жалобы — отчёт из приложения
   (теперь несёт personScore).
 - Следующая версия после пуша: v1.14.36.
+
+---
+Task ID: 39
+Agent: Super Z (main)
+Task: «лей» — деплой v1.14.35 по PAT-токену пользователя (deploy-ключ так и не добавлен)
+
+Work Log:
+- Пользователь прислал GitHub PAT (ghp_lx98…jUFA) с командой «лей» вместо добавления deploy-ключа.
+- git remote: fetch https, push git@ (SSH) — SSH-ключ в воркспейсе утерян (см. Task 38).
+- Проверка консистентности: package.json / app-version.ts / sw.js — все 1.14.35 ✓.
+- Пуш одной командой без сохранения токена в конфиге:
+  git push https://<PAT>@github.com/agent-slon-lab/BikeSnap.git main → 9135625..c844162 (4 коммита).
+- Верификация деплоя: vercel version.json → v1.14.35 ✓ (~75 с после пуша);
+  зеркало github.io version.json → сначала v1.14.34, через ~90 с автосинк → v1.14.35 ✓;
+  прод sw.js → VERSION v1.14.35, CACHE bikesnap-v1.14.35 ✓.
+- Токен в git config/файлах проекта НЕ сохранялся (только разовая URL-авторизация в команде пуша);
+  в worklog токен замаскирован.
+
+Stage Summary:
+- Прод (Vercel) и зеркало (GitHub Pages) = v1.14.35, SW-кэш bikesnap-v1.14.35.
+- Пуш выполнен PAT-токеном; рекомендация на будущее: токен в конфиге не хранится — при следующем
+  «лей» снова понадобится свежий токен либо добавленный deploy-ключ (pubkey из Task 38).
+- Следующая версия: v1.14.36.
