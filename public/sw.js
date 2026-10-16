@@ -1,5 +1,5 @@
 /*
- * BikeSnap service worker (v1.14.39) — офлайн-режим v3 с зеркальным фейловером.
+ * BikeSnap service worker (v1.14.42) — офлайн-режим v3 с зеркальным фейловером.
  *
  * Стратегии:
  *  - /api/*            → только сеть (релеи анализа/калибровки/отчётов —
@@ -38,7 +38,7 @@
  *  - имя кэша bikesnap-v<версия> синхронизировано с APP_VERSION: бампать
  *    при каждом релизе (activate сам удалит старый кэш).
  */
-const VERSION = "v1.14.41";
+const VERSION = "v1.14.42";
 const CACHE = `bikesnap-${VERSION}`;
 
 // Зеркало (GitHub Pages) — запасной вход, когда этот origin недоступен
@@ -109,13 +109,14 @@ const SHELL = [
 ];
 
 // Самохостинг MediaPipe (копия node_modules/@mediapipe/tasks-vision@1.0.1/wasm
-// + pose_landmarker_lite): качаются в кэш сразу после активации.
+// + pose_landmarker_full — v1.14.42, lite остался в репо как запасной):
+// качаются в кэш сразу после активации.
 const AI_ASSETS = [
   "/cdn/mediapipe/wasm/vision_wasm_internal.js",
   "/cdn/mediapipe/wasm/vision_wasm_internal.wasm",
   "/cdn/mediapipe/wasm/vision_wasm_nosimd_internal.js",
   "/cdn/mediapipe/wasm/vision_wasm_nosimd_internal.wasm",
-  "/cdn/mediapipe/models/pose_landmarker_lite.task",
+  "/cdn/mediapipe/models/pose_landmarker_full.task",
 ];
 
 // Легаси-CDN: если какой-то модуль ещё тянет откуда-то извне — кэшируем

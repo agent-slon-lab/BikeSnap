@@ -48,11 +48,12 @@ import {
   computeWheelRatioFromFrame,
   downscaleToRawFrame,
 } from "@/lib/bike-wheel-ratio";
-import { getBikes } from "@/lib/bike-storage";
+import { getBikes, getActiveRider } from "@/lib/bike-storage";
 import { fingerprintDataUrl } from "@/lib/photo-fingerprint";
 import { calculateAll } from "@/lib/bike-calculations";
 import { BIKE_TYPES } from "@/lib/bike-params";
 import { useBikeStore } from "@/lib/bike-store";
+import { AiConsultCard } from "@/components/bike-fit/AiConsultCard";
 import { cn } from "@/lib/utils";
 import { useMediaFlag, PHONE_LANDSCAPE_QUERY } from "@/hooks/use-media-flag";
 import { DebugReportCard } from "@/components/bike-fit/DebugReportCard";
@@ -102,6 +103,8 @@ const ANALYZERS: Record<
 
 export function PhotoAnalysisSection() {
   const { bikeType, body, bike, goal } = useBikeStore();
+  // v1.14.42: жалобы для AI-разбора (тот же источник, что и goal)
+  const complaints = useBikeStore((s) => s.complaints);
   // v1.14.31 (ТЗ п. A.1): proof of ownership — черновик обязан доказать, что
   // SH принадлежит активному велу, иначе LeMond-контекст запрещён.
   const bikeId = useBikeStore((s) => s.bikeId);
@@ -246,6 +249,30 @@ export function PhotoAnalysisSection() {
   const calc = useMemo(
     () => (bikeType && goal ? calculateAll(body, bike, { bikeType, goal }) : null),
     [body, bike, bikeType, goal]
+  );
+
+  // === v1.14.42: данные для AI-разбора посадки (только числа, без фото) ===
+  const aiInput = useMemo(
+    () =>
+      bikeType
+        ? {
+            riderName: getActiveRider()?.name,
+            body,
+            bikeName: activeBikeId
+              ? getBikes().find((b) => b.id === activeBikeId)?.name
+              : undefined,
+            bikeType,
+            measurements: bike,
+            goal,
+            complaints,
+            saddleHeightMm:
+              typeof bike.saddleHeight === "number" &&
+              Number.isFinite(bike.saddleHeight)
+                ? bike.saddleHeight
+                : null,
+          }
+        : null,
+    [body, bike, bikeType, goal, complaints, activeBikeId]
   );
   const sideAnalysis = useMemo(() => {
     const raw = views.side.analysis as BikeFitAnalysis | null;
@@ -935,6 +962,10 @@ export function PhotoAnalysisSection() {
           frontAnalysis={frontAnalysis}
         />
       )}
+
+      {/* === v1.14.42: AI-разбор посадки (Google Gemini, BYO-ключ).
+          Отправляются только числа — углы/размеры/жалобы, без фото === */}
+      <AiConsultCard input={aiInput} analysis={sideAnalysis} />
 
       {/* === Отчёт для отладки (v1.6.0): появляется как только есть фото —
           и при успехе анализа, и при ошибке (ошибки ценнее для отладки) === */}

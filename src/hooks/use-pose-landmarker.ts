@@ -56,7 +56,10 @@ export function usePoseLandmarker({
   // v1.14.33: модель самохостится с того же origin (/cdn/mediapipe) — работает
   // офлайн, на зеркале GitHub Pages и в офлайн-пакете; внешний CDN не нужен.
   // Файл синхронизирован с @mediapipe/tasks-vision (см. комментарий ниже).
-  modelAssetPath = "/cdn/mediapipe/models/pose_landmarker_lite.task",
+  // v1.14.42: lite → full (float16, 9.4 МБ): точнее на сложных ракурсах
+  // (фантомные ноги #10/#11), прирост инференса на GPU незначителен.
+  // Lite остаётся в репозитории как запасная модель (откат = одна строка).
+  modelAssetPath = "/cdn/mediapipe/models/pose_landmarker_full.task",
   numPoses = 1,
   runningMode = "IMAGE",
 }: UsePoseLandmarkerOptions = {}): UsePoseLandmarkerReturn {

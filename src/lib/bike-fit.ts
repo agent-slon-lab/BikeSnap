@@ -42,6 +42,14 @@ export interface Point {
   x: number; // нормализованная координата 0..1
   y: number;
   visibility?: number;
+  /**
+   * v1.14.42: глубина MediaPipe (масштаб как у x, origin — середина бёдер).
+   * МЕНЬШЕ = БЛИЖЕ к камере. Приходит автоматически из
+   * result.landmarks[i].z (NormalizedLandmark) и персистится в localStorage
+   * вместе с остальными точками. Опционально: синтетика тестов и старые
+   * сохранённые анализы поля не имеют — z-логика обязана это учитывать.
+   */
+  z?: number;
 }
 
 export interface Landmarks {
@@ -187,6 +195,13 @@ export interface CleanRiderKeypointsResult {
    * и объясняет выбор стороны в спорных кадрах (отчёты #10/#11).
    */
   sideScores?: { left: number; right: number };
+  /**
+   * v1.14.42: средние глубины z обеих сторон (меньше = ближе к камере;
+   * Infinity — z недоступен). Телеметрия: видно, применялся ли z-тай-брейк.
+   */
+  zScores?: { left: number; right: number };
+  /** v1.14.42: true — сторону выбрал тай-брейк по глубине z */
+  zUsed?: boolean;
 }
 
 /**
@@ -216,6 +231,89 @@ export function legVisibilityScore(
 }
 
 /**
+ * Средняя глубина z ноги (v1.14.42): колено + лодыжка (бедро у обеих ног
+ * почти на одной глубине — не информативен). Конвенция MediaPipe: МЕНЬШЕ
+ * = БЛИЖЕ к камере. Нет z хотя бы у одной из точек → +Infinity (сигнал
+ * недоступен — старые анализы из localStorage, синтетика тестов).
+ */
+export function legZScore(
+  landmarks: (Point | undefined)[] | null | undefined,
+  side: "left" | "right"
+): number {
+  if (!landmarks || landmarks.length === 0) return Infinity;
+  const L = side === "left";
+  const ids = [
+    L ? POSE_LANDMARKS.LEFT_KNEE : POSE_LANDMARKS.RIGHT_KNEE,
+    L ? POSE_LANDMARKS.LEFT_ANKLE : POSE_LANDMARKS.RIGHT_ANKLE,
+  ];
+  let sum = 0;
+  for (const i of ids) {
+    const z = landmarks[i]?.z;
+    if (typeof z !== "number" || !Number.isFinite(z)) return Infinity;
+    sum += z;
+  }
+  return sum / ids.length;
+}
+
+/**
+ * Разрыв суммарных баллов видимости, внутри которого сторону выбирает
+ * глубина z (v1.14.42). Сумма по 5 суставам = максимум 5, поэтому 0.3
+ * ≈ 6% средней видимости на сустав — внутри этой зоны балл уже не
+ * различает ноги надёжно, а z даёт независимый сигнал «кто ближе к
+ * камере». Вне зоны балл решает сам: z у MediaPipe шумный, перебивать
+ * им ЯВНОГО победителя нельзя (фантом может выиграть и по z).
+ */
+export const LEG_Z_TIEBREAK_EPS = 0.3;
+
+/**
+ * Минимальный разрыв средних z, при котором тай-брейк считается
+ * осмысленным (v1.14.42): z имеет масштаб x, 0.02 = 2% ширины кадра.
+ * Если z почти равны — микро-шум, оставляем выбор по видимости.
+ */
+export const LEG_Z_DECISIVE_GAP = 0.02;
+
+export interface LegSideChoice {
+  side: "left" | "right";
+  sideScores: { left: number; right: number };
+  zScores: { left: number; right: number };
+  /** true — победителя определил тай-брейк по z (телеметрия спорных кадров) */
+  zUsed: boolean;
+}
+
+/**
+ * Единый выбор стороны ноги (v1.14.42): балл видимости по 5 суставам,
+ * в спорной зоне (|Δ| < LEG_Z_TIEBREAK_EPS) и при заметном различии
+ * глубин (|Δz| ≥ LEG_Z_DECISIVE_GAP) — тай-брейк по z (ближняя к камере
+ * нога). Используется и для расчёта (getCleanRiderKeypoints), и для
+ * отрисовки скелета (getBestLegSide) — сторона обязана совпадать.
+ */
+export function chooseLegSide(
+  landmarks: (Point | undefined)[] | null | undefined
+): LegSideChoice {
+  const sideScores = {
+    left: legVisibilityScore(landmarks, "left"),
+    right: legVisibilityScore(landmarks, "right"),
+  };
+  const zScores = {
+    left: legZScore(landmarks, "left"),
+    right: legZScore(landmarks, "right"),
+  };
+  let side: "left" | "right" =
+    sideScores.left >= sideScores.right ? "left" : "right";
+  let zUsed = false;
+  if (
+    Number.isFinite(zScores.left) &&
+    Number.isFinite(zScores.right) &&
+    Math.abs(sideScores.left - sideScores.right) < LEG_Z_TIEBREAK_EPS &&
+    Math.abs(zScores.left - zScores.right) >= LEG_Z_DECISIVE_GAP
+  ) {
+    side = zScores.left < zScores.right ? "left" : "right";
+    zUsed = true;
+  }
+  return { side, sideScores, zScores, zUsed };
+}
+
+/**
  * Геометрическая санитария цепочки бедро→колено→лодыжка (v1.14.41).
  *
  * Ловит «растянутые» фантомные скелеты, которые проходят по visibility:
@@ -240,17 +338,16 @@ function legChainSane(
 }
 
 /**
- * Сторона с максимальным суммарным баллом (v1.14.41) — для ОТРИСОВКИ
- * скелета, когда анализ провалился (раньше activeSide = null рисовал
- * обе ноги — фантомная «паутина» дальней ноги возвращалась в UI).
+ * Сторона для ОТРИСОВКИ скелета, когда анализ провалился (v1.14.41:
+ * раньше activeSide = null рисовал обе ноги — фантомная «паутина»
+ * дальней ноги возвращалась в UI). v1.14.42: тот же единый выбор
+ * стороны, что и в расчёте (chooseLegSide) — отрисовка обязана
+ * совпадать со стороной анализа, включая z-тай-брейк.
  */
 export function getBestLegSide(
   landmarks: (Point | undefined)[] | null | undefined
 ): "left" | "right" {
-  return legVisibilityScore(landmarks, "left") >=
-    legVisibilityScore(landmarks, "right")
-    ? "left"
-    : "right";
+  return chooseLegSide(landmarks).side;
 }
 
 /**
@@ -279,20 +376,21 @@ export function getCleanRiderKeypoints(
       keypoints: null,
       error: "Поза не распознана — ключевые точки отсутствуют.",
       sideScores: { left: 0, right: 0 },
+      zScores: { left: Infinity, right: Infinity },
+      zUsed: false,
     };
   }
-  const sideScores = {
-    left: legVisibilityScore(landmarks, "left"),
-    right: legVisibilityScore(landmarks, "right"),
-  };
-  // СТРОГО одна сторона — суммарный балл выше (при равенстве — левая)
-  const side: "left" | "right" =
-    sideScores.left >= sideScores.right ? "left" : "right";
+  // v1.14.42: единый выбор стороны — балл по 5 суставам + z-тай-брейк
+  // в спорной зоне (см. chooseLegSide)
+  const choice = chooseLegSide(landmarks);
+  const { side, sideScores, zScores, zUsed } = choice;
   const fail = (error: string): CleanRiderKeypointsResult => ({
     side,
     keypoints: null,
     error,
     sideScores,
+    zScores,
+    zUsed,
   });
   const L = side === "left";
   const hip = landmarks[L ? POSE_LANDMARKS.LEFT_HIP : POSE_LANDMARKS.RIGHT_HIP];
@@ -331,6 +429,8 @@ export function getCleanRiderKeypoints(
     keypoints: { shoulder, hip, knee, ankle, toe: toe ?? ankle },
     error: null,
     sideScores,
+    zScores,
+    zUsed,
   };
 }
 

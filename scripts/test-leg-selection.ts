@@ -281,5 +281,131 @@ console.log("\n=== 6. Жёсткий чек-поинт велов: порог 10
   ok("верdict без данных = unknown", bikeMatchVerdict(1.4, null).verdict === "unknown");
 }
 
+console.log("\n=== 7. z-тай-брейк по глубине (v1.14.42) ===");
+{
+  // Хелпер: проставить z колену/лодыжке стороны (MediaPipe: меньше = ближе)
+  const setZ = (
+    arr: Point[],
+    side: "left" | "right",
+    zKnee: number,
+    zAnkle: number
+  ) => {
+    const L = side === "left";
+    arr[L ? POSE_LANDMARKS.LEFT_KNEE : POSE_LANDMARKS.RIGHT_KNEE].z = zKnee;
+    arr[L ? POSE_LANDMARKS.LEFT_ANKLE : POSE_LANDMARKS.RIGHT_ANKLE].z = zAnkle;
+  };
+  const baseLeg: LegSpec = {
+    hip: [0.5, 0.5, 0.8],
+    knee: [0.44, 0.66, 0.8],
+    ankle: [0.47, 0.82, 0.8],
+  };
+  const shiftLeg = (leg: LegSpec, dx: number, dv: number): LegSpec => ({
+    hip: [leg.hip[0] + dx, leg.hip[1], leg.hip[2] + dv],
+    knee: [leg.knee[0] + dx, leg.knee[1], leg.knee[2] + dv],
+    ankle: [leg.ankle[0] + dx, leg.ankle[1], leg.ankle[2] + dv],
+  });
+
+  // 7.1 Равные баллы, левая ближе по z → left, zUsed
+  const arr1 = skeleton();
+  applyLeg(arr1, "left", baseLeg);
+  applyLeg(arr1, "right", baseLeg);
+  applyShoulders(arr1, 0.8);
+  setZ(arr1, "left", -0.1, -0.12);
+  setZ(arr1, "right", 0.05, 0.04);
+  const r1 = getCleanRiderKeypoints(arr1);
+  ok(
+    "равный балл + левая ближе по z → left",
+    r1.side === "left" && r1.zUsed === true,
+    `side=${r1.side}, zUsed=${String(r1.zUsed)}`
+  );
+  ok(
+    "zScores записаны (левая < правая)",
+    r1.zScores != null &&
+      Number.isFinite(r1.zScores.left) &&
+      r1.zScores.left < r1.zScores.right,
+    `z=${JSON.stringify(r1.zScores)}`
+  );
+
+  // 7.2 Равные баллы, правая ближе по z → right, zUsed
+  const arr2 = skeleton();
+  applyLeg(arr2, "left", baseLeg);
+  applyLeg(arr2, "right", baseLeg);
+  applyShoulders(arr2, 0.8);
+  setZ(arr2, "left", 0.05, 0.06);
+  setZ(arr2, "right", -0.09, -0.11);
+  const r2 = getCleanRiderKeypoints(arr2);
+  ok(
+    "равный балл + правая ближе по z → right",
+    r2.side === "right" && r2.zUsed === true,
+    `side=${r2.side}, zUsed=${String(r2.zUsed)}`
+  );
+
+  // 7.3 Спорная зона (разрыв баллов < 0.3): z перебивает лёгкое преимущество
+  const arr3 = skeleton();
+  applyLeg(arr3, "left", baseLeg); // сумма 3.85
+  applyLeg(arr3, "right", shiftLeg(baseLeg, 0.01, 0.05)); // сумма 4.1 (+0.25)
+  applyShoulders(arr3, 0.8);
+  setZ(arr3, "left", -0.12, -0.14); // левая ближе
+  setZ(arr3, "right", 0.03, 0.02);
+  const r3 = getCleanRiderKeypoints(arr3);
+  ok(
+    "спорная зона: z перебивает преимущество +0.25 → left",
+    r3.side === "left" && r3.zUsed === true,
+    `side=${r3.side}, zUsed=${String(r3.zUsed)}`
+  );
+
+  // 7.4 Явный победитель по баллам (разрыв > 0.3): z НЕ перебивает
+  const arr4 = skeleton();
+  applyLeg(arr4, "left", baseLeg); // сумма 3.85
+  applyLeg(arr4, "right", shiftLeg(baseLeg, 0.01, 0.2)); // сумма 4.85 (+1.0)
+  applyShoulders(arr4, 0.8);
+  setZ(arr4, "left", -0.12, -0.14);
+  setZ(arr4, "right", 0.03, 0.02);
+  const r4 = getCleanRiderKeypoints(arr4);
+  ok(
+    "разрыв баллов 1.0 > EPS: правая остаётся, z не применяется",
+    r4.side === "right" && r4.zUsed === false,
+    `side=${r4.side}, zUsed=${String(r4.zUsed)}`
+  );
+
+  // 7.5 z почти равны (шум < 0.02): тай-брейк не срабатывает → левая
+  const arr5 = skeleton();
+  applyLeg(arr5, "left", baseLeg);
+  applyLeg(arr5, "right", baseLeg);
+  applyShoulders(arr5, 0.8);
+  setZ(arr5, "left", 0.0, 0.0);
+  setZ(arr5, "right", 0.005, -0.005);
+  const r5 = getCleanRiderKeypoints(arr5);
+  ok(
+    "z-шум < 0.02: прежний тай-брейк (левая), zUsed=false",
+    r5.side === "left" && r5.zUsed === false,
+    `side=${r5.side}, zUsed=${String(r5.zUsed)}`
+  );
+
+  // 7.6 Регресс: без z поведение как в v1.14.41 (равный балл → левая)
+  const arr6 = skeleton();
+  applyLeg(arr6, "left", baseLeg);
+  applyLeg(arr6, "right", baseLeg);
+  applyShoulders(arr6, 0.8);
+  const r6 = getCleanRiderKeypoints(arr6);
+  ok(
+    "без z: равный балл → left (регресс v1.14.41)",
+    r6.side === "left" && r6.zUsed === false,
+    `side=${r6.side}, zUsed=${String(r6.zUsed)}`
+  );
+  ok(
+    "без z: zScores = Infinity (сигнал недоступен)",
+    r6.zScores != null &&
+      !Number.isFinite(r6.zScores.left) &&
+      !Number.isFinite(r6.zScores.right)
+  );
+
+  // 7.7 Отрисовка совпадает с расчётом (getBestLegSide = тот же выбор)
+  ok(
+    "getBestLegSide согласован с getCleanRiderKeypoints",
+    getBestLegSide(arr1) === r1.side
+  );
+}
+
 console.log(`\nИтог: ${pass} OK / ${failCount} FAIL`);
 process.exit(failCount > 0 ? 1 : 0);

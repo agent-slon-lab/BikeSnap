@@ -1014,3 +1014,60 @@ Work Log:
 Stage Summary:
 - Зеркальный конвейер дополнен новым обязательным файлом; при будущих
   служебных страницах в public/ — не забывать ROOT_FILES.
+
+---
+Task ID: 46
+Agent: Super Z (main)
+Task: вопрос «есть бесплатные нейронки для анализа вела/посадки?» →
+решение «делай обе»: (1) BlazePose lite→full + z-тай-брейк, (2) AI-разбор
+посадки на бесплатном тире Google Gemini → v1.14.42
+
+Work Log:
+- A. BlazePose full + z-тай-брейк:
+  1) pose_landmarker_full.task (float16, 9.4 МБ) скачан в
+     public/cdn/mediapipe/models (self-hosted, офлайн); use-pose-landmarker
+     дефолт → full; lite остался как запас (откат = одна строка).
+  2) sw.js: AI_ASSETS префетчит full, VERSION v1.14.42.
+  3) bike-fit.ts: Point.z (глубина MediaPipe, меньше = ближе) — приходит
+     из result.landmarks автоматически, персистится; legZScore (колено+
+     лодыжка, Infinity если z нет); chooseLegSide — единый выбор стороны:
+     балл 5 суставов (v1.14.41), спорная зона |Δ|<0.3 + |Δz|≥0.02 →
+     тай-брейк по z (ближняя нога); вне зоны балл решает сам (z шумный,
+     явного победителя не перебивает). getCleanRiderKeypoints v3 и
+     getBestLegSide через один chooseLegSide — расчёт = отрисовка.
+     Телеметрия zScores/zUsed.
+- B. AI-разбор посадки (Gemini free tier, BYO-ключ):
+  1) src/lib/ai-consult.ts: buildAiConsultPrompt (чистая: антропометрия,
+     вся геометрия вела, углы с нормами/статусами, KOPS со ЗНАКОМ,
+     цель, жалобы по-русски, имя райдера НЕ утекает); system — роль
+     байкфиттера, запрет выдумывать измерения/диагнозы, «1-2 параметра
+     за раз», markdown ≤400 слов; requestAiConsult — generateContent
+     v1beta, ключ в x-goog-api-key, таймаут 60с + отмена, человекочитаемые
+     ошибки 400/403/404/429/пустой ответ/блок. Настройки в localStorage
+     (bikefit-ai-key / bikefit-ai-model), дефолт gemini-2.0-flash
+     (макс. бесплатный дневной лимит), 2.5-flash / 2.5-flash-lite в списке.
+     Приватность: ТОЛЬКО числа (без фото), ключ пользовательский,
+     напрямую в Google без промежуточных серверов.
+  2) AiConsultCard.tsx: карточка «AI-разбор посадки» (после рекомендаций
+     по жалобам, при готовом боковом анализе) + диалог: ссылка на
+     aistudio.google.com/apikey, поле ключа с маской, выбор модели,
+     спиннер, markdown-результат, копирование, повторный прогон,
+     отмена при закрытии. Подключена в PhotoAnalysisSection
+     (aiInput: имя вела из карточки, жалобы из store, saddleHeightMm).
+- Тесты: test-leg-selection.ts +9 z-сцен → 32 OK / 0 FAIL;
+  test-ai-consult.ts (новый) — 31 OK / 0 FAIL (первый прогон 1 FAIL —
+  кривая синтетика теста: measurements с saddleHeight не пустая;
+  исправлено в тесте); регресс test-mirror-failover.ts 14 OK / 0 FAIL.
+- tsc чисто (AiConsultCard: убран бессмысленный phase-сравнение в
+  done-ветке), next build OK, смоук :3314 — страница 200, version.json /
+  sw.js = v1.14.42, full-модель 9.4 МБ отдаётся, sync-bridge.html жив.
+- Бамп 1.14.42: package.json / sw.js / version.json / app-version.ts /
+  whats-new.ts / CHANGELOG.md.
+
+Stage Summary:
+- v1.14.42: офлайн-позодетект точнее (full + z-тай-брейк — окончательное
+  оружие против фантомных ног), плюс кнопка «Спросить AI» — пошаговый
+  разбор посадки от Gemini по числам без фото.
+- Пользователю: обновиться, для AI-разбора вставить бесплатный ключ
+  Google AI Studio в настройках кнопки (aistudio.google.com/apikey).
+- Следующая версия: v1.14.43.
