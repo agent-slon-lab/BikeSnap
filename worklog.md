@@ -1071,3 +1071,29 @@ Stage Summary:
 - Пользователю: обновиться, для AI-разбора вставить бесплатный ключ
   Google AI Studio в настройках кнопки (aistudio.google.com/apikey).
 - Следующая версия: v1.14.43.
+
+---
+Task ID: 46-b
+Agent: main (Super Z)
+Task: Верификация релиза v1.14.42 (коммит 56617e7) на обеих площадках.
+
+Work Log:
+- Пре-флайт: рабочее дерево чистое, версия 1.14.42 подтверждена во всех
+  6 точках (package.json / sw.js VERSION / version.json / app-version.ts /
+  whats-new.ts / CHANGELOG.md).
+- Пуш 56617e7 → origin/main (fce36d4..56617e7) по токену пользователя.
+- Vercel: version.json = v1.14.42 ✓, sw.js const VERSION = "v1.14.42" ✓.
+- Workflow «Mirror to GitHub Pages» на 56617e7: completed / success ✓.
+- Зеркало: первая проверка — 404 (self-made ошибка верификатора: поллил
+  https://agent-slon-lab.github.io/BikeSnap/... — это НЕ тот путь; зеркало
+  деплоится в корень agent-slon-lab.github.io, отдельный репо, push -f main
+  по SSH deploy key). scripts/verify-v1442.sh исправить в следующий раз.
+- Правильная проверка https://agent-slon-lab.github.io/ (корень):
+  version.json = v1.14.42 ✓, sw.js VERSION = "v1.14.42" ✓,
+  index title «BikeSnap — Анализ посадки на велосипеде» ✓.
+
+Stage Summary:
+- РЕЛИЗ v1.14.42 ВЕРИФИЦИРОВАН на обеих площадках: Vercel и зеркало.
+- Урок для верификаторов: зеркало живёт в КОРНЕ agent-slon-lab.github.io
+  (URL без /BikeSnap).
+- Следующая версия: v1.14.43.
