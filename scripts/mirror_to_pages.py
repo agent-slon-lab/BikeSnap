@@ -43,6 +43,10 @@ ROOT_FILES = [
     "sw.js",
     "manifest.webmanifest",
     "version.json",
+    # v1.14.41: служебная страница sync-моста (postMessage-перенос данных
+    # между localStorage vercel и зеркала) — в HTML/JS не упоминается,
+    # замыканием не находится, тащим явно
+    "sync-bridge.html",
     "robots.txt",
     "icon-192.png",
     "icon-512.png",
