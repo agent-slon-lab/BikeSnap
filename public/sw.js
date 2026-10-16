@@ -38,7 +38,7 @@
  *  - имя кэша bikesnap-v<версия> синхронизировано с APP_VERSION: бампать
  *    при каждом релизе (activate сам удалит старый кэш).
  */
-const VERSION = "v1.14.43";
+const VERSION = "v1.14.44";
 const CACHE = `bikesnap-${VERSION}`;
 
 // Зеркало (GitHub Pages) — запасной вход, когда этот origin недоступен

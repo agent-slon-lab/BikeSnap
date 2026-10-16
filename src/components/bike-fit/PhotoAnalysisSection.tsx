@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
-import { Camera, AlertCircle, AlertTriangle, CheckCircle2, Loader2, Sparkles, Image as ImageIcon, RotateCcw, Undo2, Repeat } from "lucide-react";
+import { Camera, AlertCircle, AlertTriangle, CheckCircle2, Info, Loader2, Sparkles, Image as ImageIcon, RotateCcw, Undo2, Repeat } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -879,6 +879,30 @@ export function PhotoAnalysisSection() {
               {bikePhotoWheelRatio != null && ` Пропорция размеченного вела: ${bikePhotoWheelRatio.toFixed(2)}.`}
               {" "}
               Если вы меняли велосипед после Шага 2 — вернитесь и переснимите фото с райдером: сравнение с рамой другого вела даст неверные рекомендации.
+            </p>
+          </div>
+        </div>
+      )}
+      {/* v1.14.44: честная плашка «сверка неактивна» — когда вердикт unknown
+          и причина в КАРТОЧКЕ ВЕЛА (нет фото/разметки/типа), а не в детекторе
+          колёс (тот случай покрыт bikeMatchUnknown выше). Без неё пустая
+          карточка выглядела как «защита молча не работает». */}
+      {multiMatch.verdict === "unknown" && !bikeMatchUnknown && views.side.photoData && (
+        <div className="flex items-start gap-2 rounded-lg border border-sky-300 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/30 px-4 py-3 text-sm text-sky-700 dark:text-sky-400">
+          <Info className="size-4 mt-0.5 shrink-0" />
+          <div>
+            <p className="font-medium">Сверка велосипедов неактивна</p>
+            <p className="mt-1 text-xs">
+              В карточке выбранного вела не хватает данных для сверки с фото райдера. Что отсутствует:
+            </p>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
+              {bikePhotoWheelRatio == null && <li>разметка колёс на фото вела (Шаг 2 — оси и верха колёс)</li>}
+              {bikeCardSignals.bbColorRgb == null && bikePhotoWheelRatio == null && <li>фото вела или разметка каретки (для сверки цвета рамы)</li>}
+              {bikeCardSignals.bikeType == null && <li>тип велосипеда (выберите его в карточке вела)</li>}
+              {!activeBikeId && <li>выбранная карточка вела (откройте Шаг 2 и нажмите на карточку)</li>}
+            </ul>
+            <p className="mt-2 text-xs">
+              Заполните разметку на Шаге 2 — и автопроверка «тот ли велосипед на фото» включится автоматически.
             </p>
           </div>
         </div>

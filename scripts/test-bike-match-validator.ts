@@ -11,11 +11,15 @@ import {
   computeTopTubeSlopeDeg,
   extractRiderPoseSignals,
   validateBikeMatch,
+  kneeAngleDeg,
+  standingKneeAngle,
+  KNEE_STANDING_DEG,
   FRAME_COLOR_DIFF_THRESHOLD,
   RIDER_SCALE_TOLERANCE,
   type Rgb,
   type RiderWheelMeta,
   type BikeCardSignals,
+  type RiderPoseSignals,
 } from "../src/lib/bike-match-validator";
 import type { Point } from "../src/lib/bike-fit";
 
@@ -97,7 +101,7 @@ check("нет точки → null", computeTopTubeSlopeDeg(null, { x: 0.6, y: 0.
 console.log("\n[5] extractRiderPoseSignals");
 check("пустые landmarks → все null", (() => {
   const s = extractRiderPoseSignals(null);
-  return s.hipMid === null && s.shoulderMid === null && s.wristMid === null;
+  return s.hipMid === null && s.shoulderMid === null && s.wristMid === null && s.kneeMid === null && s.ankleMid === null;
 })());
 {
   const lm: Point[] = [];
@@ -114,10 +118,52 @@ check("пустые landmarks → все null", (() => {
   lm[12] = { x: 0.46, y: 0.31, visibility: 0.9 };
   lm[15] = { x: 0.60, y: 0.32, visibility: 0.9 };
   lm[16] = { x: 0.61, y: 0.33, visibility: 0.9 };
+  lm[25] = { x: 0.43, y: 0.65, visibility: 0.9 };
+  lm[26] = { x: 0.45, y: 0.66, visibility: 0.9 };
+  lm[27] = { x: 0.44, y: 0.80, visibility: 0.9 };
+  lm[28] = { x: 0.46, y: 0.81, visibility: 0.9 };
   const s = extractRiderPoseSignals(lm);
   check("обе HIP видны → midpoint", !!s.hipMid && near(s.hipMid.x, 0.42, 1e-9) && near(s.hipMid.y, 0.56, 1e-9));
   check("shoulderMid посчитан", !!s.shoulderMid && near(s.shoulderMid.y, 0.305, 1e-9));
   check("wristMid посчитан", !!s.wristMid && near(s.wristMid.y, 0.325, 1e-9));
+  check("kneeMid посчитан (v1.14.44)", !!s.kneeMid && near(s.kneeMid.x, 0.44, 1e-9));
+  check("ankleMid посчитан (v1.14.44)", !!s.ankleMid && near(s.ankleMid.y, 0.805, 1e-9));
+}
+
+// ---------------------------------------------------------------------------
+// 5b. kneeAngleDeg + гейт «стоит над рамой» (v1.14.44)
+// ---------------------------------------------------------------------------
+console.log("\n[5b] kneeAngleDeg");
+{
+  // Прямой угол: hip (0,−1) knee (0,0) ankle (1,0) → 90°
+  const a = kneeAngleDeg({ x: 0, y: -1 }, { x: 0, y: 0 }, { x: 1, y: 0 });
+  check("прямой угол = 90°", a != null && near(a, 90, 1e-6), String(a));
+  // Прямая нога: все три на одной вертикали → 180°
+  const b = kneeAngleDeg({ x: 0.5, y: 0.2 }, { x: 0.5, y: 0.5 }, { x: 0.5, y: 0.8 });
+  check("прямая нога = 180°", b != null && near(b, 180, 1e-6), String(b));
+  // Пропущенные точки → null
+  check("нет колена → null", kneeAngleDeg({ x: 0, y: 0 }, null, { x: 1, y: 1 }) === null);
+  check("совпадающие точки → null", kneeAngleDeg({ x: 1, y: 1 }, { x: 1, y: 1 }, { x: 1, y: 1 }) === null);
+  check("порог KNEE_STANDING_DEG = 150", KNEE_STANDING_DEG === 150);
+  // Сидящий (колено ≈ 120°) → не стоящий
+  const seated: RiderPoseSignals = {
+    hipMid: { x: 0.4, y: 0.294 },
+    shoulderMid: { x: 0.44, y: 0.1 },
+    wristMid: { x: 0.6, y: 0.13 },
+    kneeMid: { x: 0.55, y: 0.5 },
+    ankleMid: { x: 0.45, y: 0.75 },
+  };
+  const seatedAng = standingKneeAngle(seated);
+  check("сидящий: колено < порога", seatedAng != null && seatedAng < KNEE_STANDING_DEG, String(seatedAng));
+  // Стоящий над рамой (нога прямая) → ≥ порога
+  const standing: RiderPoseSignals = {
+    ...seated,
+    hipMid: { x: 0.4, y: 0.35 },
+    kneeMid: { x: 0.47, y: 0.55 },
+    ankleMid: { x: 0.53, y: 0.75 },
+  };
+  const standingAng = standingKneeAngle(standing);
+  check("стоящий: колено ≥ порога", standingAng != null && standingAng >= KNEE_STANDING_DEG, String(standingAng));
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +190,7 @@ const uprightPose = {
   hipMid: { x: 0.42, y: 0.294 }, // rScale = (0.7-0.294)/0.28 = 1.45 ≈ bScale 1.6? см. ниже
   shoulderMid: { x: 0.44, y: 0.10 },
   wristMid: { x: 0.60, y: 0.13 }, // кисти ниже плеч слегка (road pass)
-};
+kneeMid: null, ankleMid: null, };
 // пересчёт hip для pass: bScale = (0.75-0.35)/0.25 = 1.6;
 // diff = |r - b|/avg ≤ 0.25 → r ∈ [1.28, 2.0]; r = (0.7-hipY)/0.28
 // hipY = 0.7 - 1.45*0.28 = 0.294 → r=1.45, diff=0.098 → pass ✓
@@ -195,7 +241,7 @@ const uprightPose = {
   const v = validateBikeMatch({
     wheelRatio: null,
     wheelMeta: null,
-    pose: { hipMid: null, shoulderMid: null, wristMid: null },
+    pose: { hipMid: null, shoulderMid: null, wristMid: null, kneeMid: null, ankleMid: null },
     bike: { ...baseBike, wheelRatio: null, bbColorRgb: null, saddleYn: null, bikeType: null },
   });
   check("ничего не оценено → unknown", v.verdict === "unknown", v.verdict);
@@ -207,7 +253,7 @@ const uprightPose = {
   const v = validateBikeMatch({
     wheelRatio: 1.44,
     wheelMeta: null,
-    pose: { hipMid: null, shoulderMid: null, wristMid: null },
+    pose: { hipMid: null, shoulderMid: null, wristMid: null, kneeMid: null, ankleMid: null },
     bike: { ...baseBike, bbColorRgb: null, saddleYn: null, bikeType: null },
   });
   check("только F1 pass → ok", v.verdict === "ok", v.verdict);
@@ -226,7 +272,7 @@ console.log("\n[7] F4 gripType");
     hipMid: { x: 0.42, y: 0.294 },
     shoulderMid: { x: 0.44, y: 0.05 },
     wristMid: { x: 0.60, y: 0.011 }, // wristRel = (0.011-0.05)/0.244 = -0.16
-  };
+  kneeMid: null, ankleMid: null, };
   const v = validateBikeMatch({ wheelRatio: 1.45, wheelMeta: riderMeta, pose, bike: { ...baseBike, bikeType: "road" } });
   check("road + кисти выше плеч → fail", v.factors.gripType.verdict === "fail", JSON.stringify(v.factors.gripType));
   check("F3 при этом pass", v.factors.riderScale.verdict === "pass", JSON.stringify(v.factors.riderScale));
@@ -240,7 +286,7 @@ console.log("\n[7] F4 gripType");
     hipMid: { x: 0.42, y: 0.55 },
     shoulderMid: { x: 0.44, y: 0.30 },
     wristMid: { x: 0.60, y: 0.45 },
-  };
+  kneeMid: null, ankleMid: null, };
   const v = validateBikeMatch({ wheelRatio: 1.45, wheelMeta: riderMeta, pose, bike: { ...baseBike, bikeType: "mtb" } });
   check("mtb + кисти на пол-торса ниже → fail", v.factors.gripType.verdict === "fail", JSON.stringify(v.factors.gripType));
 }
@@ -250,7 +296,7 @@ console.log("\n[7] F4 gripType");
     hipMid: { x: 0.42, y: 0.55 },
     shoulderMid: { x: 0.44, y: 0.30 },
     wristMid: { x: 0.60, y: 0.32 },
-  };
+  kneeMid: null, ankleMid: null, };
   const v = validateBikeMatch({ wheelRatio: 1.45, wheelMeta: riderMeta, pose, bike: { ...baseBike, bikeType: "mtb" } });
   check("mtb + хват на уровне → pass", v.factors.gripType.verdict === "pass", JSON.stringify(v.factors.gripType));
 }
@@ -260,7 +306,7 @@ console.log("\n[7] F4 gripType");
     hipMid: { x: 0.42, y: 0.31 },
     shoulderMid: { x: 0.44, y: 0.30 },
     wristMid: { x: 0.60, y: 0.45 },
-  };
+  kneeMid: null, ankleMid: null, };
   const v = validateBikeMatch({ wheelRatio: 1.45, wheelMeta: riderMeta, pose, bike: baseBike });
   check("торс 0.01 → F4 unknown", v.factors.gripType.verdict === "unknown");
 }

@@ -117,6 +117,9 @@ export interface RiderPoseSignals {
   hipMid: P2 | null;
   shoulderMid: P2 | null;
   wristMid: P2 | null;
+  /** v1.14.44: midpoint коленей/лодыжек — гейт «райдер стоит над рамой» для F3 */
+  kneeMid: P2 | null;
+  ankleMid: P2 | null;
 }
 
 /** Сигналы карточки вела (Шаг 2: разметка + фото + тип) */
@@ -233,6 +236,41 @@ export function computeTopTubeSlopeDeg(
 }
 
 /**
+ * Угол колена (hip→knee→ankle) в градусах, 180 = нога полностью прямая.
+ * v1.14.44: гейт F3 — если нога выпрямлена (райдер СТОИТ над рамой,
+ * а не сидит в седле), высота таза не имеет отношения к высоте седла
+ * и сравнивать её с разметкой Шага 2 нельзя (ложный fail).
+ * Чистая функция — юнит-тестируется без DOM.
+ */
+export function kneeAngleDeg(
+  hip: P2 | null | undefined,
+  knee: P2 | null | undefined,
+  ankle: P2 | null | undefined
+): number | null {
+  if (!hip || !knee || !ankle) return null;
+  const v1x = hip.x - knee.x;
+  const v1y = hip.y - knee.y;
+  const v2x = ankle.x - knee.x;
+  const v2y = ankle.y - knee.y;
+  const m1 = Math.hypot(v1x, v1y);
+  const m2 = Math.hypot(v2x, v2y);
+  if (m1 < 1e-6 || m2 < 1e-6) return null;
+  const cos = (v1x * v2x + v1y * v2y) / (m1 * m2);
+  return (Math.acos(Math.max(-1, Math.min(1, cos))) * 180) / Math.PI;
+}
+
+/** Порог прямого колена: ≥ 150° — райдер стоит, F3 не интерпретируем */
+export const KNEE_STANDING_DEG = 150;
+
+/**
+ * Угол колена по midpoint'ам видимых суставов (на строгом боковом фото
+ * видима одна нога — midpoint совпадает с ней). null — суставы не видны.
+ */
+export function standingKneeAngle(pose: RiderPoseSignals): number | null {
+  return kneeAngleDeg(pose.hipMid, pose.kneeMid, pose.ankleMid);
+}
+
+/**
  * Midpoint пары видимых BlazePose-точек (visibility ≥ 0.3). Если видима
  * только одна — возвращается она (боковое фото: дальняя сторона скрыта).
  */
@@ -262,7 +300,7 @@ export function extractRiderPoseSignals(
   landmarks: Point[] | null | undefined
 ): RiderPoseSignals {
   if (!landmarks || landmarks.length === 0) {
-    return { hipMid: null, shoulderMid: null, wristMid: null };
+    return { hipMid: null, shoulderMid: null, wristMid: null, kneeMid: null, ankleMid: null };
   }
   return {
     hipMid: visibleMidpoint(
@@ -276,6 +314,14 @@ export function extractRiderPoseSignals(
     wristMid: visibleMidpoint(
       landmarks[POSE_LANDMARKS.LEFT_WRIST],
       landmarks[POSE_LANDMARKS.RIGHT_WRIST]
+    ),
+    kneeMid: visibleMidpoint(
+      landmarks[POSE_LANDMARKS.LEFT_KNEE],
+      landmarks[POSE_LANDMARKS.RIGHT_KNEE]
+    ),
+    ankleMid: visibleMidpoint(
+      landmarks[POSE_LANDMARKS.LEFT_ANKLE],
+      landmarks[POSE_LANDMARKS.RIGHT_ANKLE]
     ),
   };
 }
@@ -355,7 +401,15 @@ export function validateBikeMatch(
   const hipKnown = hipY != null && wheelMeta != null;
   const bikeScaleKnown =
     bike.saddleYn != null && bike.axleMidYn != null && bike.radiusNormY != null && bike.radiusNormY > 0;
-  if (hipKnown && bikeScaleKnown) {
+  // v1.14.44: гейт «стоит над рамой» — прямое колено (≥ 150°) означает,
+  // что таз НЕ в седле: сравнивать высоту таза с высотой седла нельзя.
+  const standingDeg = standingKneeAngle(pose);
+  if (hipKnown && bikeScaleKnown && standingDeg != null && standingDeg >= KNEE_STANDING_DEG) {
+    riderScale = {
+      verdict: "unknown",
+      detail: `Посадка не измерима: райдер стоит над рамой (колено ${standingDeg.toFixed(0)}°)`,
+    };
+  } else if (hipKnown && bikeScaleKnown) {
     const rScale = (wheelMeta!.axleMidYn - hipY!) / wheelMeta!.radiusNormY;
     const bScale =
       (bike.axleMidYn! - bike.saddleYn!) / bike.radiusNormY!;

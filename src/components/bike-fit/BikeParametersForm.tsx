@@ -19,6 +19,7 @@ import {
   deleteBike,
   setActiveBike,
   getActiveBike,
+  getActiveBikeId,
   updateBike,
   updateBikePhoto,
   updateBikePhotoDerived,
@@ -168,6 +169,16 @@ export function BikeParametersForm() {
     setBikes(all);
     const active = getActiveBike();
     setActiveBikeState(active);
+    // v1.14.44: ремонтируем bikefit-active-bike — getActiveBike() при пустом/
+    // протухшем ключе падает на bikes[0], и форма молча редактирует ПЕРВУЮ
+    // карточку, но ключ остаётся пустым/чужим. Шаг 4 сверяет фото СТРОГО
+    // по ключу — получалось, что форма считает вел выбранной карточкой,
+    // а сверка на Шаге 4 молча не работает («unknown»). Явная синхронизация
+    // делает поведение детерминированным: что подсвечено в Шаге 2 — то и
+    // сравнивается на Шаге 4.
+    if (active && getActiveBikeId() !== active.id) {
+      setActiveBike(active.id);
+    }
     if (active) {
       // v1.14.30 (Stale State): ПОЛНАЯ замена черновика (без merge — протухшие
       // поля прежнего вела выжить не могут) + синхронизация типоразмера

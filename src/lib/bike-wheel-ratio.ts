@@ -84,6 +84,30 @@ export function computeWheelRatioFromKeypoints(pts: WheelRatioPoints): number | 
 }
 
 /**
+ * Гейт доверия к найденной паре колёс (v1.14.44).
+ * Ложные пары (шатуны+звезда, ротор+вилка, фрагменты интерьера) дают
+ * мусорную пропорцию, которая при сравнении с разметкой Шага 2 даёт
+ * ЛОЖНЫЙ хард-блок на своём же веле. Пара принимается только если:
+ *  — оба «колеса» хотя бы умеренно круглые (roundness ≥ 0.7);
+ *  — диаметр каждого ≥ 22% меньшей стороны кадра (настоящее колесо
+ *    на боковом фото всегда крупнее; шатуны/ротор — 10–18%);
+ *  — score обоих ≥ 0.4.
+ */
+export function isTrustedWheelPair(
+  wheels: ReadonlyArray<{ a: number; b: number; score: number }>,
+  frame: RawFrame
+): boolean {
+  if (wheels.length < 2) return false;
+  const minWH = Math.min(frame.width, frame.height);
+  return wheels.every(
+    (w) =>
+      Math.min(w.a, w.b) / Math.max(w.a, w.b) >= 0.7 &&
+      (2 * Math.max(w.a, w.b)) / minWH >= 0.22 &&
+      w.score >= 0.4
+  );
+}
+
+/**
  * Ratio по АВТО-ДЕТЕКТОРУ колёс (Шаг 1 — фото райдера без разметки).
  * frame — уменьшенный кадр (~320–480px по ширине). Требует ОБА колеса
  * (status "ok"/"tilted"); частичное обнаружение = null (сравнение тихо
@@ -92,10 +116,12 @@ export function computeWheelRatioFromKeypoints(pts: WheelRatioPoints): number | 
  * Шага 2 (ось → верх покрышки): фит эллипса занижает радиус на 5–8%,
  * что давало ложное расхождение 10–14% на ОДНОМ и том же веле
  * (замер на user-reports: разметка 1.509 против детектора 1.734).
+ * Плюс гейт доверия к паре (isTrustedWheelPair): мусорные пары дают null.
  */
 export function computeWheelRatioFromFrame(frame: RawFrame): number | null {
   const result = detectWheels(frame);
   if (result.wheels.length < 2) return null;
+  if (!isTrustedWheelPair(result.wheels, frame)) return null;
   const [left, right] = result.wheels;
   const wheelbasePx = Math.hypot(right.cx - left.cx, right.cy - left.cy);
   if (wheelbasePx < 10) return null;
@@ -180,6 +206,9 @@ export function computeWheelFrameMeta(
 ): RiderWheelFrameMeta | null {
   const result = detectWheels(frame);
   if (result.wheels.length < 2) return null;
+  // v1.14.44: гейт доверия — мусорная пара не должна попадать в факторы
+  // F1/F2/F3 валидатора соответствия (ложный блок на своём же веле)
+  if (!isTrustedWheelPair(result.wheels, frame)) return null;
   const [left, right] = result.wheels;
   const wheelbasePx = Math.hypot(right.cx - left.cx, right.cy - left.cy);
   if (wheelbasePx < 10) return null;
