@@ -45,9 +45,20 @@ import {
 } from "@/lib/bike-fit";
 import {
   bikeMatchVerdict,
+  computeWheelFrameMeta,
   computeWheelRatioFromFrame,
   downscaleToRawFrame,
 } from "@/lib/bike-wheel-ratio";
+import {
+  validateBikeMatch,
+  extractRiderPoseSignals,
+  estimateTriangleSamplePoint,
+  type Rgb,
+} from "@/lib/bike-match-validator";
+import {
+  sampleMedianColorFromImageElement,
+  sampleMedianColorFromFrame,
+} from "@/lib/frame-color-sample";
 import { getBikes, getActiveRider } from "@/lib/bike-storage";
 import { fingerprintDataUrl } from "@/lib/photo-fingerprint";
 import { calculateAll } from "@/lib/bike-calculations";
@@ -145,6 +156,10 @@ export function PhotoAnalysisSection() {
   // v1.14.36: честный статус сверки — "notFound" больше не маскируется под «совпадает»
   const riderWheelCheck = usePhotoAnalysisStore((s) => s.riderWheelCheck);
   const setRiderWheelCheck = usePhotoAnalysisStore((s) => s.setRiderWheelCheck);
+  // v1.14.43 (multi-factor bike match): метаданные колёс + цвет рамы
+  // бокового фото (для факторов F2 «цвет» и F3 «масштаб посадки»)
+  const riderWheelMeta = usePhotoAnalysisStore((s) => s.riderWheelMeta);
+  const setRiderWheelMeta = usePhotoAnalysisStore((s) => s.setRiderWheelMeta);
   // v1.14.37: реестр происхождения фото + активный конфликт (фото уже было
   // под другим велом) — детерминированная ловушка подмены
   const registerViewPhoto = usePhotoAnalysisStore((s) => s.registerViewPhoto);
@@ -156,31 +171,138 @@ export function PhotoAnalysisSection() {
     return typeof r === "number" && Number.isFinite(r) && r > 0 ? r : null;
   }, [activeBikeId, views.side.photoData]); // пересчёт и при смене фото вела
   const matchResult = bikeMatchVerdict(bikePhotoWheelRatio, riderPhotoWheelRatio);
-  const bikeMismatch = matchResult.verdict === "mismatch";
-  const bikeMatchOk = matchResult.verdict === "match";
   // Сверка не состоялась, хотя базу для сравнения знаем (вел размечен):
   // детектор не нашёл оба колеса на фото райдера — честно показываем «не сверено»
   const bikeMatchUnknown =
     matchResult.verdict === "unknown" && bikePhotoWheelRatio != null && riderWheelCheck === "notFound";
 
+  // === v1.14.43 (ТЗ «Защита от дурака»): multi-factor валидатор ===
+  // 4 независимых фактора: F1 пропорции колёс (был единственным), F2 цвет
+  // рамы (семпл подседельной трубы вела vs зона верхней трубы на фото
+  // райдера), F3 масштаб посадки (таз/седло над осями, норм. на радиус),
+  // F4 хват (кисти vs плечи vs заявленный тип вела). Вердикт "block" —
+  // 2+ провала ИЛИ F1 (хард-блок v1.14.41 сохранён).
+  const riderPoseSignals = useMemo(
+    () => extractRiderPoseSignals(views.side.landmarks),
+    [views.side.landmarks]
+  );
+
+  // Сигналы карточки вела: разметка (keyPointsData) + заявленный тип
+  const bikeCardData = useMemo(() => {
+    if (!activeBikeId) return null;
+    const card = getBikes().find((b) => b.id === activeBikeId);
+    if (!card) return null;
+    let kp: Record<string, { x: number | null; y: number | null } | undefined> | null = null;
+    if (card.keyPointsData) {
+      try {
+        kp = JSON.parse(card.keyPointsData);
+      } catch {
+        kp = null;
+      }
+    }
+    return { photoData: card.photoData ?? null, type: card.type ?? null, kp };
+  }, [activeBikeId, views.side.photoData, bikePhotoWheelRatio]); // пересчёт при смене разметки вела
+
+  const numPt = (p?: { x: number | null; y: number | null } | null) =>
+    p && p.x != null && p.y != null && Number.isFinite(p.x) && Number.isFinite(p.y)
+      ? { x: p.x, y: p.y }
+      : null;
+
+  // Медианный цвет рамы с фото ВЕЛА: середина подседельной трубы
+  // (BB→saddleMount — там нет шатунов и ног), фоллбэк — окно вокруг BB
+  // (объявлен ДО bikeCardSignals — он входит в его сигналы)
+  const [bikeBbColor, setBikeBbColor] = useState<Rgb | null>(null);
+  useEffect(() => {
+    setBikeBbColor(null);
+    const kp = bikeCardData?.kp ?? null;
+    const photoUrl = bikeCardData?.photoData ?? null;
+    if (!kp || !photoUrl) return;
+    const bb = numPt(kp.bb);
+    const saddle = numPt(kp.saddleMount);
+    let nx: number | null = null;
+    let ny: number | null = null;
+    if (bb && saddle) {
+      nx = (bb.x + saddle.x) / 2;
+      ny = (bb.y + saddle.y) / 2;
+    } else if (bb) {
+      nx = bb.x;
+      ny = bb.y;
+    }
+    if (nx == null || ny == null) return;
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      setBikeBbColor(sampleMedianColorFromImageElement(img, nx!, ny!, 0.03));
+    };
+    img.onerror = () => {
+      if (!cancelled) setBikeBbColor(null);
+    };
+    img.src = photoUrl;
+    return () => {
+      cancelled = true;
+    };
+  }, [bikeCardData]);
+
+  const bikeCardSignals = useMemo(() => {
+    const kp = bikeCardData?.kp ?? null;
+    const rearAxle = numPt(kp?.rearAxle);
+    const frontAxle = numPt(kp?.frontAxle);
+    const rearTop = numPt(kp?.rearWheelTop);
+    const frontTop = numPt(kp?.frontWheelTop);
+    const saddle = numPt(kp?.saddleMount);
+    let axleMidYn: number | null = null;
+    let radiusNormY: number | null = null;
+    if (rearAxle && frontAxle) {
+      axleMidYn = (rearAxle.y + frontAxle.y) / 2;
+      const radii: number[] = [];
+      if (rearTop) radii.push(Math.abs(rearAxle.y - rearTop.y));
+      if (frontTop) radii.push(Math.abs(frontAxle.y - frontTop.y));
+      if (radii.length > 0) {
+        const avg = radii.reduce((s, r) => s + r, 0) / radii.length;
+        radiusNormY = avg > 0.005 ? avg : null;
+      }
+    }
+    return {
+      wheelRatio: bikePhotoWheelRatio,
+      bbColorRgb: bikeBbColor,
+      saddleYn: saddle?.y ?? null,
+      axleMidYn,
+      radiusNormY,
+      bikeType: bikeCardData?.type ?? null,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bikePhotoWheelRatio, bikeBbColor, bikeCardData]);
+
+  const multiMatch = useMemo(
+    () =>
+      validateBikeMatch({
+        wheelRatio: riderPhotoWheelRatio,
+        wheelMeta: riderWheelMeta,
+        pose: riderPoseSignals,
+        bike: bikeCardSignals,
+      }),
+    [riderPhotoWheelRatio, riderWheelMeta, riderPoseSignals, bikeCardSignals]
+ );
+
   // === v1.14.41 (ТЗ «Жесткий чек-поинт совпадения велосипедов»): хард-блок ===
-  // Расхождение пропорций > 10% — автоматический расчёт сравнения с рамой
-  // БЛОКИРУЕТСЯ, показывается модалка подтверждения. Разблокировка — только
-  // явным «Это тот же велосипед — продолжить»; override сбрасывается при
+  // v1.14.43: блок по вердикту multi-factor валидатора (2+ фактора провалились
+  // ИЛИ F1 пропорции — старый хард-блок). Разблокировка — только явным
+  // «Это тот же велосипед — продолжить»; override сбрасывается при
   // смене фото и при смене вела — новый прогон снова под гейтом.
   const [bikeMatchModalOpen, setBikeMatchModalOpen] = useState(false);
   const [bikeMatchOverride, setBikeMatchOverride] = useState(false);
-  const bikeMatchBlocking = bikeMismatch && !bikeMatchOverride;
+  const bikeMatchBlocking = multiMatch.verdict === "block" && !bikeMatchOverride;
 
   useEffect(() => {
     setBikeMatchOverride(false);
   }, [views.side.photoData, activeBikeId]);
 
-  // Модалка открывается при каждом обнаружении mismatch (в т.ч. на новом
+  // Модалка открывается при каждом обнаружении несоответствия (в т.ч. на новом
   // анализе — views.side.analysis меняется) и на старых анализах из кэша
   useEffect(() => {
-    if (bikeMismatch && !bikeMatchOverride) setBikeMatchModalOpen(true);
-  }, [bikeMismatch, bikeMatchOverride, views.side.analysis]);
+    if (multiMatch.verdict === "block" && !bikeMatchOverride) setBikeMatchModalOpen(true);
+  }, [multiMatch.verdict, bikeMatchOverride, views.side.analysis]);
 
   // v1.14.41: сторона для ОТРИСОВКИ скелета, когда анализ провалился —
   // раньше activeSide = null и обе ноги рисовались (фантомная «паутина»
@@ -501,13 +623,34 @@ export function PhotoAnalysisSection() {
           if (cur !== latestPhotoData) return;
           try {
             const frame = downscaleToRawFrame(img);
-            const ratio = frame ? computeWheelRatioFromFrame(frame) : null;
-            setRiderPhotoWheelRatio(ratio);
+            const meta = frame ? computeWheelFrameMeta(frame) : null;
+            setRiderPhotoWheelRatio(meta ? meta.ratio : null);
             // v1.14.36: честный статус — детектор не нашёл оба колеса ≠ «совпадает»
-            setRiderWheelCheck(ratio != null ? "ok" : "notFound");
+            setRiderWheelCheck(meta != null ? "ok" : "notFound");
+            // v1.14.43: метаданные колёс + семпл цвета рамы (факторы F2/F3)
+            if (meta) {
+              const sp = estimateTriangleSamplePoint(
+                meta.axleMidXn,
+                meta.axleMidYn,
+                meta.radiusNormY
+              );
+              const color =
+                sp && frame
+                  ? sampleMedianColorFromFrame(frame, sp.nx, sp.ny, sp.halfNorm)
+                  : null;
+              setRiderWheelMeta({
+                axleMidXn: meta.axleMidXn,
+                axleMidYn: meta.axleMidYn,
+                radiusNormY: meta.radiusNormY,
+                frameColorRgb: color,
+              });
+            } else {
+              setRiderWheelMeta(null);
+            }
           } catch {
             setRiderPhotoWheelRatio(null);
             setRiderWheelCheck("notFound");
+            setRiderWheelMeta(null);
           }
         };
         img.onerror = () => {
@@ -515,11 +658,12 @@ export function PhotoAnalysisSection() {
           if (cur !== latestPhotoData) return; // битое фото уже заменили
           setRiderPhotoWheelRatio(null);
           setRiderWheelCheck("notFound");
+          setRiderWheelMeta(null);
         };
         img.src = url;
       }
     },
-    [setUiState, setViewPhotoStore, setViewPhotoData, setRiderPhotoWheelRatio, setRiderWheelCheck, registerViewPhoto, activeBikeId]
+    [setUiState, setViewPhotoStore, setViewPhotoData, setRiderPhotoWheelRatio, setRiderWheelCheck, setRiderWheelMeta, registerViewPhoto, activeBikeId]
   );
 
   // v1.14.37 (Mount Detection): детекция колёс обязана работать и для
@@ -541,12 +685,33 @@ export function PhotoAnalysisSection() {
       if (usePhotoAnalysisStore.getState().views.side.photoData !== sidePhotoData) return;
       try {
         const frame = downscaleToRawFrame(img);
-        const ratio = frame ? computeWheelRatioFromFrame(frame) : null;
-        setRiderPhotoWheelRatio(ratio);
-        setRiderWheelCheck(ratio != null ? "ok" : "notFound");
+        const meta = frame ? computeWheelFrameMeta(frame) : null;
+        setRiderPhotoWheelRatio(meta ? meta.ratio : null);
+        setRiderWheelCheck(meta != null ? "ok" : "notFound");
+        // v1.14.43: метаданные колёс + семпл цвета рамы (факторы F2/F3)
+        if (meta) {
+          const sp = estimateTriangleSamplePoint(
+            meta.axleMidXn,
+            meta.axleMidYn,
+            meta.radiusNormY
+          );
+          const color =
+            sp && frame
+              ? sampleMedianColorFromFrame(frame, sp.nx, sp.ny, sp.halfNorm)
+              : null;
+          setRiderWheelMeta({
+            axleMidXn: meta.axleMidXn,
+            axleMidYn: meta.axleMidYn,
+            radiusNormY: meta.radiusNormY,
+            frameColorRgb: color,
+          });
+        } else {
+          setRiderWheelMeta(null);
+        }
       } catch {
         setRiderPhotoWheelRatio(null);
         setRiderWheelCheck("notFound");
+        setRiderWheelMeta(null);
       }
     };
     // onerror (битое/мёртвое фото) — оставляем "pending": фото всё равно
@@ -555,7 +720,7 @@ export function PhotoAnalysisSection() {
     return () => {
       cancelled = true;
     };
-  }, [sidePhotoData, setRiderPhotoWheelRatio, setRiderWheelCheck]);
+  }, [sidePhotoData, setRiderPhotoWheelRatio, setRiderWheelCheck, setRiderWheelMeta]);
 
   const handleClear = useCallback(
     (view: ViewType) => {
@@ -657,47 +822,48 @@ export function PhotoAnalysisSection() {
         </div>
       )}
 
-      {/* === v1.14.34 (ТЗ п. 5.4) + v1.14.36: Bike Match Validation ===
-          Три честных состояния: совпадает / расходится / НЕ СВЕРЕНО.
-          Раньше «не сверено» (колёса не распознаны) молча выглядело как
-          «совпадает» — подмена вела проходила незамеченной. */}
-      {bikeMismatch && (
-        <div className="flex items-start gap-2 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
-          <AlertTriangle className="size-4 mt-0.5 shrink-0" />
-          <div>
-            <p className="font-medium">
-              Возможно, загружены фото двух разных велосипедов
-            </p>
-            <p className="mt-1 text-xs">
-              Пропорция «колёсная база / диаметр колеса» расходится на {matchResult.divergencePct?.toFixed(0)}% между фото с райдером (Шаг 1) и фото вела (Шаг 2):
-              {bikePhotoWheelRatio != null && ` у вела ${bikePhotoWheelRatio.toFixed(2)}${riderPhotoWheelRatio != null ? `, у фото с райдером ${riderPhotoWheelRatio.toFixed(2)}` : ""}.`}
-              {" "}
-              Убедитесь, что оба фото сняты одного и того же велосипеда с одного ракурса. Сравнение с рамой будет ненадёжным.
-              {` `}Если вы сменили велосипед — переснимите и Шаг 1 (фото с райдером): сейчас в сравнении участвуют кадры разных велосипедов.
-            </p>
-          </div>
-        </div>
-      )}
-      {bikeMatchBlocking && (
+      {/* === v1.14.43 (ТЗ «Защита от дурака»): multi-factor Bike Match —
+          сводка по 4 факторам (пропорции/цвет/масштаб посадки/хват).
+          v1.14.34/41: старые состояния (совпадает/расходится/не сверено)
+          сохранены как подмножество фактора F1 === */}
+      {multiMatch.verdict === "block" && (
         <div className="flex items-start gap-2 rounded-lg border border-rose-300 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30 px-4 py-3 text-sm text-rose-700 dark:text-rose-400">
           <AlertTriangle className="size-4 mt-0.5 shrink-0" />
           <div>
-            <p className="font-medium">
-              Автоматическое сравнение с рамой заблокировано
-            </p>
+            <p className="font-medium">Обнаружено несоответствие велосипедов!</p>
             <p className="mt-1 text-xs">
-              Пропорции фото с райдером и фото вела расходятся на {matchResult.divergencePct?.toFixed(0)}% (порог 10%).
+              Параметры на фото с человеком (Шаг 1) сильно отличаются от велосипеда, калиброванного на Шаге 2.
               Блокированы: рекомендации «геометрия ↔ поза» и таблица «Было ➔ Стало» — на чужой раме они бессмысленны.
-              Если это точно один велосипед — подтвердите кнопкой ниже (окно показывается при каждом анализе).
             </p>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
+              {multiMatch.reasons.map((r, i) => (
+                <li key={i}>{r}</li>
+              ))}
+            </ul>
             <Button
               size="sm"
               variant="outline"
               className="mt-2"
               onClick={() => setBikeMatchOverride(true)}
             >
-              Это тот же велосипед — продолжить
+              Это тот же велосипед — продолжить (на свой страх и риск)
             </Button>
+          </div>
+        </div>
+      )}
+      {multiMatch.verdict === "warn" && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+          <AlertTriangle className="size-4 mt-0.5 shrink-0" />
+          <div>
+            <p className="font-medium">Подозрение на разные велосипеды</p>
+            <p className="mt-1 text-xs">
+              Один из признаков не сошёлся (блокировка — при двух и более либо при расхождении пропорций): сравнение с рамой не заблокировано, но проверьте фото глазами.
+            </p>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
+              {multiMatch.reasons.map((r, i) => (
+                <li key={i}>{r}</li>
+              ))}
+            </ul>
           </div>
         </div>
       )}
@@ -717,11 +883,14 @@ export function PhotoAnalysisSection() {
           </div>
         </div>
       )}
-      {bikeMatchOk && (
-        <div className="flex items-center gap-2 rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50/60 dark:bg-emerald-950/20 px-4 py-2.5 text-sm text-emerald-700 dark:text-emerald-400">
-          <CheckCircle2 className="size-4 shrink-0" />
+      {multiMatch.verdict === "ok" && (
+        <div className="flex items-start gap-2 rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50/60 dark:bg-emerald-950/20 px-4 py-2.5 text-sm text-emerald-700 dark:text-emerald-400">
+          <CheckCircle2 className="size-4 shrink-0 mt-0.5" />
           <span className="text-xs">
-            Велосипеды сверены: пропорция «колёсная база / диаметр колеса» совпадает (расхождение {matchResult.divergencePct?.toFixed(0)}% — в пределах нормы). Фото с райдером и фото вела похожи на один велосипед.
+            Велосипеды сверены по {multiMatch.evaluatedCount} признак(ам): {Object.values(multiMatch.factors)
+              .filter((f) => f.verdict === "pass")
+              .map((f) => f.detail)
+              .join("; ")}.
           </span>
         </div>
       )}
@@ -1060,32 +1229,38 @@ export function PhotoAnalysisSection() {
         </DialogContent>
       </Dialog>
 
-      {/* === v1.14.41 (ТЗ «Жесткий чек-поинт совпадения велосипедов»): модалка
-          расхождения пропорций фото с райдером и фото вела (> 10%) === */}
+      {/* === v1.14.43 (ТЗ «Защита от дурака»): модалка несоответствия
+          велов — список проваленных факторов (v1.14.41: была только
+          пропорция) === */}
       <Dialog open={bikeMatchModalOpen} onOpenChange={setBikeMatchModalOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
               <AlertTriangle className="size-5 text-amber-500" />
-              Фото разных велосипедов?
+              Обнаружено несоответствие велосипедов!
             </DialogTitle>
             <DialogDescription className="text-left">
               <p>
-                Пропорции велосипеда на фото с человеком отличаются от рамы на
-                шаге 2. Убедитесь, что вы загрузили один и тот же велосипед.
+                Параметры рамы на фото с человеком (Шаг 1) сильно отличаются от
+                велосипеда, калиброванного на Шаге 2 (разные пропорции/цвет
+                рамы). Убедитесь, что вы загрузили один и тот же велосипед.
               </p>
+              {multiMatch.reasons.length > 0 && (
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+                  {multiMatch.reasons.map((r, i) => (
+                    <li key={i}>{r}</li>
+                  ))}
+                </ul>
+              )}
               <p className="mt-2 text-xs text-muted-foreground">
-                Расхождение пропорций «колёсная база / диаметр колеса»: {matchResult.divergencePct?.toFixed(0)}%
-                {bikePhotoWheelRatio != null &&
-                  riderPhotoWheelRatio != null &&
-                  ` (вел ${bikePhotoWheelRatio.toFixed(2)} · фото с райдером ${riderPhotoWheelRatio.toFixed(2)})`}
-                . Автоматическое сравнение с рамой и рекомендации «геометрия ↔ поза» заблокированы до подтверждения.
+                Автоматическое сравнение с рамой и рекомендации «геометрия ↔
+                поза» заблокированы до подтверждения.
               </p>
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <Button size="sm" variant="outline" onClick={() => setBikeMatchModalOpen(false)}>
-              Понятно, проверю фото
+              📷 Переснять фото с этим же велосипедом
             </Button>
             <Button
               size="sm"
@@ -1095,7 +1270,7 @@ export function PhotoAnalysisSection() {
                 setBikeMatchModalOpen(false);
               }}
             >
-              Это тот же велосипед — продолжить
+              Всё равно продолжить (на свой страх и риск)
             </Button>
           </div>
         </DialogContent>

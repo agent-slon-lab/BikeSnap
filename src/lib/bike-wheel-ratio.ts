@@ -156,6 +156,41 @@ export function bikeMatchVerdict(
 }
 
 /**
+ * v1.14.43 (multi-factor bike match): метаданные колёс из кадра детектора —
+ * не только пропорция, но и нормированные положение осей + радиус (для
+ * фактора «масштаб посадки» F3) — точка семпла цвета считается из них же.
+ * Требует оба колеса (как computeWheelRatioFromFrame); null — не нашли.
+ */
+export interface RiderWheelFrameMeta {
+  /** пропорция база/диаметр (та же, что computeWheelRatioFromFrame) */
+  ratio: number;
+  /** midpoint осей, норм. 0..1 */
+  axleMidXn: number;
+  axleMidYn: number;
+  /** средний радиус колёс, норм. по ВЫСОТЕ кадра */
+  radiusNormY: number;
+}
+
+export function computeWheelFrameMeta(
+  frame: RawFrame
+): RiderWheelFrameMeta | null {
+  const result = detectWheels(frame);
+  if (result.wheels.length < 2) return null;
+  const [left, right] = result.wheels;
+  const wheelbasePx = Math.hypot(right.cx - left.cx, right.cy - left.cy);
+  if (wheelbasePx < 10) return null;
+  const avgRadius = (left.a + right.a) / 2;
+  if (avgRadius < 5) return null;
+  if (frame.height < 8) return null;
+  return {
+    ratio: wheelbasePx / (2 * avgRadius),
+    axleMidXn: (left.cx + right.cx) / 2 / frame.width,
+    axleMidYn: (left.cy + right.cy) / 2 / frame.height,
+    radiusNormY: avgRadius / frame.height,
+  };
+}
+
+/**
  * Уменьшить изображение до рабочего кадра детектора и снять ImageData.
  * Детектор спроектирован под кадры ~320px; 480px по ширине — компромисс
  * точность/скорость (единицы мс). Возвращает null на битом/пустом кадре.

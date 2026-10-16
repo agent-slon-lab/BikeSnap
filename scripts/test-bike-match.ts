@@ -52,20 +52,19 @@ console.log(`Порог: WHEEL_RATIO_MISMATCH_PCT = ${WHEEL_RATIO_MISMATCH_PCT}`
 }
 {
   // Граница порога. Формула: 2|a-b|/(a+b) = pct (ОТНОСИТЕЛЬНО СРЕДНЕГО).
-  // Для a=1.5: pct=11.9 → b = (3*(1+pct/100))/(2*(1-pct/100))... проще из
-  // 2(b-a) = pct/100*(a+b): b = a*(2+p)/(2-p), p = pct/100.
-  // Практические значения: 11.9% → match, 12.1% → mismatch (ровно 12.0 в
-  // float — 12.00000000000001, строгое «>» честно считает его mismatch).
-  const below = bikeMatchVerdict(1.5, (1.5 * (2 + 0.119)) / (2 - 0.119));
+  // Для a=1.5: pct → b = a*(2+p)/(2-p), p = pct/100.
+  // v1.14.41: порог 12% → 10% (ТЗ «Жесткий чек-поинт») — кейсы границы
+  // обновлены: 9.9% → match, 10.1% → mismatch.
+  const below = bikeMatchVerdict(1.5, (1.5 * (2 + 0.099)) / (2 - 0.099));
   check(
-    "расхождение 11.9% → match",
-    below.verdict === "match" && Math.abs((below.divergencePct ?? 0) - 11.9) < 1e-9,
+    "расхождение 9.9% → match (порог v1.14.41 = 10%)",
+    below.verdict === "match" && Math.abs((below.divergencePct ?? 0) - 9.9) < 1e-9,
     `got ${below.verdict}, ${below.divergencePct}`
   );
-  const above = bikeMatchVerdict(1.5, (1.5 * (2 + 0.121)) / (2 - 0.121));
+  const above = bikeMatchVerdict(1.5, (1.5 * (2 + 0.101)) / (2 - 0.101));
   check(
-    "расхождение 12.1% → mismatch",
-    above.verdict === "mismatch" && Math.abs((above.divergencePct ?? 0) - 12.1) < 1e-9,
+    "расхождение 10.1% → mismatch",
+    above.verdict === "mismatch" && Math.abs((above.divergencePct ?? 0) - 10.1) < 1e-9,
     `got ${above.verdict}, ${above.divergencePct}`
   );
 }

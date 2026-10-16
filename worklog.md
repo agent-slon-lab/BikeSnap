@@ -1097,3 +1097,58 @@ Stage Summary:
 - Урок для верификаторов: зеркало живёт в КОРНЕ agent-slon-lab.github.io
   (URL без /BikeSnap).
 - Следующая версия: v1.14.43.
+
+---
+Task ID: 47
+Agent: main (Super Z)
+Task: v1.14.43 — ТЗ «Защита от дурака»: multi-factor сверка велов
+(4 фактора вместо одного) + модалка несоответствия с причинами.
+
+Work Log:
+- Разведка: существующая сверка = один фактор (пропорции колёс,
+  bike-wheel-ratio.ts, хард-блок 10% v1.14.41). На Шаге 1 разметки рамы
+  нет — факторы ТЗ (top tube slope, BB-цвет) адаптированы к измеримому:
+  детектор колёс + BlazePose + разметка Шага 2 + тип вела из карточки
+  (BikeType есть в BikeRecord).
+- src/lib/bike-match-validator.ts (новый): F1 proportions (интеграция
+  bikeMatchVerdict), F2 frameColor (медиана: Шаг 2 — середина подседельной
+  трубы BB→saddleMount, фоллбэк BB; Шаг 1 — зона верхней трубы 0.26–0.58 R
+  над осями из колёс детектора; порог ΔC > 90 по ТЗ), F3 riderScale
+  ((axleMidY − таз/седло)/радиус, допуск 25%), F4 gripType (кисти vs плечи
+  норм. на торс vs BikeType: road/gravel — кисти не выше плеч на 15%
+  торса; mtb/city/hybrid — не ниже на 50%). Вердикты: block (≥2 fail
+  ИЛИ F1), warn (1), ok, unknown. reasons[] для UI.
+- src/lib/frame-color-sample.ts (новый): медианный RGB из HTMLImageElement
+  (окно в оригинальном разрешении) и из RawFrame детектора (без второго
+  canvas). medianRgbFromPixels устойчив к выбросам (нога/тень в окне).
+- bike-wheel-ratio.ts: computeWheelFrameMeta() — ratio + норм. оси + радиус
+  за один проход детектора.
+- photo-analysis-store.ts: riderWheelMeta + setRiderWheelMeta — персист
+  рядом с riderPhotoWheelRatio, те же сбросы (setViewPhoto side, clearView
+  side, startRefit, syncBikeId), partialize + санитизация в merge.
+- PhotoAnalysisSection.tsx: обе точки детекции (новое фото + mount-effect
+  для persist-фото) считают meta+цвет; bikeCardData/bikeCardSignals из
+  keyPointsData+type; bikeBbColor effect (Image → семпел подседельной);
+  multiMatch = validateBikeMatch(...); bikeMatchBlocking =
+  verdict==="block" && !override (хард-блок F1 сохранён); плашки block/
+  warn/ok/unknown переписаны (block и warn показывают reasons[]), модалка:
+  «Обнаружено несоответствие велосипедов!» + причины + кнопки
+  «📷 Переснять фото с этим же велосипедом» / «Всё равно продолжить (на
+  свой страх и риск)» (по ТЗ). Задействован bikeMatchVerdict (F1) остался
+  для деталей; computeTopTubeSlopeDeg — телеметрия/будущее (Factor B ТЗ
+  на Шаге 1 не измерим — документировано в докблоках).
+- Тесты: scripts/test-bike-match-validator.ts (новый) 46 OK / 0 FAIL;
+  scripts/test-bike-match.ts — починен устаревший кейс границы порога
+  (11.9/12.1% под старый порог 12% → 9.9/10.1% под v1.14.41=10%):
+  15 OK / 0 FAIL (FAIL существовал и на HEAD до моих правок).
+- tsc чисто (2 до-существующих фильтруемых скрипта), next build OK,
+  смоук :3315 — 200 / version.json v1.14.43 / sw VERSION v1.14.43 /
+  full-модель 9.4 МБ / sync-bridge 200.
+- Бамп 1.14.43: package.json / sw.js / version.json / app-version.ts /
+  whats-new.ts (новая запись) / CHANGELOG.md (секция с контекстом).
+
+Stage Summary:
+- v1.14.43: сверка велов 4-факторная; подмена ловится даже при совпадении
+  пропорций (цвет/масштаб посадки/хват); блокировка с перечнем причин,
+  warn — без блокировки; старый хард-блок пропорций не ослаблен.
+- Следующая версия: v1.14.44.

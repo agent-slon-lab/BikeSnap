@@ -32,6 +32,7 @@ import {
   pickProvenanceConflict,
   type PhotoProvenanceEntry,
 } from "@/lib/photo-fingerprint";
+import type { RiderWheelMeta } from "@/lib/bike-match-validator";
 
 /** Что хранится по каждому ракурсу (side/back/front). */
 export interface PersistedViewPhoto {
@@ -140,6 +141,16 @@ interface PhotoAnalysisState {
   riderWheelCheck: "pending" | "ok" | "notFound";
   setRiderWheelCheck: (status: "pending" | "ok" | "notFound") => void;
   /**
+   * v1.14.43 (multi-factor bike match): метаданные колёс + цвет рамы
+   * с бокового фото райдера (Шаг 1): midpoint осей, радиус (норм. по
+   * высоте кадра) и медианный цвет зоны рамы. Потребители — факторы
+   * F2 (цвет) и F3 (масштаб посадки) в bike-match-validator.ts.
+   * Живёт вместе с riderPhotoWheelRatio: те же сбросы при замене/очистке
+   * фото и смене вела.
+   */
+  riderWheelMeta: RiderWheelMeta | null;
+  setRiderWheelMeta: (meta: RiderWheelMeta | null) => void;
+  /**
    * v1.14.37: реестр происхождения фото — фингерпринт → под какими велами
    * фото уже загружалось. Кросс-веловая история (намеренно НЕ чистится при
    * смене вела): она и есть защита от подмены фото между карточками.
@@ -233,6 +244,7 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
       views: emptyViews(),
       riderPhotoWheelRatio: null,
       riderWheelCheck: "pending",
+      riderWheelMeta: null,
       photoProvenance: {},
       provenanceConflict: null,
       previousRun: null,
@@ -248,6 +260,9 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
         })),
 
       setRiderWheelCheck: (status) => set(() => ({ riderWheelCheck: status })),
+
+      setRiderWheelMeta: (meta) =>
+        set(() => ({ riderWheelMeta: meta })),
 
       // v1.14.37: регистрация фото за велом + детект конфликта происхождения.
       // Реестр КРОСС-ВЕЛОВОЙ (не чистится при смене активного вела) — это и
@@ -309,6 +324,7 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
             views: emptyViews(),
             riderPhotoWheelRatio: null,
             riderWheelCheck: "pending",
+            riderWheelMeta: null,
             provenanceConflict: null,
           };
         }),
@@ -363,6 +379,7 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
             views: emptyViews(),
             riderPhotoWheelRatio: null,
             riderWheelCheck: "pending",
+            riderWheelMeta: null,
             // v1.14.37: photoProvenance НЕ чистится — кросс-веловая история
             // должна пережить смену вела (она и ловит подмену файлов).
             provenanceConflict: null,
@@ -389,7 +406,11 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
           // v1.14.37: конфликт происхождения тоже сбрасывается — регистра-
           // ция нового фото выставит его заново, если нужно.
           ...(view === "side"
-            ? { riderPhotoWheelRatio: null, riderWheelCheck: "pending" as const }
+            ? {
+                riderPhotoWheelRatio: null,
+                riderWheelCheck: "pending" as const,
+                riderWheelMeta: null,
+              }
             : {}),
           provenanceConflict: null,
         })),
@@ -419,7 +440,11 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
           views: { ...s.views, [view]: emptyView() },
           // v1.14.36: фото с райдером удалено — артефакты сверки тоже
           ...(view === "side"
-            ? { riderPhotoWheelRatio: null, riderWheelCheck: "pending" as const }
+            ? {
+                riderPhotoWheelRatio: null,
+                riderWheelCheck: "pending" as const,
+                riderWheelMeta: null,
+              }
             : {}),
           provenanceConflict: null,
         })),
@@ -432,6 +457,7 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
         views: state.views,
         riderPhotoWheelRatio: state.riderPhotoWheelRatio,
         riderWheelCheck: state.riderWheelCheck,
+        riderWheelMeta: state.riderWheelMeta,
         photoProvenance: state.photoProvenance,
         provenanceConflict: state.provenanceConflict,
         previousRun: state.previousRun,
@@ -510,7 +536,34 @@ export const usePhotoAnalysisStore = create<PhotoAnalysisState>()(
                 },
               }
             : null;
-        return { ...current, bikeId, views, riderPhotoWheelRatio, riderWheelCheck, photoProvenance, provenanceConflict, previousRun, refitMeta };
+        // v1.14.43: санитизация метаданных колёс/цвета (только валидные числа)
+        const rawMeta = p.riderWheelMeta;
+        const riderWheelMeta: PhotoAnalysisState["riderWheelMeta"] =
+          rawMeta &&
+          typeof rawMeta === "object" &&
+          Number.isFinite(rawMeta.axleMidXn) &&
+          Number.isFinite(rawMeta.axleMidYn) &&
+          Number.isFinite(rawMeta.radiusNormY) &&
+          rawMeta.radiusNormY > 0
+            ? {
+                axleMidXn: rawMeta.axleMidXn,
+                axleMidYn: rawMeta.axleMidYn,
+                radiusNormY: rawMeta.radiusNormY,
+                frameColorRgb:
+                  rawMeta.frameColorRgb &&
+                  typeof rawMeta.frameColorRgb === "object" &&
+                  Number.isFinite(rawMeta.frameColorRgb.r) &&
+                  Number.isFinite(rawMeta.frameColorRgb.g) &&
+                  Number.isFinite(rawMeta.frameColorRgb.b)
+                    ? {
+                        r: rawMeta.frameColorRgb.r,
+                        g: rawMeta.frameColorRgb.g,
+                        b: rawMeta.frameColorRgb.b,
+                      }
+                    : null,
+              }
+            : null;
+        return { ...current, bikeId, views, riderPhotoWheelRatio, riderWheelCheck, riderWheelMeta, photoProvenance, provenanceConflict, previousRun, refitMeta };
       },
     }
   )
