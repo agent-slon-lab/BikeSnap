@@ -122,8 +122,9 @@ interface PhotoAnalysisState {
   /**
    * v1.14.34 (ТЗ п. 5.4): пропорция wheelbase/diametr колеса, измеренная
    * авто-детектором на боковом фото райдера (Шаг 1). Сравнивается с
-   * photoCalib.wheelRatio фото вела (Шаг 2); > 12% — предупреждение
-   * «возможно, фото двух разных велосипедов». Стирается вместе с фото.
+   * photoCalib.wheelRatio фото вела (Шаг 2); v1.14.41: > 10% — хард-блок
+   * сравнения с рамой + модалка «загружены фото разных велосипедов».
+   * Стирается вместе с фото.
    */
   riderPhotoWheelRatio: number | null;
   setRiderPhotoWheelRatio: (ratio: number | null) => void;

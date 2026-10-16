@@ -272,8 +272,9 @@ export function updateBikePhotoPersonScore(id: string, score: number | null) {
  * источник масштаба, мм/пиксель и наклон оси колёс — уходят в отчёт отладки.
  * v1.14.34 (ТЗ п. 5.4): + wheelRatio — масштабно-инвариантная пропорция
  * «колёсная база / диаметр колеса» по фото вела (Шаг 2). Используется
- * Bike Match Validation: сравнение с фото райдера (Шаг 1), расхождение
- * > 12% → «возможно, фото двух разных велосипедов».
+ * Bike Match Validation: сравнение с фото райдера (Шаг 1); v1.14.41
+ * (ТЗ «Жесткий чек-поинт»): порог 12% → 10%, расхождение больше —
+ * хард-блок сравнения с рамой + модалка подтверждения.
  * info = null — сброс (фото удалено/заменено, движок упал).
  */
 export function updateBikePhotoScale(
@@ -445,20 +446,24 @@ export function mergeSnapshot(incoming: StorageSnapshot): MergeResult {
   }
   if (res.bikesAdded > 0) save(BIKES_KEY, bikes);
 
-  // --- Активный контекст: только если импортированный реально существует ---
-  if (
-    incoming.activeBikeId &&
-    bikeIds.has(incoming.activeBikeId) &&
-    getActiveBikeId() !== incoming.activeBikeId
-  ) {
-    setActiveBike(incoming.activeBikeId);
+  // --- Активный контекст: только если импортированный реально существует.
+  // v1.14.41: активный вел/райдер НЕ перебрасываем, если локальная активная
+  // запись существует (работаешь на зеркале — синк с vercel не должен
+  // переключать актив на чужой). Восстановление — только на пустом/битом
+  // активе (главный сценарий миграции vercel → зеркало).
+  if (incoming.activeBikeId && bikeIds.has(incoming.activeBikeId)) {
+    const currentBike = getActiveBikeId();
+    const currentBikeExists = currentBike != null && bikeIds.has(currentBike);
+    if (!currentBikeExists && currentBike !== incoming.activeBikeId) {
+      setActiveBike(incoming.activeBikeId);
+    }
   }
-  if (
-    incoming.activeRiderId &&
-    riderIds.has(incoming.activeRiderId) &&
-    getActiveRiderId() !== incoming.activeRiderId
-  ) {
-    setActiveRider(incoming.activeRiderId);
+  if (incoming.activeRiderId && riderIds.has(incoming.activeRiderId)) {
+    const currentRider = getActiveRiderId();
+    const currentRiderExists = currentRider != null && riderIds.has(currentRider);
+    if (!currentRiderExists && currentRider !== incoming.activeRiderId) {
+      setActiveRider(incoming.activeRiderId);
+    }
   }
 
   return res;

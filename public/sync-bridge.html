@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex">
+<title>BikeSnap — sync bridge</title>
+</head>
+<body>
+<!--
+  SYNC BRIDGE (v1.14.41) — служебная страница для переноса данных
+  BikeSnap между изолированными localStorage двух доменов:
+    https://bike-snap.vercel.app   (основной сайт)
+    https://agent-slon-lab.github.io (зеркало)
+
+  КАК РАБОТАЕТ: страница приложения монтирует скрытый <iframe> с ЭТОГО
+  файла на ЧУЖОМ домене. iframe исполняется в контексте чужого origin и
+  имеет доступ к ЕГО localStorage — так данные одной «половины» стают
+  видимы другой. Обмен — строго postMessage с проверкой event.origin.
+
+  ПОЧЕМУ НЕ ОДИН КЛЮЧ «bikesnap_store» (как в черновике ТЗ): реальное
+  хранилище приложения — четыре ключа bikefit-* (см. bike-storage.ts).
+  Мост читает/пишет их все; переносимая структура идентична файлу
+  экспорта/импорта (v1.14.40) — снапшот riders+bikes+активы.
+
+  БЕЗОПАСНОСТЬ:
+   - отвечаем ТОЛЬКО на сообщения с разрешённых origin и ТОЛЬКО
+     родительскому окну (event.source === window.parent);
+   - адресат ответа — event.origin, никаких «*»;
+   - запись — только по четырём известным ключам.
+-->
+<script>
+(function () {
+  "use strict";
+
+  var ALLOWED_ORIGINS = [
+    "https://bike-snap.vercel.app",
+    "https://agent-slon-lab.github.io"
+  ];
+
+  var STORAGE_KEYS = [
+    "bikefit-riders",
+    "bikefit-bikes",
+    "bikefit-active-rider",
+    "bikefit-active-bike"
+  ];
+
+  function snapshot() {
+    var out = {};
+    for (var i = 0; i < STORAGE_KEYS.length; i++) {
+      var k = STORAGE_KEYS[i];
+      try {
+        out[k] = localStorage.getItem(k);
+      } catch (e) {
+        out[k] = null;
+      }
+    }
+    return out;
+  }
+
+  window.addEventListener("message", function (event) {
+    if (ALLOWED_ORIGINS.indexOf(event.origin) === -1) return;
+    if (event.source !== window.parent) return; // только родительская страница
+    var data = event.data;
+    if (!data || typeof data !== "object") return;
+
+    if (String(data.type) === "BIKESNAP_READ_STORAGE") {
+      try {
+        event.source.postMessage(
+          {
+            type: "BIKESNAP_STORAGE_DATA",
+            requestId: data.requestId,
+            payload: snapshot()
+          },
+          event.origin
+        );
+      } catch (e) {
+        /* сериализация не удалась — родитель словит таймаут */
+      }
+      return;
+    }
+
+    if (String(data.type) === "BIKESNAP_WRITE_STORAGE") {
+      var payload = data.payload;
+      if (!payload || typeof payload !== "object") return;
+      for (var i = 0; i < STORAGE_KEYS.length; i++) {
+        var key = STORAGE_KEYS[i];
+        if (!(key in payload)) continue;
+        try {
+          if (payload[key] == null) {
+            localStorage.removeItem(key);
+          } else {
+            localStorage.setItem(key, String(payload[key]));
+          }
+        } catch (e) {
+          /* квота/приватный режим — ключ пропускаем */
+        }
+      }
+      try {
+        event.source.postMessage(
+          { type: "BIKESNAP_WRITE_ACK", requestId: data.requestId },
+          event.origin
+        );
+      } catch (e) {
+        /* ignore */
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

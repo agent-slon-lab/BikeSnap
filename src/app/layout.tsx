@@ -7,6 +7,7 @@ import RegisterSW from "@/components/pwa/register-sw";
 import ChunkErrorRecovery from "@/components/pwa/chunk-error-recovery";
 import UpdateBanner from "@/components/pwa/update-banner";
 import OfflineBadge from "@/components/pwa/offline-badge";
+import SyncBridgeInit from "@/components/pwa/sync-bridge-init";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -83,6 +84,7 @@ export default function RootLayout({
           <ChunkErrorRecovery />
           <UpdateBanner />
           <OfflineBadge />
+          <SyncBridgeInit />
         </ThemeProvider>
       </body>
     </html>

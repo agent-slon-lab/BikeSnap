@@ -174,52 +174,126 @@ export function legConnectionSide(a: number, b: number): "left" | "right" | null
   return null;
 }
 
-/** Результат строгого выбора ближней ноги (v1.14.32, ТЗ п. A) */
+/** Результат строгого выбора ближней ноги (v1.14.32, ТЗ п. A; v2 — v1.14.41) */
 export interface CleanRiderKeypointsResult {
-  /** Сторона с максимальной средней видимостью (ближняя к камере) */
+  /** Сторона с максимальным суммарным баллом видимости (ближняя к камере) */
   side: "left" | "right";
   /** Пять суставов выбранной стороны (строго один префикс) или null */
   keypoints: PoseKeypoints | null;
   /** Человекочитаемая ошибка для UI, если надёжность недостаточна */
   error: string | null;
+  /**
+   * v1.14.41: суммарные баллы видимости обеих сторон — уходит в телеметрию
+   * и объясняет выбор стороны в спорных кадрах (отчёты #10/#11).
+   */
+  sideScores?: { left: number; right: number };
 }
 
 /**
- * Строгий выбор ближней к камере ноги (ТЗ v1.14.32, п. A.1).
+ * СУММАРНЫЙ балл видимости ноги (v1.14.41, ТЗ «Фильтр ближней ноги»):
+ * Σ visibility по ПЯТИ суставам (Hip, Knee, Ankle, Heel, FootIndex).
+ *
+ * Почему не среднее по трём (v1.14.32): MediaPipe выдаёт фантомной дальней
+ * ноге высокие confidence на бедре/колене/лодыжке — в отчётах #10/#11 она
+ * выигрывала по трём точкам и «накладывала скелет» на ближнюю ногу
+ * (колено 167°, бедро 151°). Пятка и носок дальней ноги почти всегда
+ * глюкуют с низкой visibility — сумма из 5 суставов отсекает её надёжно.
+ */
+export function legVisibilityScore(
+  landmarks: (Point | undefined)[] | null | undefined,
+  side: "left" | "right"
+): number {
+  if (!landmarks || landmarks.length === 0) return 0;
+  const L = side === "left";
+  const ids = [
+    L ? POSE_LANDMARKS.LEFT_HIP : POSE_LANDMARKS.RIGHT_HIP,
+    L ? POSE_LANDMARKS.LEFT_KNEE : POSE_LANDMARKS.RIGHT_KNEE,
+    L ? POSE_LANDMARKS.LEFT_ANKLE : POSE_LANDMARKS.RIGHT_ANKLE,
+    L ? POSE_LANDMARKS.LEFT_HEEL : POSE_LANDMARKS.RIGHT_HEEL,
+    L ? POSE_LANDMARKS.LEFT_FOOT_INDEX : POSE_LANDMARKS.RIGHT_FOOT_INDEX,
+  ];
+  return ids.reduce((sum, i) => sum + (landmarks[i]?.visibility ?? 0), 0);
+}
+
+/**
+ * Геометрическая санитария цепочки бедро→колено→лодыжка (v1.14.41).
+ *
+ * Ловит «растянутые» фантомные скелеты, которые проходят по visibility:
+ * колено, приклеенное к бедру (или лодыжка к колену), и схлопнутую в
+ * точку ногу. Реальное отношение бедра к голени у человека 0.75–1.35;
+ * с учётом искажения нормализации MediaPipe (обе оси 0..1) граница 0.25
+ * отсекает только вырожденные цепочки, не задевая живые посадки.
+ */
+function legChainSane(
+  hip: Point | undefined,
+  knee: Point | undefined,
+  ankle: Point | undefined
+): boolean {
+  if (!hip || !knee || !ankle) return false;
+  const thigh = Math.hypot(knee.x - hip.x, knee.y - hip.y);
+  const shin = Math.hypot(ankle.x - knee.x, ankle.y - knee.y);
+  if (!Number.isFinite(thigh) || !Number.isFinite(shin)) return false;
+  if (thigh + shin < 0.08) return false; // нога «схлопнулась» в точку
+  const big = Math.max(thigh, shin);
+  const small = Math.min(thigh, shin);
+  return small / big >= 0.25; // колено не приклеено к соседнему суставу
+}
+
+/**
+ * Сторона с максимальным суммарным баллом (v1.14.41) — для ОТРИСОВКИ
+ * скелета, когда анализ провалился (раньше activeSide = null рисовал
+ * обе ноги — фантомная «паутина» дальней ноги возвращалась в UI).
+ */
+export function getBestLegSide(
+  landmarks: (Point | undefined)[] | null | undefined
+): "left" | "right" {
+  return legVisibilityScore(landmarks, "left") >=
+    legVisibilityScore(landmarks, "right")
+    ? "left"
+    : "right";
+}
+
+/**
+ * Строгий выбор ближней к камере ноги (ТЗ v1.14.32, п. A; v2 — v1.14.41,
+ * ТЗ «Фильтр ближней ноги» по отчётам #10/#11).
  *
  * На боковом снимке дальняя нога перекрыта рамой/шатунами/ближней ногой;
- * MediaPipe генерирует для неё фантомные точки с низкой visibility и
- * «паутину» перекрёстных линий. Правило:
- *  1. Средняя visibility по (Hip, Knee, Ankle) отдельно для LEFT и RIGHT;
- *  2. Для анализа и скелета берётся СТРОГО одна сторона — с максимумом;
- *  3. Если у выбранной стороны hip/knee/ankle ненадёжны (< 0.5) — анализ
- *     невозможен: возвращаем ошибку для UI, keypoints = null.
+ * MediaPipe генерирует для неё фантомные точки и «паутину» перекрёстных
+ * линий. Правило v2:
+ *  1. СУММАРНЫЙ балл видимости стороны по 5 суставам — legVisibilityScore;
+ *  2. Для анализа и скелета берётся СТРОГО одна сторона — с максимумом
+ *     (перекрёстные векторы LEFT_* ↔ RIGHT_* невозможны по построению:
+ *     все суставы расчёта берутся с одного префикса);
+ *  3. Санитарные проверки выбранной стороны: hip/knee/ankle visibility
+ *     ≥ LEG_MIN_VISIBILITY и геометрическая целостность цепочки
+ *     (legChainSane) — фантомные «растянутые» скелеты не проходят.
+ *     Если победитель по баллу не проходит — анализ невозможен
+ *     (ошибка для UI), ДРУГАЯ сторона молча не подставляется.
  */
 export function getCleanRiderKeypoints(
   landmarks: (Point | undefined)[] | null | undefined
 ): CleanRiderKeypointsResult {
+  if (!landmarks || landmarks.length === 0) {
+    return {
+      side: "right",
+      keypoints: null,
+      error: "Поза не распознана — ключевые точки отсутствуют.",
+      sideScores: { left: 0, right: 0 },
+    };
+  }
+  const sideScores = {
+    left: legVisibilityScore(landmarks, "left"),
+    right: legVisibilityScore(landmarks, "right"),
+  };
+  // СТРОГО одна сторона — суммарный балл выше (при равенстве — левая)
+  const side: "left" | "right" =
+    sideScores.left >= sideScores.right ? "left" : "right";
   const fail = (error: string): CleanRiderKeypointsResult => ({
-    side: "right",
+    side,
     keypoints: null,
     error,
+    sideScores,
   });
-  if (!landmarks || landmarks.length === 0) {
-    return fail("Поза не распознана — ключевые точки отсутствуют.");
-  }
-
-  // 1. Средняя видимость стороны (ТЗ: (hip + knee + ankle) / 3)
-  const sideScore = (s: "left" | "right"): number => {
-    const ids =
-      s === "left"
-        ? [POSE_LANDMARKS.LEFT_HIP, POSE_LANDMARKS.LEFT_KNEE, POSE_LANDMARKS.LEFT_ANKLE]
-        : [POSE_LANDMARKS.RIGHT_HIP, POSE_LANDMARKS.RIGHT_KNEE, POSE_LANDMARKS.RIGHT_ANKLE];
-    return (
-      ids.reduce((sum, i) => sum + (landmarks[i]?.visibility ?? 0), 0) / ids.length
-    );
-  };
-  // 2. Строго одна сторона — с максимальной средней видимостью
-  const side: "left" | "right" =
-    sideScore("left") >= sideScore("right") ? "left" : "right";
   const L = side === "left";
   const hip = landmarks[L ? POSE_LANDMARKS.LEFT_HIP : POSE_LANDMARKS.RIGHT_HIP];
   const knee = landmarks[L ? POSE_LANDMARKS.LEFT_KNEE : POSE_LANDMARKS.RIGHT_KNEE];
@@ -240,6 +314,15 @@ export function getCleanRiderKeypoints(
   if (!hip || !knee || !ankle || !shoulder) {
     return fail("Ключевые суставы не распознаны — попробуйте более полный кадр.");
   }
+  // 4. Геометрическая санитария цепочки (v1.14.41): фантомный «растянутый»
+  // скелет дальней ноги (отчёты #10/#11: колено 167°, бедро 151°) отсекается
+  // даже при высоких visibility — цепочка бедро→колено→лодыжка обязана
+  // быть анатомически непротиворечивой.
+  if (!legChainSane(hip, knee, ankle)) {
+    return fail(
+      "Нога распознана с искажениями (скелет сшит из точек разных ног). Снимите кадр строго сбоку, ближняя нога должна быть полностью видна."
+    );
+  }
 
   return {
     side,
@@ -247,6 +330,7 @@ export function getCleanRiderKeypoints(
     // анализатор стопы всё равно проверяет visibility перед расчётом
     keypoints: { shoulder, hip, knee, ankle, toe: toe ?? ankle },
     error: null,
+    sideScores,
   };
 }
 

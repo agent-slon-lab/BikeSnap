@@ -30,6 +30,7 @@ import {
   analyzeFrontView,
   applyCrossMetricLogic,
   applySaddleHeightContext,
+  getBestLegSide,
   getCleanRiderKeypoints,
   getPoseVisibilityScore,
   PERSON_MIN_SCORE,
@@ -158,6 +159,33 @@ export function PhotoAnalysisSection() {
   // детектор не нашёл оба колеса на фото райдера — честно показываем «не сверено»
   const bikeMatchUnknown =
     matchResult.verdict === "unknown" && bikePhotoWheelRatio != null && riderWheelCheck === "notFound";
+
+  // === v1.14.41 (ТЗ «Жесткий чек-поинт совпадения велосипедов»): хард-блок ===
+  // Расхождение пропорций > 10% — автоматический расчёт сравнения с рамой
+  // БЛОКИРУЕТСЯ, показывается модалка подтверждения. Разблокировка — только
+  // явным «Это тот же велосипед — продолжить»; override сбрасывается при
+  // смене фото и при смене вела — новый прогон снова под гейтом.
+  const [bikeMatchModalOpen, setBikeMatchModalOpen] = useState(false);
+  const [bikeMatchOverride, setBikeMatchOverride] = useState(false);
+  const bikeMatchBlocking = bikeMismatch && !bikeMatchOverride;
+
+  useEffect(() => {
+    setBikeMatchOverride(false);
+  }, [views.side.photoData, activeBikeId]);
+
+  // Модалка открывается при каждом обнаружении mismatch (в т.ч. на новом
+  // анализе — views.side.analysis меняется) и на старых анализах из кэша
+  useEffect(() => {
+    if (bikeMismatch && !bikeMatchOverride) setBikeMatchModalOpen(true);
+  }, [bikeMismatch, bikeMatchOverride, views.side.analysis]);
+
+  // v1.14.41: сторона для ОТРИСОВКИ скелета, когда анализ провалился —
+  // раньше activeSide = null и обе ноги рисовались (фантомная «паутина»
+  // дальней ноги возвращалась в UI именно в этом случае)
+  const sideDrawSide = useMemo(
+    () => (views.side.landmarks ? getBestLegSide(views.side.landmarks) : null),
+    [views.side.landmarks]
+  );
 
   // === v1.14.34 (ТЗ п. 6): Re-fit Loop — архив прошлого прогона + анкета ===
   const previousRun = usePhotoAnalysisStore((s) => s.previousRun);
@@ -623,6 +651,29 @@ export function PhotoAnalysisSection() {
           </div>
         </div>
       )}
+      {bikeMatchBlocking && (
+        <div className="flex items-start gap-2 rounded-lg border border-rose-300 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/30 px-4 py-3 text-sm text-rose-700 dark:text-rose-400">
+          <AlertTriangle className="size-4 mt-0.5 shrink-0" />
+          <div>
+            <p className="font-medium">
+              Автоматическое сравнение с рамой заблокировано
+            </p>
+            <p className="mt-1 text-xs">
+              Пропорции фото с райдером и фото вела расходятся на {matchResult.divergencePct?.toFixed(0)}% (порог 10%).
+              Блокированы: рекомендации «геометрия ↔ поза» и таблица «Было ➔ Стало» — на чужой раме они бессмысленны.
+              Если это точно один велосипед — подтвердите кнопкой ниже (окно показывается при каждом анализе).
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-2"
+              onClick={() => setBikeMatchOverride(true)}
+            >
+              Это тот же велосипед — продолжить
+            </Button>
+          </div>
+        </div>
+      )}
       {bikeMatchUnknown && (
         <div className="flex items-start gap-2 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
           <AlertTriangle className="size-4 mt-0.5 shrink-0" />
@@ -716,7 +767,7 @@ export function PhotoAnalysisSection() {
             view="side"
             state={sideState}
             analysis={sideAnalysis}
-            activeSide={sideAnalysis?.side ?? null}
+            activeSide={sideAnalysis?.side ?? sideDrawSide}
             onPhotoSelected={handlePhotoSelected}
             onClear={handleClear}
             onAnalyze={(img) =>
@@ -861,8 +912,10 @@ export function PhotoAnalysisSection() {
         </TabsContent>
       </Tabs>
 
-      {/* === v1.14.34 (ТЗ п. 6.3): сравнение «Было ➔ Стало» — отчёт второго прогона === */}
+      {/* === v1.14.34 (ТЗ п. 6.3): сравнение «Было ➔ Стало» — отчёт второго прогона.
+          v1.14.41: при неразрешённом mismatch пропорций — заблокировано === */}
       {refitMeta &&
+        !bikeMatchBlocking &&
         previousRun?.views.side?.analysis &&
         // снапшот хранит union — сравнивать можно только side-анализы
         "kneeAngle" in previousRun.views.side.analysis &&
@@ -916,8 +969,10 @@ export function PhotoAnalysisSection() {
         />
       )}
 
-      {/* === Комплексные рекомендации: геометрия ↔ поза === */}
-      {sideAnalysis && (
+      {/* === Комплексные рекомендации: геометрия ↔ поза.
+          v1.14.41: при неразрешённом mismatch пропорций — заблокированы
+          (используют геометрию рамы, которая может оказаться чужой) === */}
+      {sideAnalysis && !bikeMatchBlocking && (
         <CrossRefRecommendations sideAnalysis={sideAnalysis} />
       )}
 
@@ -969,6 +1024,47 @@ export function PhotoAnalysisSection() {
               className="bg-orange-500 hover:bg-orange-600"
             >
               Понятно, заменю фото
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* === v1.14.41 (ТЗ «Жесткий чек-поинт совпадения велосипедов»): модалка
+          расхождения пропорций фото с райдером и фото вела (> 10%) === */}
+      <Dialog open={bikeMatchModalOpen} onOpenChange={setBikeMatchModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <AlertTriangle className="size-5 text-amber-500" />
+              Фото разных велосипедов?
+            </DialogTitle>
+            <DialogDescription className="text-left">
+              <p>
+                Пропорции велосипеда на фото с человеком отличаются от рамы на
+                шаге 2. Убедитесь, что вы загрузили один и тот же велосипед.
+              </p>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Расхождение пропорций «колёсная база / диаметр колеса»: {matchResult.divergencePct?.toFixed(0)}%
+                {bikePhotoWheelRatio != null &&
+                  riderPhotoWheelRatio != null &&
+                  ` (вел ${bikePhotoWheelRatio.toFixed(2)} · фото с райдером ${riderPhotoWheelRatio.toFixed(2)})`}
+                . Автоматическое сравнение с рамой и рекомендации «геометрия ↔ поза» заблокированы до подтверждения.
+              </p>
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button size="sm" variant="outline" onClick={() => setBikeMatchModalOpen(false)}>
+              Понятно, проверю фото
+            </Button>
+            <Button
+              size="sm"
+              className="bg-orange-500 hover:bg-orange-600"
+              onClick={() => {
+                setBikeMatchOverride(true);
+                setBikeMatchModalOpen(false);
+              }}
+            >
+              Это тот же велосипед — продолжить
             </Button>
           </div>
         </DialogContent>
