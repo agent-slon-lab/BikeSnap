@@ -66,6 +66,14 @@ export interface DetectedEllipse {
   roundness: number;
   /** доверие 0..1 */
   score: number;
+  /**
+   * Внешний радиус (v1.14.44): медиана лучевых замеров от центра до
+   * ВНЕШНЕЙ границы покрышки. Фит эллипса (rx/ry) садится между двумя
+   * концентрическими краями (внешняя граница покрышки и обод) и занижает
+   * радиус на 5–8%; разметка Шага 2 меряет ось → верх покрышки, поэтому
+   * для пропорции «база/диаметр» использовать нужно rOuter.
+   */
+  rOuter: number;
 }
 
 export type WheelDetectStatus =
@@ -101,6 +109,8 @@ export interface DetectDebugInfo {
     sym: number;
     score: number;
   }>;
+  /** Кандидаты пула, отбракованные уточнением, с причиной (v1.14.44) */
+  failed?: Array<{ cx: number; cy: number; votes: number; reason: string }>;
   accepted: Array<{ cx: number; cy: number; rx: number; ry: number; score: number }>;
 }
 
@@ -110,10 +120,20 @@ export interface DetectDebugInfo {
 
 /** Круглость, при которой считаем колесо кругом (ракурс ровный) */
 const ROUNDNESS_OK = 0.88;
-/** Доля пикселей кадра, которую держим как «краевые» (топ градиентов) */
-const EDGE_FRACTION = 0.1;
-/** Абсолютный потолок числа краевых пикселей (портретные кадры 320×569) */
-const MAX_EDGES = 3000;
+/**
+ * Доля пикселей кадра, которую держим как «краевые» (топ градиентов).
+ * v1.14.44: 0.10 → 0.16 — на контрастных кадрах (белая рама, тёмные
+ * покрышки, пёстрый пол) 90-й перцентиль добирался до 178 и отрезал
+ * сами края покрышек: дуга колеса давала покрытие 0.47 < 0.5 и гейт
+ * убивал НАСТОЯЩЕЕ колесо (диагностика на bike-side из user-reports).
+ */
+const EDGE_FRACTION = 0.16;
+/**
+ * Абсолютный потолок числа краевых пикселей. v1.14.44: 3000 → 4000 — на
+ * реальных кадрах (текстурный пол, стена, райдер) колёсные края конкурируют
+ * с тысячами фоновых, потолок стал дефицитным ресурсом.
+ */
+const MAX_EDGES = 4000;
 /** Минимальная абсолютная величина градиента для краевого пикселя */
 const EDGE_MAG_FLOOR = 12;
 /** Диапазон луча голосования относительно меньшей стороны кадра */
@@ -122,8 +142,13 @@ const R_MAX_FRAC = 0.4;
 /** Диапазон диаметра колеса относительно меньшей стороны кадра (гейт) */
 const DIAMETER_MIN_FRAC = 0.1;
 const DIAMETER_MAX_FRAC = 1.05;
-/** Минимальное покрытие эллипса краями — жёсткий гейт кандидата */
-const COVERAGE_MIN = 0.5;
+/**
+ * Минимальное покрытие эллипса краями — жёсткий гейт кандидата.
+ * v1.14.44: 0.5 → 0.45 — дуга колеса, наполовину уходящая в тень/крыло,
+ * даёт 0.44–0.47 на контрастных кадрах; прежний гейт резал настоящие
+ * колёса впритык. Ложные срабатывания отсеиваются sizeBoost и выбором пары.
+ */
+const COVERAGE_MIN = 0.45;
 /** Минимальное сжатие эллипса по горизонтали (ниже — уже «линия», не колесо) */
 const RX_RY_MIN = 0.42;
 /** Сколько кандидатов после NMS несём в уточнение */
@@ -168,6 +193,8 @@ interface RefinedCandidate extends Candidate {
   sym: number;
   /** итоговый score 0..1 */
   score: number;
+  /** внешний радиус по лучевому замеру (заполняется после уточнения) */
+  rOuter: number;
 }
 
 export function detectWheels(img: RawFrame, debug?: (info: DetectDebugInfo) => void): WheelDetectResult {
@@ -223,25 +250,40 @@ export function detectWheels(img: RawFrame, debug?: (info: DetectDebugInfo) => v
   const fracCap = Math.min(1 - EDGE_FRACTION, 1 - MAX_EDGES / total);
   const edgeT = Math.max(EDGE_MAG_FLOOR, magnitudePercentile(mag, total, fracCap));
 
-  // --- 4. Список краевых пикселей (строится один раз) ---
-  const ex = new Int16Array(MAX_EDGES);
-  const ey = new Int16Array(MAX_EDGES);
-  const enx = new Float32Array(MAX_EDGES);
-  const eny = new Float32Array(MAX_EDGES);
-  let edgeCount = 0;
-  for (let y = 1; y < H - 1 && edgeCount < MAX_EDGES; y++) {
+  // --- 4. Список краевых пикселей — ГЛОБАЛЬНЫЙ top-K (v1.14.44) ---
+  // Было: растровый скан сверху вниз с потолком MAX_EDGES. На реальных
+  // кадрах (текстурная стена/пол, куча мелких перепадов) верхняя треть
+  // кадра съедала весь бюджет: замер на фото из user-reports показал,
+  // что скан упирается в потолок на строке 114 из 360, и ВСЕ 3000 краёв
+  // лежат в верхних 40% кадра — детектор «слеп» к колёсам в нижней
+  // половине (0 колёс на всех 9 реальных фото). Теперь: собираем ВСЕ
+  // пиксели выше порога и берём сильнейшие MAX_EDGES по всему кадру.
+  const cand: number[] = [];
+  for (let y = 1; y < H - 1; y++) {
     const row = y * W;
-    for (let x = 1; x < W - 1 && edgeCount < MAX_EDGES; x++) {
+    for (let x = 1; x < W - 1; x++) {
       const i = row + x;
-      const m = mag[i];
-      if (m < edgeT) continue;
-      const inv = 1 / m;
-      ex[edgeCount] = x;
-      ey[edgeCount] = y;
-      enx[edgeCount] = gx[i] * inv;
-      eny[edgeCount] = gy[i] * inv;
-      edgeCount++;
+      if (mag[i] >= edgeT) cand.push(i);
     }
+  }
+  if (cand.length > MAX_EDGES) {
+    // Сильнейшие краевые пиксели первыми (сортировка по убыванию модуля)
+    cand.sort((a, b) => mag[b] - mag[a]);
+    cand.length = MAX_EDGES;
+  }
+  const ex = new Int16Array(cand.length);
+  const ey = new Int16Array(cand.length);
+  const enx = new Float32Array(cand.length);
+  const eny = new Float32Array(cand.length);
+  let edgeCount = 0;
+  for (const i of cand) {
+    const m = mag[i];
+    const inv = 1 / m;
+    ex[edgeCount] = i % W;
+    ey[edgeCount] = (i / W) | 0;
+    enx[edgeCount] = gx[i] * inv;
+    eny[edgeCount] = gy[i] * inv;
+    edgeCount++;
   }
   if (edgeCount === 0) return none;
 
@@ -342,12 +384,40 @@ export function detectWheels(img: RawFrame, debug?: (info: DetectDebugInfo) => v
 
   // --- 7. Уточнение кандидатов: радиус → форма → центр (координатный спуск) ---
   const refined: RefinedCandidate[] = [];
+  const failed: Array<{ cx: number; cy: number; votes: number; reason: string }> = [];
   for (const cand of pool) {
-    const res = refineCandidate(cand, gray, gx, gy, mag, edgeT, W, H, minWH, rMin, rMax);
+    const why = { reason: "" };
+    const res = refineCandidate(cand, gray, gx, gy, mag, edgeT, W, H, minWH, rMin, rMax, why);
     if (res) refined.push(res);
+    else failed.push({ cx: cand.cx, cy: cand.cy, votes: cand.votes, reason: why.reason || "unknown" });
+  }
+
+  // Телеметрия уточнения: и прошедшие, и отбракованные с причиной
+  if (debug && (refined.length > 0 || failed.length > 0)) {
+    debug({
+      edgeCount,
+      edgeT,
+      pool: [],
+      refined: refined.map((r) => ({
+        cx: r.cx,
+        cy: r.cy,
+        rx: r.rx,
+        ry: r.ry,
+        coverage: r.coverage,
+        ring: r.ring,
+        sym: r.sym,
+        score: r.score,
+      })),
+      failed,
+      accepted: [],
+    });
   }
 
   // --- 8. NMS по score (перекрывающиеся кандидаты — оставляем сильнейшего) ---
+  // v1.14.44: перед NMS измеряем ВНЕШНИЙ радиус каждого кандидата
+  for (const r of refined) {
+    r.rOuter = measureOuterRadius(r, mag, W, H, edgeT);
+  }
   refined.sort((a, b) => b.score - a.score);
   const accepted: RefinedCandidate[] = [];
   for (const cand of refined) {
@@ -396,10 +466,15 @@ export function detectWheels(img: RawFrame, debug?: (info: DetectDebugInfo) => v
       theta,
       roundness: b / a,
       score: w.score,
+      rOuter: w.rOuter,
     };
   };
 
   // --- 9. Выбор пары: похожие размеры, одна высота, разнесены по X ---
+  // v1.14.44: sizeBoost — мелкие круги (система шатунов, звезда, кассета —
+  // сплошной источник ложных «колёс» с высоким покрытием) не должны
+  // обыгрывать настоящие колёса только за счёт плотности краёв. Настоящее
+  // колесо на боковом фото ≥ 25–30% меньшей стороны кадра.
   let best: { pair: DetectedEllipse[]; combined: number } | null = null;
   for (let i = 0; i < accepted.length; i++) {
     for (let j = i + 1; j < accepted.length; j++) {
@@ -414,8 +489,10 @@ export function detectWheels(img: RawFrame, debug?: (info: DetectDebugInfo) => v
       if (dy > 0.75 * rMaxP) continue;
       const roundnessP = Math.min(p.rx, p.ry) / Math.max(p.rx, p.ry);
       const roundnessQ = Math.min(q.rx, q.ry) / Math.max(q.rx, q.ry);
+      const dFracAvg = (p.ry + q.ry) / minWH;
+      const sizeBoost = Math.min(1, dFracAvg / 0.28);
       const combined =
-        Math.min(roundnessP, roundnessQ) * ((p.score + q.score) / 2) * sizeSim;
+        Math.min(roundnessP, roundnessQ) * ((p.score + q.score) / 2) * sizeSim * sizeBoost;
       if (!best || combined > best.combined) {
         const pair = p.cx <= q.cx ? [toEllipse(p), toEllipse(q)] : [toEllipse(q), toEllipse(p)];
         best = { pair, combined };
@@ -444,8 +521,11 @@ export function detectWheels(img: RawFrame, debug?: (info: DetectDebugInfo) => v
   }
 
   // --- 10. Только одно колесо ---
+  // v1.14.44: гейт по размеру — одиночная находка обязана быть колесного
+  // размера (d ≥ 20% меньшей стороны кадра); иначе это мусор (фрагмент
+  // интерьера, звонок, фара) и статус «partial» вводит в заблуждение.
   const single = accepted[0];
-  if (single.score >= PARTIAL_MIN_SCORE) {
+  if (single.score >= PARTIAL_MIN_SCORE && (2 * single.ry) / minWH >= 0.2) {
     return {
       status: "partial",
       wheels: [toEllipse(single)],
@@ -617,6 +697,7 @@ function refineCandidate(
   minWH: number,
   rMin: number,
   rMax: number,
+  fail?: { reason: string },
 ): RefinedCandidate | null {
   // --- 7a. Радиальный профиль с приоритетным аспектом прохода ---
   // В проходе k край колеса — почти круг радиуса rr: исходная форма
@@ -653,7 +734,10 @@ function refineCandidate(
       }
     }
   }
-  if (best.strength <= 0) return null;
+  if (best.strength <= 0) {
+    if (fail) fail.reason = `нет краевого отклика (strength=${best.strength.toFixed(3)})`;
+    return null;
+  }
 
   // --- 7c. Координатный спуск: центр ↔ форма (3 раунда, шаг сжимается) ---
   const rounds = [
@@ -706,10 +790,19 @@ function refineCandidate(
 
   // --- 7d. Гейты: сжатие, размер, покрытие ---
   const roundness = rx / ry; // rx ≤ ry по построению сетки
-  if (roundness < RX_RY_MIN) return null;
+  if (roundness < RX_RY_MIN) {
+    if (fail) fail.reason = `слишком плоский эллипс rx/ry=${roundness.toFixed(2)} < ${RX_RY_MIN}`;
+    return null;
+  }
   const d = 2 * ry;
-  if (d < minWH * DIAMETER_MIN_FRAC || d > minWH * DIAMETER_MAX_FRAC) return null;
-  if (best.coverage < COVERAGE_MIN) return null;
+  if (d < minWH * DIAMETER_MIN_FRAC || d > minWH * DIAMETER_MAX_FRAC) {
+    if (fail) fail.reason = `диаметр d=${d.toFixed(0)} вне [${(minWH * DIAMETER_MIN_FRAC).toFixed(0)}, ${(minWH * DIAMETER_MAX_FRAC).toFixed(0)}] (minWH=${minWH})`;
+    return null;
+  }
+  if (best.coverage < COVERAGE_MIN) {
+    if (fail) fail.reason = `покрытие cov=${best.coverage.toFixed(2)} < ${COVERAGE_MIN} (r=${ry.toFixed(0)} в c=(${cand.cx.toFixed(0)},${cand.cy.toFixed(0)}))`;
+    return null;
+  }
 
   // --- 7e. Контраст «кольцо темнее соседей» (мягкий признак) ---
   const ring = ringContrastScore(gray, W, H, cand.cx, cand.cy, rx, ry);
@@ -786,4 +879,51 @@ function ringContrastScore(
 
   const contrast = Math.max(inMean - ringMean, outMean - ringMean) / 255;
   return Math.max(0, Math.min(1, (contrast - 0.015) / 0.1));
+}
+
+/**
+ * Внешний радиус (v1.14.44): от центра кандидата пускаем 48 лучей наружу;
+ * по каждому идём СНАРУЖИ внутрь и берём ПЕРВЫЙ сильный градиент — это
+ * внешняя граница покрышки (спицы внутри лучом не задеваются, фон-мусор
+ * отсекается медианой по лучам). Фит эллипса даёт радиус МЕЖДУ внешним
+ * краем покрышки и ободом (занижение 5–8%), а пропорция K = база/диаметр
+ * сопоставляется с разметкой Шага 2, где диаметр меряется ось → верх
+ * покрышки. Меньше половины валидных лучей → возвращаем фит (fail-safe).
+ */
+function measureOuterRadius(
+  w: RefinedCandidate,
+  mag: Float32Array,
+  W: number,
+  H: number,
+  edgeT: number
+): number {
+  const N = 48;
+  const { cos, sin } = trigTable(N);
+  const base = Math.max(w.rx, w.ry);
+  // v1.14.44 (калибровка по user-reports): внешний край покрышки лежит в
+  // узком кольце вокруг фита (фит садится между внешним краем и ободом).
+  // Широкий диапазон (1.35×) зацеплял текстуру фона и раздувал радиус
+  // на +30% (ratio 1.734 → 1.323 при разметке 1.509).
+  const rHi = 1.15 * base;
+  const rLo = 0.85 * base;
+  const th = Math.max(EDGE_MAG_FLOOR, 0.5 * edgeT);
+  const hits: number[] = [];
+  for (let k = 0; k < N; k++) {
+    const nx = cos[k];
+    const ny = sin[k];
+    let hit = -1;
+    for (let r = rHi; r >= rLo; r -= 1) {
+      const px = w.cx + nx * r;
+      const py = w.cy + ny * r;
+      if (px < 1 || py < 1 || px >= W - 2 || py >= H - 2) break; // луч покинул кадр
+      if (sampleF(mag, W, H, px, py) >= th) {
+        hit = r;
+        break;
+      }
+    }
+    if (hit > 0) hits.push(hit);
+  }
+  if (hits.length < N * 0.5) return base;
+  hits.sort((a, b) => a - b);
+  return hits[hits.length >> 1];
 }

@@ -88,6 +88,10 @@ export function computeWheelRatioFromKeypoints(pts: WheelRatioPoints): number | 
  * frame — уменьшенный кадр (~320–480px по ширине). Требует ОБА колеса
  * (status "ok"/"tilted"); частичное обнаружение = null (сравнение тихо
  * пропускается — это предупреждение, а не блокер).
+ * v1.14.44: радиус — по ВНЕШНЕЙ границе покрышки (rOuter), как в разметке
+ * Шага 2 (ось → верх покрышки): фит эллипса занижает радиус на 5–8%,
+ * что давало ложное расхождение 10–14% на ОДНОМ и том же веле
+ * (замер на user-reports: разметка 1.509 против детектора 1.734).
  */
 export function computeWheelRatioFromFrame(frame: RawFrame): number | null {
   const result = detectWheels(frame);
@@ -95,7 +99,7 @@ export function computeWheelRatioFromFrame(frame: RawFrame): number | null {
   const [left, right] = result.wheels;
   const wheelbasePx = Math.hypot(right.cx - left.cx, right.cy - left.cy);
   if (wheelbasePx < 10) return null;
-  const avgRadius = (left.a + right.a) / 2; // a — большая полуось ≈ радиус
+  const avgRadius = (left.rOuter + right.rOuter) / 2;
   if (avgRadius < 5) return null;
   return wheelbasePx / (2 * avgRadius);
 }
@@ -179,7 +183,8 @@ export function computeWheelFrameMeta(
   const [left, right] = result.wheels;
   const wheelbasePx = Math.hypot(right.cx - left.cx, right.cy - left.cy);
   if (wheelbasePx < 10) return null;
-  const avgRadius = (left.a + right.a) / 2;
+  // v1.14.44: внешний радиус (согласован с computeWheelRatioFromFrame)
+  const avgRadius = (left.rOuter + right.rOuter) / 2;
   if (avgRadius < 5) return null;
   if (frame.height < 8) return null;
   return {
