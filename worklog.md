@@ -996,3 +996,21 @@ Stage Summary:
 - Пользователю: обновиться до 1.14.41; сценарий #10/#11 повторить —
   если фантом снова пролезет, sideScores придут в отчёт отладки.
 - Следующая версия: v1.14.42.
+
+---
+Task ID: 45-b (аддон)
+Agent: Super Z (main)
+Task: верификация v1.14.41 на площадках + фикс отсутствия sync-bridge.html на зеркале
+
+Work Log:
+- Vercel: version.json/sw.js = v1.14.41, sync-bridge.html живой — OK.
+- Зеркало: version.json/sw.js = v1.14.41, но sync-bridge.html = 404-страница
+  GH Pages: файл не упоминается в HTML/JS, замыкание mirror_to_pages.py его
+  не находит. Фикс: "sync-bridge.html" добавлен в ROOT_FILES
+  (scripts/mirror_to_pages.py), коммит 27d8de8, пуш → workflow пере-зеркалил.
+- Финал: sync-bridge.html живой на ОБОИХ origin'ах (проверено grep'ом
+  BIKESNAP_READ_STORAGE), версии совпадают — v1.14.41.
+
+Stage Summary:
+- Зеркальный конвейер дополнен новым обязательным файлом; при будущих
+  служебных страницах в public/ — не забывать ROOT_FILES.
