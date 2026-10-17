@@ -504,33 +504,29 @@ function Header({ onLogoClick }: { onLogoClick?: () => void }) {
   );
 }
 
-const VISITED_KEY = "bikesnap-visited";
 const SEEN_VERSION_KEY = "bikesnap-seen-version";
 
 function Footer() {
   const [newsOpen, setNewsOpen] = useState(false);
   const [hasNews, setHasNews] = useState(false);
 
-  // Координатор «Что нового» — вернулся в футер (v1.11.0), где и была
-  // кнопка версии: новичку версия запоминается тихо, вернувшемуся
-  // с непросмотренной версией — показываем диалог
+  // Координатор «Что нового» (v1.14.45): диалог больше НЕ открывается сам —
+  // всплывающие плашки при обновлении версии убраны по требованию
+  // пользователя. Кнопка версии в футере осталась: пульс-точка мягко
+  // подсказывает о непросмотренных новостях, показ — только по нажатию.
   useEffect(() => {
-    const timer = setTimeout(() => {
-      try {
-        const visited = localStorage.getItem(VISITED_KEY) === "1";
-        const unseen = localStorage.getItem(SEEN_VERSION_KEY) !== APP_VERSION;
-        if (!visited) {
-          localStorage.setItem(VISITED_KEY, "1");
-          localStorage.setItem(SEEN_VERSION_KEY, APP_VERSION);
-        } else {
-          setHasNews(unseen);
-          if (unseen) setNewsOpen(true);
-        }
-      } catch {
-        /* localStorage недоступен — попап просто не покажется */
+    try {
+      const seen = localStorage.getItem(SEEN_VERSION_KEY);
+      if (seen === null) {
+        // Первый визит — новости сразу считаем просмотренными, без плашек
+        localStorage.setItem(SEEN_VERSION_KEY, APP_VERSION);
+        setHasNews(false);
+      } else {
+        setHasNews(seen !== APP_VERSION);
       }
-    }, 900);
-    return () => clearTimeout(timer);
+    } catch {
+      /* localStorage недоступен — индикатор просто не покажется */
+    }
   }, []);
 
   const closeNews = (open: boolean) => {

@@ -11,16 +11,23 @@ import { useEffect } from "react";
  * и cache-first стратегия SW отдавала мёртвый код — «module factory is
  * not available / deleted in an HMR update».
  *
- * Прод (v1.13.1, сохранено):
+ * Прод (v1.14.45, сохранено):
  *  - updateViaCache:"none" — браузер всегда перепроверяет sw.js;
  *  - reg.update() на старте — обновление ищется сразу;
- *  - controllerchange → авто-перезагрузка страницы ОДИН раз (только если
- *    у страницы уже был контроллер; защита от цикла через sessionStorage).
+ *  - НОВОЕ (v1.14.45): обновления применяются ТИХО — баннер «Доступна новая
+ *    версия» удалён по требованию пользователя (плашки не должны появляться).
+ *    Ждущий SW получает SKIP_WAITING автоматически, controllerchange
+ *    перезагружает страницу ОДИН раз (защита от цикла через sessionStorage).
+ *    Чтобы авто-перезагрузка не застала пользователя за работой посреди
+ *    сессии, применяем обновление только в первые секунды после загрузки
+ *    страницы; найденное позже дождётся следующего открытия приложения.
  * Монтируется в layout один раз; ошибки молча игнорируются
  * (приложение остаётся обычным сайтом, если SW недоступен).
  * Service worker требует HTTPS либо localhost — на прочих протоколах не регистрируемся.
  */
 const SW_RELOAD_KEY = "bikesnap-sw-reloaded";
+// Окно тихого применения обновления после загрузки страницы (мс).
+const AUTO_APPLY_WINDOW_MS = 20_000;
 
 export default function RegisterSW() {
   useEffect(() => {
@@ -71,16 +78,17 @@ export default function RegisterSW() {
     let refreshing = false;
     // Если контроллера ещё не было — это первый визит, перезагружаться не зачем
     const hadController = !!navigator.serviceWorker.controller;
+    const bootedAt = Date.now();
 
-    // v1.14.33: новый SW больше НЕ делает skipWaiting сам — он ждёт в
-    // `waiting`, пока пользователь не нажмёт «Обновить» в баннере (UpdateBanner
-    // шлёт SKIP_WAITING). Здесь мы только сообщаем баннеру о готовности:
-    // CustomEvent "bikesnap-sw-update" при наличии ожидающего работника.
-    const notifyWaiting = (reg: ServiceWorkerRegistration) => {
+    // v1.14.45: тихое автообновление вместо баннера. Если обнаружен ждущий
+    // SW в первые секунды после загрузки — применяем сразу (SKIP_WAITING);
+    // controllerchange ниже перезагрузит вкладку ОДИН раз. Обновление,
+    // найденное посреди сессии, тихо дождётся следующего открытия —
+    // никаких плашек и внезапных перезагрузок во время работы.
+    const autoApplyWaiting = (reg: ServiceWorkerRegistration) => {
+      if (Date.now() - bootedAt > AUTO_APPLY_WINDOW_MS) return;
       if (reg.waiting && navigator.serviceWorker.controller) {
-        window.dispatchEvent(
-          new CustomEvent("bikesnap-sw-update", { detail: reg })
-        );
+        reg.waiting.postMessage({ type: "SKIP_WAITING" });
       }
     };
 
@@ -104,20 +112,20 @@ export default function RegisterSW() {
       navigator.serviceWorker
         .register("/sw.js", { updateViaCache: "none" })
         .then((reg) => {
-          // Баннер: если обновление уже ждёт — показать сразу.
-          notifyWaiting(reg);
-          // Баннер: новый SW дошёл до installed при живом контроллере.
+          // Обновление уже ждёт с прошлой сессии — применяем тихо.
+          autoApplyWaiting(reg);
+          // Новый SW дошёл до installed при живом контроллере — применяем тихо.
           reg.addEventListener("updatefound", () => {
             const sw = reg.installing;
             if (!sw) return;
             sw.addEventListener("statechange", () => {
-              if (sw.state === "installed") notifyWaiting(reg);
+              if (sw.state === "installed") autoApplyWaiting(reg);
             });
           });
           // Ищем обновление сразу, не дожидаясь следующей навигации.
-          // При новой версии: install → WAITING (skipWaiting только по
-          // кнопке в баннере) → SKIP_WAITING → activate → clients.claim →
-          // controllerchange выше перезагрузит страницу.
+          // При новой версии: install → WAITING → авто-SKIP_WAITING →
+          // activate → clients.claim → controllerchange выше перезагрузит
+          // страницу (один раз, если укладываемся в окно авто-применения).
           reg.update().catch(() => {});
         })
         .catch(() => {

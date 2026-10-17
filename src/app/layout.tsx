@@ -5,8 +5,6 @@ import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "next-themes";
 import RegisterSW from "@/components/pwa/register-sw";
 import ChunkErrorRecovery from "@/components/pwa/chunk-error-recovery";
-import UpdateBanner from "@/components/pwa/update-banner";
-import OfflineBadge from "@/components/pwa/offline-badge";
 import SyncBridgeInit from "@/components/pwa/sync-bridge-init";
 
 const geistSans = Geist({
@@ -82,8 +80,6 @@ export default function RootLayout({
           <Toaster />
           <RegisterSW />
           <ChunkErrorRecovery />
-          <UpdateBanner />
-          <OfflineBadge />
           <SyncBridgeInit />
         </ThemeProvider>
       </body>
