@@ -92,6 +92,29 @@ export default function RegisterSW() {
       }
     };
 
+    // v1.14.46: офлайн-приложение — SW сам качает обнову в кэш (Vercel 1с
+    // → ГХ 1с). После успешной закачки SW шлёт UPDATE_DOWNLOADED; если
+    // страница ещё в стартовом окне — тихо перезагружаемся ОДИН раз,
+    // чтобы открыть уже новую версию из кэша. Позже окна — обновление
+    // подхватится при следующем открытии, без внезапной перезагрузки.
+    const guardedReload = () => {
+      if (Date.now() - bootedAt > AUTO_APPLY_WINDOW_MS) return;
+      try {
+        if (sessionStorage.getItem(SW_RELOAD_KEY) === "1") return;
+        sessionStorage.setItem(SW_RELOAD_KEY, "1");
+      } catch {
+        return; // без защиты от цикла не рискуем
+      }
+      refreshing = true;
+      window.location.reload();
+    };
+
+    const onSwMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string } | null;
+      if (data && data.type === "UPDATE_DOWNLOADED") guardedReload();
+    };
+    navigator.serviceWorker.addEventListener("message", onSwMessage);
+
     navigator.serviceWorker.addEventListener(
       "controllerchange",
       () => {
@@ -114,6 +137,14 @@ export default function RegisterSW() {
         .then((reg) => {
           // Обновление уже ждёт с прошлой сессии — применяем тихо.
           autoApplyWaiting(reg);
+          // v1.14.46: просим SW проверить обнову сразу (Vercel 1с → ГХ 1с);
+          // троттлинг 3 мин внутри SW защитит от дублей.
+          try {
+            const target = reg.active || navigator.serviceWorker.controller;
+            target?.postMessage({ type: "CHECK_UPDATE" });
+          } catch {
+            /* проверка обновы — best effort */
+          }
           // Новый SW дошёл до installed при живом контроллере — применяем тихо.
           reg.addEventListener("updatefound", () => {
             const sw = reg.installing;
@@ -122,10 +153,10 @@ export default function RegisterSW() {
               if (sw.state === "installed") autoApplyWaiting(reg);
             });
           });
-          // Ищем обновление сразу, не дожидаясь следующей навигации.
-          // При новой версии: install → WAITING → авто-SKIP_WAITING →
-          // activate → clients.claim → controllerchange выше перезагрузит
-          // страницу (один раз, если укладываемся в окно авто-применения).
+          // Ищем бинарное обновление SW сразу, не дожидаясь следующей
+          // навигации. При новой версии: install → WAITING →
+          // авто-SKIP_WAITING → activate → clients.claim →
+          // controllerchange перезагрузит страницу (один раз).
           reg.update().catch(() => {});
         })
         .catch(() => {
@@ -137,8 +168,11 @@ export default function RegisterSW() {
       register();
     } else {
       window.addEventListener("load", register, { once: true });
-      return () => window.removeEventListener("load", register);
     }
+    return () => {
+      window.removeEventListener("load", register);
+      navigator.serviceWorker.removeEventListener("message", onSwMessage);
+    };
   }, []);
 
   return null;

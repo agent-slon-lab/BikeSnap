@@ -1,102 +1,56 @@
 /*
- * BikeSnap service worker (v1.14.45) — офлайн-режим v3 с зеркальным фейловером.
+ * BikeSnap service worker (v1.14.46) — НАСТОЯЩЕЕ офлайн-приложение.
+ *
+ * Спека пользователя (v1.14.46): «Vercel нужен только для обновы! У нас
+ * офлайн-прил! Никаких переходов на зеркало — только скачать обновление!»
  *
  * Стратегии:
- *  - /api/*            → только сеть (релеи анализа/калибровки/отчётов —
- *                        серверные функции, не кэшируются и не мешают офлайну)
- *  - навигация (HTML)  → ЛЕСТНИЦА (спека пользователя v1.14.39):
- *                        1) сеть этого origin;
- *                        2) НЕДОСТУПЕН (сетевая ошибка, напр. SNI-блок
- *                        vercel без VPN) → живое ли ЗЕРКАЛО agent-slon-lab
- *                        .github.io? живое → авто-переход на него (та же
- *                        версия появляется сразу — зеркало синкается с
- *                        каждым пушем);
- *                        3) зеркало тоже мёртв (инета нет) → офлайн-кэш.
- *                        HTTP !ok (503/404 в окно пропагации деплоя) —
- *                        НЕ редирект, а старый кэш: зеркало несёт то же
- *                        содержимое, падать на него незачем.
- *                        Редирект не выполняется на самом зеркале (цикл).
- *  - /version.json     → сеть-первым (детектор обновлений), офлайн → кэш
- *  - /_next/static/*   → кэш-первым: чанки иммутабельны и хэшированы в имени;
- *                        после деплоя новый HTML ссылается на НОВЫЕ имена,
- *                        их нет в кэше → придут по сети (v1.14.34);
- *                        v1.13.3–v1.14.31 были сеть-первыми из-за dev Turbopack,
- *                        но в dev SW вообще не регистрируется (register-sw)
- *  - /cdn/mediapipe/*  → кэш-первым (самохостинг ИИ-модулей: WASM + модель
- *                        лежат на том же origin — офлайн-анализ поз и
- *                        доступность из РФ без внешних CDN)
- *  - иконки/манифест   → кэш-первым
- *  - прочее GET        → сеть-первым с фолбэком на кэш
+ *  - навигация (HTML)  → КЭШ-ПЕРВЫМ, МГНОВЕННО. Приложение всегда
+ *                        открывается из локального кэша, сеть не участвует
+ *                        на критическом пути. НИКАКИХ РЕДИРЕКТОВ.
+ *                        Только первый визит (кэша ещё нет): этот origin
+ *                        1 сек → зеркало 1 сек (кросс-доменный cors-ответ
+ *                        показывается с текущего адреса, БЕЗ перехода).
+ *  - /api/*            → только сеть (релеи анализа/калибровки/отчётов).
+ *  - /version.json     → кэш мгновенно + фоновая ревалидация 1 сек.
+ *  - /_next/static/*   → кэш-первым (чанки иммутабельны, имена хэшированы).
+ *  - /cdn/mediapipe/*  → кэш-первым (самохостинг ИИ-модулей: офлайн-анализ
+ *                        поз без внешних CDN).
+ *  - иконки/манифест   → кэш-первым.
+ *  - прочее GET        → сеть-первым с фолбэком на кэш.
  *
- * Жизненный цикл (v1.14.34):
- *  - install НЕ делает skipWaiting: новая версия встаёт в ожидание и
- *    активируется ТОЛЬКО по кнопке «Обновить» в баннере (сообщение
- *    SKIP_WAITING от клиента) — никаких внезапных перезагрузок.
- *  - activate: удаляет старые bikesnap-кэши, clients.claim(), затем фоновой
- *    префетч замыкания /_next/static/* из HTML + ИИ-модулей: приложение
- *    становится полностью офлайн-capable уже после ПЕРВОЙ успешной загрузки.
- *  - имя кэша bikesnap-v<версия> синхронизировано с APP_VERSION: бампать
- *    при каждом релизе (activate сам удалит старый кэш).
+ * ЗАГРУЗЧИК ОБНОВЫ (фон, никогда не блокирует открытие):
+ *  1) зонд VERCEL /version.json — 1 сек (спека: «запросы по 1сек»);
+ *  2) мёртв → зонд ЗЕРКАЛО (github.io, CORS открыт) — 1 сек;
+ *  3) оба молчат → живём на локальной копии, ждём следующей проверки.
+ *  Живой источник ≠ версия в кэше → скачиваем ОБНОВУ ЦЕЛИКОМ (HTML +
+ *  замыкание /_next/static/* + недостающие ИИ-модули) и кладём В ЛОКАЛЬНЫЙ
+ *  кэш под обычными путями. Следующее открытие — уже новая версия, всё
+ *  офлайн. Адресная строка не меняется, переходов нет.
+ *
+ * Жизненный цикл:
+ *  - install НЕ делает skipWaiting; активация по SKIP_WAITING от клиента
+ *    (тихое автообновление v1.14.45) — без плашек и баннеров.
+ *  - activate: чистка старых bikesnap-кэшей, clients.claim(), фоновый
+ *    префетч замыкания /_next/static/* этого origin + ИИ-модулей.
+ *  - проверка обновы: activate + каждое открытие приложения (троттлинг
+ *    3 мин) + сообщение CHECK_UPDATE от страницы.
  */
-const VERSION = "v1.14.45";
+const VERSION = "v1.14.46";
 const CACHE = `bikesnap-${VERSION}`;
 
-// Зеркало (GitHub Pages) — запасной вход, когда этот origin недоступен
-// (*.vercel.app блокируется по SNI без VPN). Зеркало синкается с каждым
-// пушем в main (mirror-to-pages.yml), поэтому там всегда свежая версия.
+// Источники обновы по приоритету (спека: сначала Vercel, потом ГХ).
+const PROD_ORIGIN = "https://bike-snap.vercel.app";
 const MIRROR_ORIGIN = "https://agent-slon-lab.github.io";
 
-/**
- * Зеркальный URL с сохранением пути и query (зеркало развёрнуто в корне
- * github.io — пути совпадают 1:1). Экспорт не нужен: тест дергает через
- * vm-сэндбокс (scripts/test-mirror-failover.ts).
- */
-function mirrorUrlFor(pathname, search) {
-  return MIRROR_ORIGIN + pathname + search;
-}
-
-/**
- * Жив ли хост: no-cors-запрос с жёстким таймаутом. Резолв = хост ответил
- * (opaque-ответ, тело не нужно). Реджект/таймаут = недоступен.
- */
-function probeAlive(url, timeoutMs) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const done = (ok) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(ok);
-    };
-    const timer = setTimeout(() => done(false), timeoutMs);
-    fetch(url, { mode: "no-cors", cache: "no-store" }).then(
-      () => done(true),
-      () => done(false)
-    );
-  });
-}
-
-/**
- * Авто-переход на зеркало (v1.14.39): инлайновый HTML-редиректор вместо
- * Response.redirect() — работает во всех браузерах (meta refresh + JS),
- * не зависит от поддержки редиректов respondWith для навигаций.
- * location.replace — заменить запись истории, чтобы «Назад» не вело
- * на мёртвый origin.
- */
-function mirrorRedirectResponse(target) {
-  const html =
-    "<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\">" +
-    "<meta http-equiv=\"refresh\" content=\"0; url=" + target + "\">" +
-    "<title>BikeSnap — переход на зеркало…</title></head><body>" +
-    "<p style=\"font-family:sans-serif;padding:2rem\">Сайт недоступен, " +
-    "переходим на зеркало…</p>" +
-    "<script>location.replace(" + JSON.stringify(target) + ");</script>" +
-    "</body></html>";
-  return new Response(html, {
-    status: 200,
-    headers: { "Content-Type": "text/html; charset=utf-8" },
-  });
-}
+// Спека пользователя: «эти запросы по 1сек сделай».
+const PROBE_TIMEOUT_MS = 1000;
+const NAV_TIMEOUT_MS = 1000;
+// Скачивание ассетов обновы — не «запрос наличия», даём 15 сек на файл.
+const ASSET_TIMEOUT_MS = 15000;
+// Троттлинг фоновой проверки обновы.
+const UPDATE_THROTTLE_MS = 3 * 60 * 1000;
+let lastUpdateCheck = 0;
 
 const SHELL = [
   "/",
@@ -110,7 +64,8 @@ const SHELL = [
 
 // Самохостинг MediaPipe (копия node_modules/@mediapipe/tasks-vision@1.0.1/wasm
 // + pose_landmarker_full — v1.14.42, lite остался в репо как запасной):
-// качаются в кэш сразу после активации.
+// качаются в кэш сразу после активации; загрузчик обновы докачивает их
+// с источника обновы, только если их ещё нет в кэше (модель тяжёлая).
 const AI_ASSETS = [
   "/cdn/mediapipe/wasm/vision_wasm_internal.js",
   "/cdn/mediapipe/wasm/vision_wasm_internal.wasm",
@@ -123,11 +78,176 @@ const AI_ASSETS = [
 // в рантайме (opaque-ответы кэшируются и отдаются офлайн).
 const CDN_HOSTS = new Set(["cdn.jsdelivr.net", "storage.googleapis.com"]);
 
-// Пути ассетов внутри HTML/JS/CSS (в т.ч. экранированные "\/_next\/...").
+// Пути ассетов внутри HTML/JS/CSS — в т.ч. экранированные (Next.js в
+// JSON/RSC-полезной нагрузке экранирует КАЖДЫЙ слеш: "\/_next\/static\/...").
 const ASSET_RE =
-  /\\?\/_next\/static\/[A-Za-z0-9._\-/]+\.(?:js|css|woff2?|png|jpe?g|svg|webp|avif|mp4|json|ico|txt)/g;
+  /\\?\/\\?_next\\?\/static\\?\/[A-Za-z0-9._\-/\\]+?\.(?:js|css|woff2?|png|jpe?g|svg|webp|avif|mp4|json|ico|txt)/g;
 // Глубина замыкания: HTML → чанки JS/CSS → медиа/шрифты/вложенные чанки.
 const PREFETCH_CAP = 400;
+
+/** fetch с жёстким таймаутом (AbortController). */
+function fetchTimeout(url, timeoutMs, opts) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() =>
+    clearTimeout(timer)
+  );
+}
+
+/**
+ * Зонд источника обновы: fetch /version.json (cors, 1 сек) — сразу и
+ * проверка «жив ли», и получение номера версии. Ответ сохраняется для
+ * последующего cache.put (клон делаем ДО чтения тела).
+ */
+async function probeVersion(origin) {
+  try {
+    const res = await fetchTimeout(
+      origin + "/version.json?t=" + Date.now(),
+      PROBE_TIMEOUT_MS,
+      { mode: "cors", cache: "no-store" }
+    );
+    if (!res.ok) return null;
+    const clone = res.clone();
+    const data = await res.json();
+    if (!data || typeof data.version !== "string") return null;
+    return { origin: origin, version: data.version, res: clone };
+  } catch {
+    return null;
+  }
+}
+
+/** Первый живой источник обновы: Vercel → зеркало. Оба молчат → null. */
+async function findUpdateSource() {
+  const prod = await probeVersion(PROD_ORIGIN);
+  if (prod) return prod;
+  return await probeVersion(MIRROR_ORIGIN);
+}
+
+/** Версия, записанная в локальном кэше (результат прошлой закачки). */
+async function cachedVersion() {
+  const hit = await caches.match("/version.json");
+  if (!hit) return null;
+  try {
+    const data = await hit.json();
+    return typeof data.version === "string" ? data.version : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * СКАЧАТЬ ОБНОВУ с живого источника в ЛОКАЛЬНЫЙ кэш (без переходов!):
+ * HTML + замыкание /_next/static/* + недостающие ИИ-модули. Лучшие
+ * усилия: отдельные сбои не отменяют закачку; version.json кладётся
+ * ПОСЛЕДНИМ — он же флаг «обновление скачано целиком».
+ */
+async function downloadUpdateFrom(source) {
+  const cache = await caches.open(CACHE);
+  let html = "";
+  try {
+    const res = await fetchTimeout(source.origin + "/", ASSET_TIMEOUT_MS, {
+      mode: "cors",
+      cache: "reload",
+    });
+    if (res.ok) {
+      html = await res.text();
+      await cache.put(
+        "/",
+        new Response(html, {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        })
+      );
+    }
+  } catch {
+    /* без HTML замыкание пустое — докачается при следующей проверке */
+  }
+
+  const queue = [];
+  for (const m of html.matchAll(ASSET_RE)) {
+    queue.push(m[0].replace(/\\/g, ""));
+  }
+  // ИИ-модули — только если их ещё нет в кэше (модель тяжёлая, ~20 МБ).
+  for (const path of AI_ASSETS) {
+    const hit = await caches.match(path);
+    if (!hit) queue.push(path);
+  }
+
+  const seen = new Set();
+  let scanned = 0;
+  for (let i = 0; i < queue.length && seen.size < PREFETCH_CAP; i++) {
+    const path = queue[i];
+    if (seen.has(path)) continue;
+    seen.add(path);
+    try {
+      const res = await fetchTimeout(source.origin + path, ASSET_TIMEOUT_MS, {
+        mode: "cors",
+        cache: "reload",
+      });
+      if (!res.ok) continue;
+      await cache.put(path, res.clone());
+      const ct = res.headers.get("content-type") || "";
+      if (
+        (ct.includes("javascript") || ct.includes("css")) &&
+        scanned < 120
+      ) {
+        scanned++;
+        const text = await res.text();
+        for (const m of text.matchAll(ASSET_RE)) {
+          const clean = m[0].replace(/\\/g, "");
+          if (!seen.has(clean)) queue.push(clean);
+        }
+      }
+    } catch {
+      /* best effort: недокачанное доберётся при следующей проверке */
+    }
+  }
+
+  // Маркер версии — последним: он же флаг «обновление скачано целиком».
+  try {
+    await cache.put("/version.json", source.res.clone());
+  } catch {
+    /* даже без маркера ассеты уже в кэше, повтор будет идемпотентным */
+  }
+
+  const clients = await self.clients.matchAll();
+  for (const client of clients) {
+    client.postMessage({ type: "UPDATE_DOWNLOADED", version: source.version });
+  }
+}
+
+/**
+ * Проверка обновы (фон): зонд Vercel 1 сек → зеркало 1 сек; версия
+ * отличается от закачанной в кэш → качаем обнову в локальный кэш.
+ * Оба молчат → тихо живём на локальной копии.
+ */
+async function checkForUpdate(trigger) {
+  const now = Date.now();
+  if (now - lastUpdateCheck < UPDATE_THROTTLE_MS) return;
+  lastUpdateCheck = now;
+  try {
+    const source = await findUpdateSource();
+    if (!source) return;
+    const cached = await cachedVersion();
+    if (cached && cached === source.version) return;
+    await downloadUpdateFrom(source);
+  } catch {
+    /* обновление — фоновая забота: любой сбой молча откладывается */
+  }
+}
+
+/** Фоновая проверка после навигации (троттлинг внутри checkForUpdate). */
+function scheduleUpdateCheck(event) {
+  try {
+    if (typeof event.waitUntil === "function") {
+      event.waitUntil(checkForUpdate("navigate"));
+    } else {
+      void checkForUpdate("navigate");
+    }
+  } catch {
+    /* проверка обновы не должна ронять обработку запроса */
+  }
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -144,12 +264,20 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("message", (event) => {
-  // Баннер «Доступно обновление» → кнопка «Обновить» шлёт SKIP_WAITING.
   if (
     event.data === "SKIP_WAITING" ||
     (event.data && event.data.type === "SKIP_WAITING")
   ) {
     self.skipWaiting();
+    return;
+  }
+  if (event.data && event.data.type === "CHECK_UPDATE") {
+    // Страница просит проверить обнову прямо сейчас (троттлинг общий).
+    if (typeof event.waitUntil === "function") {
+      event.waitUntil(checkForUpdate("message"));
+    } else {
+      void checkForUpdate("message");
+    }
   }
 });
 
@@ -163,36 +291,38 @@ self.addEventListener("activate", (event) => {
           .map((k) => caches.delete(k))
       );
       await self.clients.claim();
-      // Фоновый префетч — второй waitUntil: claim не ждёт его,
-      // но SW не убьют, пока идёт закачка замыкания.
+      // Фоновые задачи — вторым waitUntil: claim не ждёт их, но SW не
+      // убьют, пока идёт закачка замыкания.
       event.waitUntil(prefetchClosure());
+      event.waitUntil(checkForUpdate("activate"));
     })()
   );
 });
 
 /**
- * Замыкание ассетов: "/" (HTML) → все /_next/static/* из HTML → скан этих
- * JS/CSS на вложенные пути (шрифты, медиа, динамические чанки) → повтор,
- * пока не стабилизируется. Плюс ИИ-модули AI_ASSETS. Лучшие усилия:
- * отдельные сбои не отменяют общий префетч (runtime cache-first доберёт).
+ * Замыкание ассетов ЭТОГО origin: "/" (HTML) → все /_next/static/* из HTML
+ * → скан этих JS/CSS на вложенные пути → повтор до стабилизации. Плюс
+ * ИИ-модули AI_ASSETS. Лучшие усилия: отдельные сбои не отменяют общий
+ * префетч (runtime cache-first доберёт).
  */
 async function prefetchClosure() {
   const cache = await caches.open(CACHE);
   const queue = ["/", ...AI_ASSETS];
   const seen = new Set();
-  let html = "";
 
   for (let i = 0; i < queue.length && i < PREFETCH_CAP; i++) {
     const path = queue[i];
     if (seen.has(path)) continue;
     seen.add(path);
     try {
-      const res = await fetch(path, { cache: "reload" });
+      const res = await fetchTimeout(path, ASSET_TIMEOUT_MS, {
+        cache: "reload",
+      });
       if (!res.ok) continue;
       await cache.put(path, res.clone());
       const ct = res.headers.get("content-type") || "";
       if (ct.includes("text/html")) {
-        html = await res.text();
+        const html = await res.text();
         for (const m of html.matchAll(ASSET_RE)) {
           const clean = m[0].replace(/\\/g, "");
           if (!seen.has(clean)) queue.push(clean);
@@ -226,72 +356,89 @@ self.addEventListener("fetch", (event) => {
   // HMR/EventSource в dev — не перехватываем
   if (sameOrigin && url.pathname.startsWith("/_next/webpack-hmr")) return;
 
-  // Навигация: ЛЕСТНИЦА v1.14.39 —
-  //  1) сеть этого origin (свежий HTML всегда, когда origin жив);
-  //  2) сетевая ошибка (origin недоступен, напр. vercel без VPN) →
-  //     зеркало живое? → авто-переход на него (свежая версия сразу);
-  //  3) зеркало мертво / нет инета → офлайн-кэш (старый рабочий экран
-  //     лучше белого экрана).
-  // HTTP !ok (окно пропагации деплоя) — без редиректа: зеркало несёт то
-  // же содержимое, через мгновение оживёт и этот origin → старый кэш.
+  // Навигация: ОФЛАЙН-ПРИЛОЖЕНИЕ (v1.14.46) — кэш мгновенно, БЕЗ сети на
+  // критическом пути, БЕЗ переходов на зеркало. Сеть трогает только
+  // фоновый загрузчик обновы.
   if (request.mode === "navigate") {
     event.respondWith(
       (async () => {
-        try {
-          const response = await fetch(request);
-          if (!response.ok) {
-            const stale =
-              (await caches.match("/")) || (await caches.match(request));
-            return stale || response;
-          }
-          const copy = response.clone();
-          caches.open(CACHE).then((cache) => cache.put("/", copy));
-          return response;
-        } catch (networkError) {
-          // Сетевая ошибка = origin недоступен целиком. На самом зеркале
-          // редирект не делаем (иначе цикл при его недоступности).
-          if (
-            self.location.origin !== MIRROR_ORIGIN &&
-            (await probeAlive(MIRROR_ORIGIN + "/version.json", 3500))
-          ) {
-            return mirrorRedirectResponse(
-              mirrorUrlFor(url.pathname, url.search)
-            );
-          }
-          const hit =
-            (await caches.match("/")) || (await caches.match(request));
-          return hit || Response.error();
+        const hit = (await caches.match("/")) || (await caches.match(request));
+        if (hit) {
+          scheduleUpdateCheck(event);
+          return hit;
         }
+        // Первый визит (кэша ещё нет): этот origin 1 сек…
+        try {
+          const response = await fetchTimeout(request, NAV_TIMEOUT_MS);
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE).then((cache) => cache.put("/", copy));
+            scheduleUpdateCheck(event);
+            return response;
+          }
+        } catch {
+          /* ниже пробуем зеркало */
+        }
+        // …затем зеркало 1 сек — cors-ответ показываем С ТЕКУЩЕГО адреса,
+        // никакого перехода (спека: «самого перехода делать не надо»).
+        try {
+          const mirrorTarget =
+            self.location.origin === MIRROR_ORIGIN
+              ? request.url
+              : MIRROR_ORIGIN + url.pathname + url.search;
+          const mirrorRes = await fetchTimeout(mirrorTarget, NAV_TIMEOUT_MS, {
+            mode: "cors",
+            cache: "no-store",
+          });
+          if (mirrorRes.ok) {
+            const html = await mirrorRes.text();
+            const local = new Response(html, {
+              status: 200,
+              headers: { "Content-Type": "text/html; charset=utf-8" },
+            });
+            caches.open(CACHE).then((cache) => cache.put("/", local.clone()));
+            scheduleUpdateCheck(event);
+            return local;
+          }
+        } catch {
+          /* офлайн первый визит — честная ошибка сети */
+        }
+        return Response.error();
       })()
     );
     return;
   }
 
-  // version.json: сеть-первым — это детектор обновлений (баннер, CI-поллинг).
+  // version.json: кэш мгновенно + фоновая ревалидация 1 сек
+  // (страница больше не строит на нём плашек — потребитель удалён).
   if (sameOrigin && url.pathname === "/version.json") {
     event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (!response.ok) throw new Error("ver-" + response.status);
-          const copy = response.clone();
-          caches.open(CACHE).then((cache) => cache.put(request, copy));
-          return response;
+      (async () => {
+        const hit = await caches.match(request);
+        const revalidate = fetchTimeout(request, PROBE_TIMEOUT_MS, {
+          cache: "no-store",
         })
-        .catch(() =>
-          caches.match(request).then((hit) => {
-            if (!hit) return Response.error();
-            // v1.14.38: маркер «ответ из кэша — сеть до сервера недоступна».
-            // Страница (OfflineBadge) по нему показывает офлайн-плашку,
-            // вместо молчаливой старой версии («почему обновы не приходят»).
-            const headers = new Headers(hit.headers);
-            headers.set("X-BikeSnap-From-Cache", "1");
-            return new Response(hit.body, {
-              status: hit.status,
-              statusText: hit.statusText,
-              headers,
-            });
+          .then((response) => {
+            if (!response.ok) return;
+            const copy = response.clone();
+            caches.open(CACHE).then((cache) => cache.put(request, copy));
           })
-        )
+          .catch(() => {});
+        try {
+          if (typeof event.waitUntil === "function") event.waitUntil(revalidate);
+        } catch {
+          /* ревалидация — фоновая забота */
+        }
+        if (hit) return hit;
+        try {
+          const response = await fetchTimeout(request, PROBE_TIMEOUT_MS, {
+            cache: "no-store",
+          });
+          return response.ok ? response : Response.error();
+        } catch {
+          return Response.error();
+        }
+      })()
     );
     return;
   }
