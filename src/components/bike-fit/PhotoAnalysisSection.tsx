@@ -290,6 +290,11 @@ export function PhotoAnalysisSection() {
   // ИЛИ F1 пропорции — старый хард-блок). Разблокировка — только явным
   // «Это тот же велосипед — продолжить»; override сбрасывается при
   // смене фото и при смене вела — новый прогон снова под гейтом.
+  // v1.14.47 (разбор ТЗ «isValid: false не блокировал цепочку вычислений»):
+  // блок теперь останавливает ВЕСЬ расчётный конвейер — запуск нейросети
+  // (analyzePhoto до detect), AI-консультацию (уходит measurements чужой
+  // рамы) — в дополнение к уже блокированным «геометрия ↔ поза» и
+  // «Было ➔ Стало».
   const [bikeMatchModalOpen, setBikeMatchModalOpen] = useState(false);
   const [bikeMatchOverride, setBikeMatchOverride] = useState(false);
   const bikeMatchBlocking = multiMatch.verdict === "block" && !bikeMatchOverride;
@@ -990,9 +995,22 @@ export function PhotoAnalysisSection() {
             activeSide={sideAnalysis?.side ?? sideDrawSide}
             onPhotoSelected={handlePhotoSelected}
             onClear={handleClear}
-            onAnalyze={(img) =>
-              analyzePhoto("side", img)
-            }
+            onAnalyze={(img) => {
+              // v1.14.47 (ТЗ «жёсткая валидация», чек-лист п. 2): проверка ДО
+              // analyzeRiderPose. При активном хард-блоке нейросеть НЕ
+              // запускаем вовсе: считать углы по кадру с чужой рамой —
+              // бессмысленный расчёт по умолчанию. Путь вперёд: переснять
+              // фото или осознанно снять блок override'ом в модалке.
+              if (bikeMatchBlocking) {
+                setBikeMatchModalOpen(true);
+                setUiState("side", {
+                  error:
+                    "Анализ заблокирован: велосипед на фото не совпадает с размеченным на Шаге 2 (пропорции/цвет рамы). Загрузите фото правильного велосипеда или подтвердите «Это тот же велосипед — продолжить» в предупреждении.",
+                });
+                return;
+              }
+              analyzePhoto("side", img);
+            }}
             overlayLines={getOverlayLines("side")}
           />
           {sideAnalysis && (
@@ -1157,8 +1175,13 @@ export function PhotoAnalysisSection() {
       )}
 
       {/* === v1.14.42: AI-разбор посадки (Google Gemini, BYO-ключ).
-          Отправляются только числа — углы/размеры/жалобы, без фото === */}
-      <AiConsultCard input={aiInput} analysis={sideAnalysis} />
+          Отправляются только числа — углы/размеры/жалобы, без фото.
+          v1.14.47 (ТЗ, чек-лист п. 3): при неразрешённом хард-блоке
+          AI-консультация скрыта — иначе в запрос уходили бы measurements
+          чужой рамы, и «отчёт» генерировался бы несмотря на подмену === */}
+      {!bikeMatchBlocking && (
+        <AiConsultCard input={aiInput} analysis={sideAnalysis} />
+      )}
 
       {/* === Отчёт для отладки (v1.6.0): появляется как только есть фото —
           и при успехе анализа, и при ошибке (ошибки ценнее для отладки) === */}
