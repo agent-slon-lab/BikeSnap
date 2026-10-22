@@ -1,12 +1,20 @@
 name: Mirror to GitHub Pages
 
-# Зеркалирование продакшена bike-snap.vercel.app → agent-slon-lab.github.io
-# (запасной вход из сетей, где *.vercel.app заблокирован по SNI).
+# Зеркалирование продакшена bike-snap.vercel.app на ПРОЕКТНУЮ страницу
+# https://agent-slon-lab.github.io/BikeSnap/ (ветка gh-pages ЭТОГО репо).
+# Корень agent-slon-lab.github.io больше не трогаем — там витрина приложений
+# (Slon Lab); раньше зеркало жило на корне и участвовало в «войне ботов».
+# Пути прода переписываются в под-путь /BikeSnap/ (scripts/mirror_to_pages.py).
 # Триггер: каждый пуш в main (после деплоя Vercel) + ручной запуск.
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+# Пуш ветки gh-pages встроенным GITHUB_TOKEN (deploy-ключи больше не нужны).
+permissions:
+  contents: write
 
 # один прогон за раз; новый пуш ждёт, а не отменяет текущий (иначе можно
 # остаться на полузеркале)
@@ -17,7 +25,7 @@ concurrency:
 jobs:
   mirror:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -48,43 +56,52 @@ jobs:
           # старое зеркало, чем никакое). Внимание в лог.
           echo "::warning::Vercel не отдал $EXPECTED за 5 мин — зеркалим текущее состояние"
 
-      - name: Зеркалирование продакшена (замыкание)
+      - name: Зеркалирование прода (замыкание + переписывание путей в /BikeSnap/)
         run: |
+          rm -rf ~/mirror
           python3 scripts/mirror_to_pages.py \
             --src https://bike-snap.vercel.app \
-            --out "$GITHUB_WORKSPACE/mirror"
+            --out "$HOME/mirror" \
+            --subpath /BikeSnap
+          test -f ~/mirror/index.html
 
-      - name: Публикация на agent-slon-lab.github.io (SSH deploy key)
+      - name: Публикация на gh-pages (GITHUB_TOKEN; скип при идентичном дереве)
         env:
-          PAGES_DEPLOY_KEY: ${{ secrets.PAGES_DEPLOY_KEY }}
+          GH_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
-          # приватный ключ из секрета → файл с правами 600
-          mkdir -p ~/.ssh
-          printf "%s" "$PAGES_DEPLOY_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts
-
-          cd "$GITHUB_WORKSPACE/mirror"
-          # .nojekyll и README уже лежат в зеркале (scripts/mirror_to_pages.py)
-          git init -b main
-          git config user.name  "mirror-bot"
-          git config user.email "mirror-bot@users.noreply.github.com"
+          cd ~/mirror
+          touch .nojekyll
+          git init -q -b gh-pages
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "mirror: $(date -u +%Y-%m-%dT%H:%MZ) из bike-snap.vercel.app"
-          git remote add origin git@github.com:agent-slon-lab/agent-slon-lab.github.io.git
-          # force-push: история зеркала = один коммит, это нормально
-          git push -f origin main
+          # Пропускаем ВЕСЬ пуш, когда зеркало совпадает с живым gh-pages:
+          # пустой force-push лишь создал бы новый коммит и бессмысленный
+          # (всегда падающий) деплой ветки gh-pages в Vercel.
+          git remote add origin https://github.com/agent-slon-lab/BikeSnap.git
+          git fetch -q origin gh-pages:refs/remotes/origin/gh-pages || echo "no existing gh-pages branch"
+          NEW_TREE=$(git write-tree)
+          OLD_TREE=$(git rev-parse refs/remotes/origin/gh-pages^{tree} 2>/dev/null || echo "none")
+          echo "mirror tree: $NEW_TREE | live gh-pages tree: $OLD_TREE"
+          if [ "$NEW_TREE" = "$OLD_TREE" ]; then
+            echo "MIRROR UNCHANGED - nothing new to publish, push skipped"
+            exit 0
+          fi
+          git commit -q -m "mirror: auto-sync from Vercel $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q -f "https://x-access-token:${GH_REPO_TOKEN}@github.com/agent-slon-lab/BikeSnap.git" gh-pages:gh-pages
+          echo "PAGES UPDATED (gh-pages -> https://agent-slon-lab.github.io/BikeSnap/)"
 
-      - name: Проверка зеркала (version.json)
+      - name: Проверка зеркала (/BikeSnap/version.json)
         run: |
-          sleep 30   # CDN GitHub Pages инвалидируется до ~10 мин; обычно быстрее
+          sleep 30   # CDN GitHub Pages инвалидируется обычно быстрее ~10 мин
           for i in $(seq 1 12); do
-            got=$(curl -fsSL https://agent-slon-lab.github.io/version.json \
+            got=$(curl -fsSL https://agent-slon-lab.github.io/BikeSnap/version.json \
               | python3 -c 'import json,sys;print(json.load(sys.stdin).get("version",""))' \
               || true)
             echo "check $i: mirror=$got want=$EXPECTED"
             [ "$got" = "$EXPECTED" ] && exit 0
             sleep 10
           done
+          # Первые прогоны: Pages может быть ещё не включён/CDN лагает —
+          # это не ошибка воркфлоу, просто предупреждение в лог.
           echo "::warning::Зеркало ещё не отдал $EXPECTED (CDN GH Pages кэширует ~10 мин) — проверьте позже"
