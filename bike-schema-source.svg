@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="560 30 640 540" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="arrow-end" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto-start-reverse">
+      <polyline points="2,2 10,5 2,8" fill="none" stroke="#333" stroke-width="1.2"/>
+    </marker>
+    <marker id="arrow-start" markerWidth="10" markerHeight="10" refX="0" refY="5" orient="auto-start-reverse">
+      <polyline points="8,2 0,5 8,8" fill="none" stroke="#333" stroke-width="1.2"/>
+    </marker>
+    <linearGradient id="frameGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="40%" stop-color="#eaeaea"/>
+      <stop offset="100%" stop-color="#cccccc"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="560" y="30" width="640" height="540" fill="#ffffff"/>
+
+  <g id="diagram">
+    <g stroke="#999" stroke-width="0.8" stroke-dasharray="6,4">
+      <line x1="530" y1="520" x2="1160" y2="520"/>
+      <line x1="510" y1="367" x2="1170" y2="367"/>
+      <line x1="720" y1="119" x2="1020" y2="119"/>
+      <line x1="970" y1="50" x2="1112" y2="520"/>
+      <line x1="800" y1="80" x2="800" y2="450"/>
+      <line x1="680" y1="415" x2="820" y2="415"/>
+      <line x1="595" y1="350" x2="595" y2="530"/>
+      <line x1="1090" y1="350" x2="1090" y2="530"/>
+      <line x1="991" y1="70" x2="991" y2="130"/>
+    </g>
+
+    <g stroke-linejoin="round" stroke-linecap="round">
+      <line x1="722" y1="155" x2="695" y2="70" stroke="#2a2a2a" stroke-width="14"/>
+      <rect x="683" y="65" width="22" height="8" rx="2" fill="#111"/>
+      <path d="M 645,65 C 665,65 695,60 725,65 C 730,70 725,75 665,75 C 650,75 640,70 645,65" fill="#111"/>
+      <path d="M 983,119 L 1003,122 L 999,112 L 979,109 Z" fill="#222"/>
+      <path d="M 715,154 L 980,119 L 1000,123 L 1025,200 L 1095,363 A 5 5 0 0 1 1083,367 L 1005,210 C 990,210 985,215 975,225 L 820,412 A 18 18 0 0 1 780,415 L 598,375 A 5 5 0 0 1 593,360 L 725,245 Z" fill="url(#frameGrad)" stroke="#777" stroke-width="1.5"/>
+      <path d="M 740,175 L 970,140 L 960,190 L 795,390 Z" fill="#ffffff" stroke="#777" stroke-width="1.5"/>
+      <path d="M 610,366 L 780,395 C 775,385 775,375 770,365 L 740,258 Z" fill="#ffffff" stroke="#777" stroke-width="1.5"/>
+      <circle cx="800" cy="415" r="16" fill="#222"/>
+      <circle cx="800" cy="415" r="7" fill="#fff"/>
+      <circle cx="1090" cy="367" r="6" fill="#333"/>
+      <polygon points="595,367 605,367 600,383" fill="#222"/>
+      <circle cx="595" cy="367" r="5" fill="#333"/>
+    </g>
+
+    <g stroke="#333" stroke-width="0.8">
+      <line x1="800" y1="415" x2="670" y2="168" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)"/>
+      <line x1="685" y1="85" x2="991" y2="85" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)"/>
+      <line x1="685" y1="120" x2="685" y2="75" stroke-dasharray="4,3" stroke="#999"/>
+      <path d="M 664,119 A 50,50 0 0,0 699,167" fill="none" marker-end="url(#arrow-end)"/>
+      <path d="M 1030,367 A 60,60 0 0,1 1073,310" fill="none" marker-end="url(#arrow-end)"/>
+      <line x1="1029" y1="107" x2="1053" y2="186" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)"/>
+      <line x1="1050" y1="210" x2="1080" y2="210" stroke-dasharray="3,3" stroke="#999"/>
+      <line x1="1063" y1="250" x2="1085" y2="250" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)"/>
+      <line x1="1080" y1="200" x2="1155" y2="350" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)"/>
+      <line x1="1090" y1="520" x2="1112" y2="520" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)"/>
+      <line x1="785" y1="450" x2="1090" y2="450" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)"/>
+      <line x1="595" y1="450" x2="785" y2="450" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)"/>
+      <line x1="830" y1="367" x2="830" y2="400" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)"/>
+      <line x1="595" y1="490" x2="1090" y2="490" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)"/>
+      <line x1="800" y1="119" x2="800" y2="415" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)"/>
+      <line x1="800" y1="100" x2="991" y2="100" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)"/>
+    </g>
+
+    <g font-size="9" font-weight="bold" fill="#333" text-anchor="middle" dominant-baseline="central">
+      <circle cx="707" cy="290" r="12" fill="#fff" stroke="#666" stroke-width="1"/>
+      <text x="707" y="291">ST</text>
+      <circle cx="838" cy="85" r="12" fill="#fff" stroke="#666" stroke-width="1"/>
+      <text x="838" y="86">TT</text>
+      <circle cx="682" cy="148" r="12" fill="#fff" stroke="#666" stroke-width="1"/>
+      <text x="682" y="149">SA</text>
+      <circle cx="1042" cy="318" r="12" fill="#fff" stroke="#666" stroke-width="1"/>
+      <text x="1042" y="319">HA</text>
+      <circle cx="1041" cy="146" r="12" fill="#fff" stroke="#666" stroke-width="1"/>
+      <text x="1041" y="147">HT</text>
+      <circle cx="1074" cy="250" r="12" fill="#fff" stroke="#666" stroke-width="1"/>
+      <text x="1074" y="251">OF</text>
+      <circle cx="1117" cy="275" r="12" fill="#fff" stroke="#666" stroke-width="1"/>
+      <text x="1117" y="276">FL</text>
+      <circle cx="1128" cy="540" r="12" fill="#fff" stroke="#666" stroke-width="1"/>
+      <text x="1128" y="541">TR</text>
+      <circle cx="937" cy="450" r="12" fill="#fff" stroke="#666" stroke-width="1"/>
+      <text x="937" y="451">FC</text>
+      <circle cx="690" cy="450" r="12" fill="#fff" stroke="#666" stroke-width="1"/>
+      <text x="690" y="451">RC</text>
+      <circle cx="830" cy="383" r="12" fill="#fff" stroke="#666" stroke-width="1"/>
+      <text x="830" y="384">BB</text>
+      <circle cx="842" cy="490" r="12" fill="#fff" stroke="#666" stroke-width="1"/>
+      <text x="842" y="491">WB</text>
+      <circle cx="818" cy="259" r="14" fill="#fff" stroke="#666" stroke-width="1"/>
+      <text x="818" y="260" font-size="8">Stack</text>
+      <circle cx="900" cy="100" r="14" fill="#fff" stroke="#666" stroke-width="1"/>
+      <text x="900" y="101" font-size="8">Reach</text>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="500 20 720 540" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="arrow-end" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto-start-reverse">
+      <polyline points="2,2 10,5 2,8" fill="none" stroke="#333" stroke-width="1.2"/>
+    </marker>
+    <marker id="arrow-start" markerWidth="10" markerHeight="10" refX="0" refY="5" orient="auto-start-reverse">
+      <polyline points="8,2 0,5 8,8" fill="none" stroke="#333" stroke-width="1.2"/>
+    </marker>
+    <linearGradient id="frameGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="40%" stop-color="#eaeaea"/>
+      <stop offset="100%" stop-color="#cccccc"/>
+    </linearGradient>
+  </defs>
+  <rect x="500" y="20" width="720" height="540" fill="#ffffff"/>
+  <line x1="729.13" y1="107.261" x2="1029.13" y2="107.261" stroke="#999" stroke-width="0.8" stroke-dasharray="6,4"></line>
+  <line x1="979.13" y1="38.261" x2="1121.13" y2="508.261" stroke="#999" stroke-width="0.8" stroke-dasharray="6,4"></line>
+  <line x1="809.131" y1="68.261" x2="809.131" y2="438.261" stroke="#999" stroke-width="0.8" stroke-dasharray="6,4"></line>
+  <path d="M 519.13 355.261 L 1179.13 355.261" stroke-width="0.8" stroke-dasharray="6,4" stroke="#999"></path>
+  <line x1="604.13" y1="338.261" x2="604.13" y2="518.261" stroke="#999" stroke-width="0.8" stroke-dasharray="6,4"></line>
+  <line x1="1099.13" y1="338.262" x2="1099.13" y2="518.262" stroke="#999" stroke-width="0.8" stroke-dasharray="6,4"></line>
+  <line x1="1000.13" y1="58.261" x2="1000.13" y2="118.261" stroke="#999" stroke-width="0.8" stroke-dasharray="6,4"></line>
+  <line x1="731.13" y1="143.261" x2="704.13" y2="58.261" stroke="#2a2a2a" stroke-width="14" stroke-linejoin="round" stroke-linecap="round"></line>
+  <rect x="692.13" y="53.261" width="22" height="8" rx="2" fill="#111"/>
+  <path d="M 658.072 50.125 C 677.798 50.125 707.388 45.818 736.978 50.125 C 741.91 54.43 736.978 58.736 677.798 58.736 C 663.003 58.736 653.14 54.43 658.072 50.125" fill="#111"/>
+  <path d="M 999.09 93.33 L 1054.43 79.416 L 1045.18 96.264 L 998.888 110.178 L 999.09 93.33 Z" fill="#222"/>
+  <path d="M 724.13 142.261 L 989.13 107.261 L 1009.696 107.867 L 1034.13 188.261 L 1104.13 351.261 C 1105.67 355.88 1101.63 360.433 1096.86 359.457 C 1094.65 359.004 1092.85 357.404 1092.13 355.261 L 1014.13 198.261 C 999.13 198.261 994.13 203.261 984.13 213.261 L 829.13 400.261 C 830.285 415.657 814.34 426.529 800.429 419.831 C 793.974 416.723 789.666 410.406 789.13 403.261 L 607.13 363.261 C 601.357 365.185 595.665 360.138 596.885 354.176 C 597.451 351.409 599.451 349.154 602.13 348.261 L 734.13 233.261 L 724.13 142.261 Z" fill="url(#frameGrad)" stroke="#777" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M 620.434 353.609 L 790.434 382.609 C 785.434 372.609 785.434 362.609 780.434 352.609 L 750.434 245.609 L 620.434 353.609 Z" fill="#ffffff" stroke="#777" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M 749.13 161.41 L 979.13 126.11 L 969.13 176.54 L 804.13 378.261 L 749.13 161.41 Z" fill="#ffffff" stroke="#777" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+  <circle cx="809.13" cy="403.261" r="16" fill="#222"/>
+  <circle cx="809.13" cy="403.261" r="7" fill="#fff"/>
+  <circle cx="1099.13" cy="355.261" r="6" fill="#333"/>
+  <circle cx="604.13" cy="355.261" r="5" fill="#333"/>
+  <line x1="768.482" y1="419.367" x2="675.77" y2="161.61" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)" stroke="#333" stroke-width="0.8"/>
+  <line x1="694.13" y1="73.261" x2="1000.13" y2="73.261" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)" stroke="#333" stroke-width="0.8"/>
+  <line x1="693.532" y1="139.602" x2="694.13" y2="63.261" stroke-dasharray="4,3" stroke="#999" stroke-width="0.8"/>
+  <path d="M 1039.13 355.261 C 1039.37 328.872 1056.82 305.737 1082.13 298.261" fill="none" marker-end="url(#arrow-end)" stroke="#333" stroke-width="0.8"/>
+  <line x1="1038.13" y1="95.261" x2="1062.13" y2="174.261" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)" stroke="#333" stroke-width="0.8"/>
+  <line x1="1047.27" y1="181.473" x2="1121.14" y2="345.615" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)" stroke="#333" stroke-width="0.8"/>
+  <line x1="809.675" y1="438.261" x2="1099.13" y2="438.261" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)" stroke="#333" stroke-width="0.8"/>
+  <line x1="603.532" y1="438.261" x2="809.674" y2="438.261" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)" stroke="#333" stroke-width="0.8"/>
+  <line x1="904.385" y1="353.827" x2="904.385" y2="402.371" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)" stroke="#333" stroke-width="0.8"/>
+  <line x1="604.13" y1="478.261" x2="1099.13" y2="478.261" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)" stroke="#333" stroke-width="0.8"/>
+  <line x1="809.13" y1="107.261" x2="809.13" y2="403.262" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)" stroke="#333" stroke-width="0.8"/>
+  <line x1="809.13" y1="88.261" x2="1000.13" y2="88.261" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)" stroke="#333" stroke-width="0.8"/>
+  <text x="721.867" y="182.455" font-size="9" font-weight="bold" fill="#333" text-anchor="middle" dominant-baseline="central" transform="matrix(1.981137, 0, 0, 2, -757.112732, -136.151428)">ST</text>
+  <text x="691.13" y="137.261" font-size="9" font-weight="bold" fill="#333" text-anchor="middle" dominant-baseline="central" transform="matrix(1, 0, 0, 1.285714, 17.209974, -49.97366)">SA</text>
+  <text x="1051.13" y="307.261" font-size="9" font-weight="bold" fill="#333" text-anchor="middle" dominant-baseline="central">HA</text>
+  <text x="1057.3" y="138.129" font-size="9" font-weight="bold" fill="#333" text-anchor="middle" dominant-baseline="central" transform="matrix(1.586055, 0, 0, 1.785714, -611.817566, -107.454308)">HT</text>
+  <text x="1126.13" y="264.261" font-size="9" font-weight="bold" fill="#333" text-anchor="middle" dominant-baseline="central" transform="matrix(1.828992, 0, 0, 1.639867, -952.384949, -151.491821)">FL</text>
+  <text x="953.301" y="429.938" font-size="9" font-weight="bold" fill="#333" text-anchor="middle" dominant-baseline="central">FC</text>
+  <text x="698.413" y="427.071" font-size="9" font-weight="bold" fill="#333" text-anchor="middle" dominant-baseline="central">RC</text>
+  <text x="888.261" y="376.811" font-size="9" font-weight="bold" fill="#333" text-anchor="middle" dominant-baseline="central" transform="matrix(1.367199, 0, 0, 1.785714, -328.799835, -292.121826)">BB</text>
+  <text x="851.13" y="469.939" font-size="9" font-weight="bold" fill="#333" text-anchor="middle" dominant-baseline="central">WB</text>
+  <text x="810.39" y="250.055" font-size="8" font-weight="bold" fill="#333" text-anchor="middle" dominant-baseline="central" transform="matrix(1.099636, 0, 0, 1.257855, -67.490143, -66.987595)">Stack</text>
+  <text x="910.564" y="83.524" font-size="8" font-weight="bold" fill="#333" text-anchor="middle" dominant-baseline="central" transform="matrix(1.237703, 0, 0, 1.333333, -213.591675, -29.275497)">Reach</text>
+  <path d="M 809.524 402.264 L 923.884 402.264" stroke-width="0.8" stroke-dasharray="6,4" stroke="#999"/>
+  <line x1="1054.42" y1="59.65" x2="1054.42" y2="81.645" stroke="#999" stroke-width="0.8" stroke-dasharray="6,4"/>
+  <line x1="1001.23" y1="72.441" x2="1054.55" y2="72.441" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)" stroke="#333" stroke-width="0.8"/>
+  <text fill="rgb(51, 51, 51)" font-family="Arial, sans-serif" font-size="18" x="817.069" y="69.572" transform="matrix(0.648109, 0, 0, 0.55814, 305.445953, 31.124674)">ETT</text>
+  <path d="M 694.456 120.669 C 694.61 130.127 705.367 138.419 720.963 141.098" fill="none" marker-end="url(#arrow-end)" stroke="#333" stroke-width="0.8"/>
+  <text font-size="12" font-family="Arial, sans-serif" fill="#333" x="1003.6" y="68.139" transform="matrix(0.352052, 0, 0, 0.357143, 658.16864, 45.289032)">Stem</text>
+  <path d="M 616.496 100.526 L 705.522 63.636" stroke-width="0.8" stroke-dasharray="6,4" stroke="#999"/>
+  <path d="M 642.525 175.67 L 731.551 138.78" stroke-width="0.8" stroke-dasharray="6,4" stroke="#999"/>
+  <line x1="643.298" y1="89.87" x2="675.626" y2="160.539" marker-start="url(#arrow-start)" marker-end="url(#arrow-end)" stroke="#333" stroke-width="0.8"/>
+  <text font-family="Arial, sans-serif" font-size="12" fill="#333" x="647.732" y="191.651" transform="matrix(0.450644, 0, 0, 0.422222, 381.837311, 60.814312)">SH</text>
+  <path d="M 725.815 436.741 L 814.841 399.851" stroke-width="0.8" stroke-dasharray="6,4" stroke="#999"/>
+  <path d="M 1012.04 196.898 L 1101.07 160.008" stroke-width="0.8" stroke-dasharray="6,4" stroke="#999"/>
+  <path d="M 1096.9 356.416 L 1185.92 319.526" stroke-width="0.8" stroke-dasharray="6,4" stroke="#999"/>
+</svg>
